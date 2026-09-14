@@ -1,0 +1,8 @@
+/dist/
+/frostroot
+/frostroot.exe
+*.tmp
+*.tar
+*.tar.gz
+workdir/
+.frostroot-work/
