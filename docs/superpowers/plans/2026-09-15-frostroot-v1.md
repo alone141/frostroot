@@ -21,7 +21,7 @@ a tarball that does not boot.
 |---|-----|-----|-----|
 | 1 | `internal/export` walked the rootfs with `archive/tar` and `tar.FileInfoHeader(info, "")` | **mmdebstrap writes the tarball**; export only names it and moves it | The second argument to `FileInfoHeader` *is* the symlink target. Passing `""` gives every symlink an empty target — merged-`/usr`, every library soname, all of `/etc/alternatives`. The image cannot start. Same root cause also dropped hardlinks (duplicated as full copies), dropped file capabilities (`ping` breaks), and filled `Uname`/`Gname` from the host passwd, the opposite of the `--numeric-owner` the spec asks for. |
 | 2 | Host-side tar and `os.RemoveAll` of a rootfs built in `--mode=unshare` | frostroot never reads or deletes a chroot directory | Files in unshare mode carry subuid-range ownership from outside the namespace: the tar records wrong uids and `RemoveAll` cannot delete them. Letting mmdebstrap tar from *inside* the namespace fixes ownership, xattrs and cleanup at once, and removes the recursive-delete-with-live-mounts hazard. |
-| 3 | `--variant=minbase`, essentials `{sudo, locales, tzdata, passwd}` | `--variant=important` plus `systemd`, `systemd-sysv`, `dbus`, `ca-certificates`; Recommends on | minbase has no systemd, so `[boot] systemd=true` is inert and spec criteria 4 and 5 are unreachable. Recommends-off also meant `git` did not pull `ca-certificates`, so `git clone https://…` failed in the lab image. |
+| 3 | `--variant=minbase`, essentials `{sudo, locales, tzdata, passwd}` | `--variant=important` plus `systemd`, `systemd-sysv`, `dbus`, `ca-certificates`; Recommends on | minbase has no systemd, so `[boot] systemd=true` is inert and spec criteria 4 and 6 are unreachable. Recommends-off also meant `git` did not pull `ca-certificates`, so `git clone https://…` failed in the lab image. |
 | 4 | One mirror argument → `sources.list` with only `<suite> main universe` | Three `deb` lines per build: `<suite>`, `<suite>-updates`, `<suite>-security` | Release-day versions only, so every golden image shipped years of unpatched CVEs. Note the old spec's own lock example (`git 1:2.34.1-1ubuntu1.11`) is an updates-pocket version the old pipeline could not produce. |
 
 Also fixed, from the same reviews:
@@ -1258,7 +1258,7 @@ Three rules for this task, all of them things the previous plan got wrong:
    them. Defence in depth at a shell boundary is not optional.
 
 `Essentials` now carries systemd. Without it `[boot] systemd=true` is inert and
-spec criteria 4 and 5 cannot be met. `ca-certificates` is there because
+spec criteria 4 and 6 cannot be met. `ca-certificates` is there because
 Recommends alone does not guarantee it early enough, and an image where
 `git clone https://…` fails is a support ticket on day one.
 
@@ -2991,8 +2991,9 @@ git commit -m "test: add integration build and rewrite README"
 | Integration tag | 12 |
 | Manual `wsl --import` | 0, 12 README |
 
-**Deliberate deviations from the 2026-09-14 spec**, all of which need the spec
-updated to match (do that as part of Task 12, or in a separate commit):
+**Deviations from the original 2026-09-14 spec.** The spec was revised on
+2026-09-15 and now matches this plan; the table is kept so the reasoning stays
+visible. Its revision history records the same changes:
 
 | Spec says | Plan does | Why |
 |---|---|---|
