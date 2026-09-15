@@ -157,10 +157,11 @@ need focal.
 **Python on 24.04.** PEP 668 makes `pip install` outside a virtualenv fail by
 design. Use `python3 -m venv`.
 
-**Redistribution.** A golden image contains Ubuntu binaries. Redistributing
-unmodified archive packages is fine; Canonical's trademark policy constrains
-calling a modified image "Ubuntu". Worth a look before publishing images
-publicly.
+**Redistribution.** A golden image contains Ubuntu binaries. frostroot's own
+MIT licence covers frostroot, not the packages it bundles into an image.
+Redistributing unmodified archive packages is fine; Canonical's trademark
+policy constrains calling a modified image "Ubuntu". Worth a look before
+publishing images publicly.
 
 **The WSL boot check is manual.** No CI runner can `wsl --import`, so the one
 test that proves the product actually works is a human at a Windows machine.
@@ -191,3 +192,8 @@ testdata/           recipe fixtures
 ```
 
 One Go module, one binary, roughly 2,000 lines including tests.
+
+## License
+
+[MIT](LICENSE). Note that this covers frostroot itself — the packages it
+bootstraps into an image carry their own licences from the Ubuntu archive.
