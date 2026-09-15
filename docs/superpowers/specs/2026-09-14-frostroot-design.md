@@ -58,6 +58,7 @@ Do not implement these in v1. The architecture must not block them.
 - A full package-picker TUI
 - A Windows-native `.exe` engine (the CLI is Linux; WSL is an export target)
 - Architectures other than `amd64`
+- Capturing an existing machine (`frostroot capture`) — planned, see Extension points
 
 ## Key decisions
 
@@ -442,6 +443,47 @@ New exporter: image in → disk/ISO out. Builder unchanged.
 
 **TUI**
 Writes `frostroot.toml` only. `build` stays non-interactive.
+
+**Capturing an existing machine (`frostroot capture`)**
+Point frostroot at a running Ubuntu system and have it write a
+`frostroot.toml` describing what is installed, so an environment built by hand
+over a semester can be adopted without retyping it. This is the main adoption
+path: most users do not start from a blank recipe, they start from a machine
+that already works.
+
+It is a *recipe writer*, exactly like `init` — same shape as the TUI above. It
+emits a recipe (and optionally a lock, read straight from the local
+`/var/lib/dpkg/status` with the parser `build` already uses); output then flows
+through the existing `validate` and `build`. No new artifact type, no new trust
+boundary, no root required.
+
+Two constraints on the design, both non-negotiable:
+
+1. **It must report what it could not see.** `capture` reads apt and nothing
+   else. Packages installed via pip, npm, cargo, `curl | sh`, `make install`
+   or unpacked into `/opt` are invisible, as is all configuration — dotfiles,
+   `/etc` edits, enabled services, cron. PPAs are visible in
+   `sources.list.d` but have nowhere to go in a v1 recipe. A `capture` that
+   silently emits an incomplete recipe is worse than no `capture` at all,
+   because the user believes their machine is captured. The command's
+   deliverable is the recipe **and** a report of the gaps.
+2. **It must not tar the live root filesystem.** That is a different product
+   and it is rejected, not deferred. It abandons the recipe-and-lock model for
+   an opaque blob; tarring a live root is unsound (inconsistent snapshot,
+   pseudo-filesystem and bind-mount exclusions, machine-id and SSH host keys
+   duplicated on every import); and above all it exfiltrates secrets. A live
+   machine holds SSH private keys, cloud credentials, `.env` files, shell
+   history, kubeconfig and real password hashes. A teacher capturing their
+   laptop and handing the result to a class would distribute all of it in one
+   command, and no exclusion list is ever reliably complete. Capturing a
+   package list cannot do this; capturing a filesystem always can.
+
+Naming: `capture`, not `freeze`. Freezing is what `build` already does — the
+project's whole metaphor — and reusing the word for introspection muddles the
+vocabulary.
+
+Pairs well with vendoring: capture a machine's packages, vendor the `.deb`s,
+then rebuild the same environment offline.
 
 ## Repo layout
 
