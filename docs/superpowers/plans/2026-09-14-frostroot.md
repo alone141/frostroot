@@ -1,5 +1,19 @@
 # frostroot v1 Implementation Plan
 
+> **SUPERSEDED — do not execute this plan.**
+> Replaced by [`2026-09-15-frostroot-v1.md`](2026-09-15-frostroot-v1.md).
+>
+> Four defects in this plan would ship a tarball that does not boot, and its
+> tests pass anyway: a pure-Go tar writer that gives every symlink an empty
+> target, host-side tar and cleanup of an unshare-mode rootfs, `minbase` with no
+> systemd, and a single-pocket `sources.list`. See the changelog at the top of
+> the replacement, plus
+> [`../reviews/2026-09-14-frostroot-plan-review.md`](../reviews/2026-09-14-frostroot-plan-review.md)
+> and
+> [`../reviews/2026-09-15-frostroot-feasibility.md`](../reviews/2026-09-15-frostroot-feasibility.md).
+>
+> Kept for history only.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship a Linux CLI `frostroot` that reads `frostroot.toml`, bootstraps Ubuntu 20.04/22.04/24.04 with mmdebstrap, and writes `frostroot.lock` plus a WSL-importable rootfs tarball.
