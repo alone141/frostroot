@@ -133,7 +133,8 @@ user, WSL-ready images.
 **Deliberately not in v1:** Fedora or any non-Ubuntu family · PPAs and extra apt
 sources · pip / npm / cargo lockfiles · vendoring `.deb` files and offline
 builds · bit-identical rebuilds · bare-metal disk or ISO images · a package
-picker TUI · a native Windows binary · architectures other than amd64.
+picker TUI · a native Windows binary · architectures other than amd64 ·
+capturing an existing machine (`frostroot capture`, planned for after v1).
 
 Each exclusion has a door left open in the design. Adding Fedora means a new
 `internal/distro` implementation, not a rewrite. The v1 job is to prove one
