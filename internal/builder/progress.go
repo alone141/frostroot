@@ -74,6 +74,9 @@ const (
 	// EventPhaseFinished means the phase completed. A phase that finishes
 	// without having started was skipped; it still counts as done.
 	EventPhaseFinished
+	// EventLogFile names, in Line, the file the bootstrap's complete output
+	// is being written to. It is reported once, before any phase.
+	EventLogFile
 )
 
 // Unit is what Done and Total count.

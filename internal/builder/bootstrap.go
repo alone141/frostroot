@@ -82,10 +82,12 @@ func (m *Mmdebstrap) Run(ctx context.Context, spec BootstrapSpec) error {
 	if runCommand == nil {
 		runCommand = runInterruptibly
 	}
-	logFile, err := os.OpenFile(filepath.Join(spec.WorkDir, LogFileName), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	logPath := filepath.Join(spec.WorkDir, LogFileName)
+	logFile, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return fmt.Errorf("creating the mmdebstrap log: %w", err)
 	}
+	progressOrDiscard(spec.Progress).Report(ProgressEvent{Kind: EventLogFile, Line: logPath})
 	parser := newProgressParser(spec.Progress)
 	outputTail := newTailBuffer(errorTailBytes)
 	combinedOutput := io.MultiWriter(logFile, parser, outputTail)

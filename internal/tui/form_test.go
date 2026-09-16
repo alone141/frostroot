@@ -33,70 +33,21 @@ var (
 
 func typeText(text string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text)} }
 
-// driver feeds messages to a model the way a Bubble Tea program does,
-// running every returned command at once, so tests need no timing.
-type driver struct {
-	t           *testing.T
-	model       *formModel
-	quit        bool
-	interrupted bool
+// formDriver drives a formModel.
+type formDriver struct {
+	*driver
+	model *formModel
 }
 
-func newDriver(t *testing.T, initial form.Values) *driver {
+func newFormDriver(t *testing.T, initial form.Values) *formDriver {
 	t.Helper()
-	d := &driver{t: t, model: newFormModel(form.Fields(noHost), initial)}
-	d.settle(d.model.Init())
-	return d
-}
-
-// press sends one message and settles what follows from it.
-func (d *driver) press(msg tea.Msg) {
-	updated, cmd := d.model.Update(msg)
-	model, isFormModel := updated.(*formModel)
-	if !isFormModel {
-		d.t.Fatalf("Update returned a %T, want *formModel", updated)
-	}
-	d.model = model
-	d.settle(cmd)
-}
-
-// commandPatience is how long settle waits for a command. huh's own
-// commands (move to the next field, and so on) return at once; a cursor
-// blink or a spinner tick sleeps first, and following those would loop
-// forever, so they are dropped.
-const commandPatience = 50 * time.Millisecond
-
-// settle runs cmd and feeds its results back until nothing is pending.
-func (d *driver) settle(cmd tea.Cmd) {
-	if cmd == nil || d.quit || d.interrupted {
-		return
-	}
-	result := make(chan tea.Msg, 1)
-	go func() { result <- cmd() }()
-	var msg tea.Msg
-	select {
-	case msg = <-result:
-	case <-time.After(commandPatience):
-		return // a timer-based command; not part of the form's logic
-	}
-	switch msg := msg.(type) {
-	case nil:
-	case tea.QuitMsg:
-		d.quit = true
-	case tea.InterruptMsg:
-		d.interrupted = true
-	case tea.BatchMsg:
-		for _, batched := range msg {
-			d.settle(batched)
-		}
-	default:
-		d.press(msg)
-	}
+	model := newFormModel(form.Fields(noHost), initial)
+	return &formDriver{driver: newDriver(t, model), model: model}
 }
 
 // pressEnterUntil presses Enter until the model reaches stage or the press
 // budget runs out.
-func (d *driver) pressEnterUntil(stage formStage) {
+func (d *formDriver) pressEnterUntil(stage formStage) {
 	d.t.Helper()
 	for presses := 0; d.model.stage < stage && presses < maxKeyPresses; presses++ {
 		d.press(pressEnter)
@@ -129,7 +80,7 @@ func TestFormBindingCoversEveryField(t *testing.T) {
 }
 
 func TestFormModelAcceptsDefaults(t *testing.T) {
-	d := newDriver(t, form.Defaults(noHost))
+	d := newFormDriver(t, form.Defaults(noHost))
 	d.pressEnterUntil(stageDone)
 	if !d.quit || !d.model.write {
 		t.Errorf("quit = %v, write = %v; want the program to quit with write confirmed", d.quit, d.model.write)
@@ -140,7 +91,7 @@ func TestFormModelAcceptsDefaults(t *testing.T) {
 }
 
 func TestFormModelTakesTypedAndChosenAnswers(t *testing.T) {
-	d := newDriver(t, form.Defaults(noHost))
+	d := newFormDriver(t, form.Defaults(noHost))
 	// Replace "lab" with "cpp-lab", then pick the release above the default.
 	for range len("lab") {
 		d.press(tea.KeyMsg{Type: tea.KeyBackspace})
@@ -159,7 +110,7 @@ func TestFormModelTakesTypedAndChosenAnswers(t *testing.T) {
 }
 
 func TestFormModelShowsSummaryBeforeWriting(t *testing.T) {
-	d := newDriver(t, form.Defaults(noHost))
+	d := newFormDriver(t, form.Defaults(noHost))
 	d.pressEnterUntil(stageSummary)
 	view := d.model.View()
 	for _, wantText := range []string{"Summary", "lab, Ubuntu 24.04 amd64", "student, passwordless sudo", "Write frostroot.toml?"} {
@@ -171,14 +122,14 @@ func TestFormModelShowsSummaryBeforeWriting(t *testing.T) {
 
 func TestFormModelCancels(t *testing.T) {
 	t.Run("Ctrl-C on the first page", func(t *testing.T) {
-		d := newDriver(t, form.Defaults(noHost))
+		d := newFormDriver(t, form.Defaults(noHost))
 		d.press(pressCtrlC)
 		if !d.interrupted {
 			t.Error("Ctrl-C should interrupt the program")
 		}
 	})
 	t.Run("Ctrl-C on a later page", func(t *testing.T) {
-		d := newDriver(t, form.Defaults(noHost))
+		d := newFormDriver(t, form.Defaults(noHost))
 		d.press(pressEnter)
 		d.press(pressEnter)
 		d.press(pressCtrlC)
@@ -187,14 +138,14 @@ func TestFormModelCancels(t *testing.T) {
 		}
 	})
 	t.Run("Esc does not quit: it belongs to the filter", func(t *testing.T) {
-		d := newDriver(t, form.Defaults(noHost))
+		d := newFormDriver(t, form.Defaults(noHost))
 		d.press(pressEsc)
 		if d.interrupted || d.quit {
 			t.Error("Esc must not end the form; only Ctrl-C does")
 		}
 	})
 	t.Run("declined on the summary", func(t *testing.T) {
-		d := newDriver(t, form.Defaults(noHost))
+		d := newFormDriver(t, form.Defaults(noHost))
 		d.pressEnterUntil(stageSummary)
 		d.press(pressLeft) // from "Write" to "Cancel"
 		d.press(pressEnter)
