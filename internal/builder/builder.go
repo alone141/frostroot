@@ -25,10 +25,11 @@ const UbuntuKeyring = "/usr/share/keyrings/ubuntu-archive-keyring.gpg"
 // Host and configuration problems a user can fix. Every other build error is
 // a failure of the build itself.
 var (
-	ErrNotLinux     = errors.New("frostroot build requires Linux")
-	ErrNoMmdebstrap = errors.New("mmdebstrap not found on PATH")
-	ErrNoKeyring    = errors.New("Ubuntu archive keyring not found")
-	ErrBadWorkRoot  = errors.New("unusable work directory")
+	ErrNotLinux         = errors.New("frostroot build requires Linux")
+	ErrNoMmdebstrap     = errors.New("mmdebstrap not found on PATH")
+	ErrNoKeyring        = errors.New("Ubuntu archive keyring not found")
+	ErrBadWorkRoot      = errors.New("unusable work directory")
+	ErrUnwritableOutput = errors.New("cannot write the build output")
 )
 
 // BootstrapSpec is everything a bootstrapper needs for one image.
@@ -104,7 +105,8 @@ func (b *Builder) Build(ctx context.Context, r recipe.Recipe, opts Options) (Res
 	if opts.Mirror != "" {
 		mirror = opts.Mirror
 	}
-	root, err := WorkRoot(getenv)
+	uid := os.Getuid()
+	root, err := WorkRoot(getenv, uid)
 	if err != nil {
 		return Result{}, err
 	}
@@ -122,18 +124,20 @@ func (b *Builder) Build(ctx context.Context, r recipe.Recipe, opts Options) (Res
 			return Result{}, err
 		}
 	}
-
-	// Explicit modes, whatever the umask: in unshare mode mmdebstrap's root
-	// is "other" to these directories and must be able to enter them.
-	if err := mkdirAllMode(root, 0o755); err != nil {
-		return Result{}, fmt.Errorf("creating work root: %w (set XDG_CACHE_HOME to use another location)", err)
+	if err := checkOutput(opts.Dir); err != nil {
+		return Result{}, err
 	}
+	if err := prepareWorkRoot(root, uid); err != nil {
+		return Result{}, err
+	}
+	// 0755 whatever the umask: in unshare mode mmdebstrap's root is "other"
+	// to this directory and must be able to enter it.
 	work, err := os.MkdirTemp(root, "build-*")
 	if err == nil {
 		err = os.Chmod(work, 0o755)
 	}
 	if err != nil {
-		return Result{}, fmt.Errorf("creating work directory: %w (set XDG_CACHE_HOME to use another location)", err)
+		return Result{}, fmt.Errorf("%w: creating a build directory under %s: %v; set XDG_CACHE_HOME to use another location", ErrBadWorkRoot, root, err)
 	}
 
 	// From here on every failure keeps the work directory: it is the only
@@ -141,9 +145,11 @@ func (b *Builder) Build(ctx context.Context, r recipe.Recipe, opts Options) (Res
 	// bootstrap has fully succeeded.
 	res := Result{WorkDir: work}
 	lockPath := filepath.Join(opts.Dir, "frostroot.lock")
-	tmpLock := lockPath + ".tmp"
+	var tmpLock string // this build's own temporary lock, once created
 	fail := func(err error) (Result, error) {
-		os.Remove(tmpLock)
+		if tmpLock != "" {
+			os.Remove(tmpLock)
+		}
 		return res, err
 	}
 
@@ -178,6 +184,14 @@ func (b *Builder) Build(ctx context.Context, r recipe.Recipe, opts Options) (Res
 		Requested:        requested,
 		Packages:         pkgs,
 	}
+	// A unique name, so two builds in one directory cannot delete or
+	// overwrite each other's temporary lock.
+	tmp, err := export.CreateTemp(opts.Dir, ".frostroot.lock.*.tmp")
+	if err != nil {
+		return fail(fmt.Errorf("writing the lock: %w", err))
+	}
+	tmpLock = tmp.Name()
+	tmp.Close()
 	if err := recipe.SaveLock(tmpLock, lock); err != nil {
 		return fail(err)
 	}

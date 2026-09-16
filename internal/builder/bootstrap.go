@@ -144,7 +144,7 @@ func checkReachable(dir string) error {
 		fi, err := os.Stat(p)
 		switch {
 		case err == nil && fi.Mode().Perm()&0o001 == 0:
-			return fmt.Errorf("%w: mmdebstrap runs in a user namespace that cannot enter %s (mode %04o), so it cannot use %s; set XDG_CACHE_HOME to a directory whose parents are all world-executable, or unset it to use /var/tmp/frostroot",
+			return fmt.Errorf("%w: mmdebstrap runs in a user namespace that cannot enter %s (mode %04o), so it cannot use %s; set XDG_CACHE_HOME to a directory whose parents are all world-executable, or unset it to use the default under /var/tmp",
 				ErrBadWorkRoot, p, fi.Mode().Perm(), dir)
 		case err != nil && !errors.Is(err, os.ErrNotExist):
 			return err

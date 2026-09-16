@@ -10,6 +10,19 @@ invent extra product scope.
 
 ## Revision history
 
+**2026-09-16, review.** A code review of the finished branch and a further
+bug hunt found four more defects, each fixed with a test that fails without
+the fix:
+
+| Was | Now | Why |
+|---|---|---|
+| Default work root `/var/tmp/frostroot` | `/var/tmp/frostroot-<uid>`; the root must be a directory owned by the current user | `/var/tmp` is shared: one `sudo frostroot build` left a root-owned directory that made every later unprivileged build fail with exit 2 |
+| Nothing checked about the output location until the tarball was placed | `build` verifies up front that the recipe directory (and `dist/`, if present) is writable | The same `sudo` history leaves a root-owned `dist/`; the failure came after minutes of bootstrapping, as a build error |
+| Temporary lock `frostroot.lock.tmp` | `.frostroot.lock.<random>.tmp`, created O_EXCL | Two builds in one directory shared the name; a failing one deleted the other's, which then failed after its tarball had landed |
+| Release and arch validated through one call that returned the first error | both reported | `validate` promised every problem and hid the release problem behind the arch problem |
+| BOM in the recipe was a parse error naming U+00EF | a leading UTF-8 byte order mark is ignored | Notepad's "UTF-8 with BOM" is a real way for a recipe to be saved |
+| Ctrl-C and SIGTERM interrupt a build | SIGHUP too | mmdebstrap now runs in its own process group, so a closed terminal no longer reaches it directly |
+
 **2026-09-16, implementation.** v0.1.0 was implemented from the plan and built,
 imported and logged into for all three releases. Real builds exposed four
 defects that every unit test had passed; each is fixed with a test that fails
@@ -281,7 +294,7 @@ real TTY). `build` installs a `signal.NotifyContext` handler and maps
 
 ### `internal/recipe`
 
-- Parse/validate toml and lock. Unknown fields rejected.
+- Parse/validate toml and lock. Unknown fields rejected. A leading UTF-8 byte order mark is ignored; CRLF is TOML.
 - Types: `Recipe`, `Lockfile`, `LockPackage`.
 - Nothing else reads the raw files.
 
@@ -379,8 +392,8 @@ Later disk/ISO exporters implement the same “artifact in → artifact out” i
 
 1. Validate the recipe (fail closed).
 2. Resolve release → suite + base URL + three pocket lines (`--mirror` overrides the base URL in all three). Warn if the release is EOL.
-3. Check Linux + `mmdebstrap` + the Ubuntu archive keyring, and (unshare mode) that the work root is reachable from mmdebstrap's user namespace.
-4. Choose a work root: `$XDG_CACHE_HOME/frostroot`, else `/var/tmp/frostroot`; never under `/mnt`. Create a per-build directory inside it, mode 0755 whatever the umask. Delete on success unless `--keep-work`. Keep on failure and print the path.
+3. Check Linux + `mmdebstrap` + the Ubuntu archive keyring, and (unshare mode) that the work root is reachable from mmdebstrap's user namespace. Check that the recipe directory, and `dist/` if it exists, can be written: a `sudo` build in the past leaves them root-owned, and that should fail now, not after the bootstrap.
+4. Choose a work root: `$XDG_CACHE_HOME/frostroot`, else `/var/tmp/frostroot-<uid>` (per user, because `/var/tmp` is shared); never under `/mnt`. It must be a directory owned by the current user. Create a per-build directory inside it, mode 0755 whatever the umask. Delete on success unless `--keep-work`. Keep on failure and print the path.
 5. Render `/etc/wsl.conf`, the sudoers drop-in and the provision script into `<work>/stage/` (0755, files 0644) and generate the hook list.
 6. Run mmdebstrap with `TMPDIR=<work>/tmp` (sticky, world-writable, as mmdebstrap(1) requires in unshare mode), in its own process group:
    - suite, three `deb` lines, components `main universe`, `--architectures=amd64`
@@ -400,7 +413,7 @@ Later disk/ISO exporters implement the same “artifact in → artifact out” i
      - removes the host `/etc/resolv.conf` and `/etc/hostname` that mmdebstrap copies in
    - `download /var/lib/dpkg/status` to the work directory, last
    - mmdebstrap's default cleanup already empties machine-id and removes apt lists and cache; do not duplicate it
-8. Parse the downloaded dpkg status → write `frostroot.lock.tmp` (`requested` = recipe include; `[[packages]]` = every installed package, sorted).
+8. Parse the downloaded dpkg status → write a uniquely named `.frostroot.lock.*.tmp` (`requested` = recipe include; `[[packages]]` = every installed package, sorted).
 9. Move `<work>/image.tar.gz` to `dist/<name>-ubuntu-<release>-amd64.tar.gz`, then rename the lock into place — so a failed move never leaves a lock describing an image that does not exist.
 10. Print the `wsl --import` line.
 
@@ -413,14 +426,14 @@ follow-up.
 
 | Class | Exit | Examples |
 |-------|------|----------|
-| User error | 1 | not Linux; missing/invalid toml; invalid `--mirror` (not http or https); `init` without `--force` when file exists; mmdebstrap not on PATH; keyring missing; work root under `/mnt` or unreachable from the user namespace |
+| User error | 1 | not Linux; missing/invalid toml; invalid `--mirror` (not http or https); `init` without `--force` when file exists; mmdebstrap not on PATH; keyring missing; work root under `/mnt`, unreachable from the user namespace, or owned by someone else; recipe directory or `dist/` not writable |
 | Build error | 2 | no userns and not root; mmdebstrap failed (unknown package, mirror down); provision hook failed (timezone or locale missing from the image); disk full; tarball missing |
-| Interrupted | 130 | Ctrl-C, SIGTERM |
+| Interrupted | 130 | Ctrl-C, SIGTERM, SIGHUP |
 
 Rules:
 
 - Do not write lock or tarball unless the whole build succeeded.
-- Write the lock to `*.tmp` and rename only after the tarball lands.
+- Write the lock to a uniquely named `*.tmp` and rename only after the tarball lands. Builds never touch another build's temporary files; concurrent builds in one directory are otherwise last-writer-wins and not supported.
 - On failure: delete tmp artifacts; keep the work directory; print its path; reprint the tail of mmdebstrap stderr when mmdebstrap failed.
 - On Ctrl-C: treat as failure (keep work directory, remove tmp artifacts). Signal mmdebstrap's process group with SIGINT, as a terminal would, and wait however long it takes, never SIGKILL: in root mode it has proc, sys and dev mounted inside the chroot. A second Ctrl-C stops frostroot waiting; mmdebstrap's cleanup carries on.
 - frostroot never deletes a chroot directory. Under this design it never creates one it would have to.

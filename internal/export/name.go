@@ -51,6 +51,24 @@ func Place(src, dest string) error {
 	return os.Remove(src)
 }
 
+// CreateTemp creates a new, uniquely named file in dir for output that will
+// be renamed into place. pattern is as for os.CreateTemp; the file is created
+// with mode 0644 (before umask) instead of 0600, and never chmodded: chmod
+// fails with EPERM on drvfs, the mount WSL uses for Windows drives, which is
+// where a recipe directory and its dist/ often are.
+func CreateTemp(dir, pattern string) (*os.File, error) {
+	prefix, suffix, _ := strings.Cut(pattern, "*")
+	for range 1000 {
+		name := filepath.Join(dir, prefix+strconv.FormatUint(uint64(rand.Uint32()), 10)+suffix)
+		f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		return f, err
+	}
+	return nil, fmt.Errorf("could not create a temporary file in %s", dir)
+}
+
 func copyInto(src, dest string) (err error) {
 	in, err := os.Open(src)
 	if err != nil {
@@ -58,7 +76,7 @@ func copyInto(src, dest string) (err error) {
 	}
 	defer in.Close()
 
-	tmp, err := createTemp(filepath.Dir(dest), "."+filepath.Base(dest)+".*.tmp")
+	tmp, err := CreateTemp(filepath.Dir(dest), "."+filepath.Base(dest)+".*.tmp")
 	if err != nil {
 		return err
 	}
@@ -78,20 +96,4 @@ func copyInto(src, dest string) (err error) {
 		return err
 	}
 	return os.Rename(tmp.Name(), dest)
-}
-
-// createTemp is os.CreateTemp with mode 0644 instead of 0600, so the umask
-// decides the final mode without a chmod. chmod fails with EPERM on drvfs, the
-// mount WSL uses for Windows drives, which is exactly where dist/ often is.
-func createTemp(dir, pattern string) (*os.File, error) {
-	prefix, suffix, _ := strings.Cut(pattern, "*")
-	for range 1000 {
-		name := filepath.Join(dir, prefix+strconv.FormatUint(uint64(rand.Uint32()), 10)+suffix)
-		f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
-		if errors.Is(err, fs.ErrExist) {
-			continue
-		}
-		return f, err
-	}
-	return nil, fmt.Errorf("could not create a temporary file in %s", dir)
 }

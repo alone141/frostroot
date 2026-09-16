@@ -94,17 +94,25 @@ func tarball(opts Options) string {
 	return filepath.Join(opts.Dir, "dist", "cpp-lab-ubuntu-22.04-amd64.tar.gz")
 }
 
+// assertNoTmp checks that no temporary file was left in the recipe directory
+// or dist/. Go's Glob * matches leading dots, so this covers dotfiles too.
+func assertNoTmp(t *testing.T, dir string) {
+	t.Helper()
+	for _, pattern := range []string{"*.tmp", filepath.Join("dist", "*.tmp")} {
+		if left, _ := filepath.Glob(filepath.Join(dir, pattern)); len(left) != 0 {
+			t.Fatalf("temporary files left behind: %v", left)
+		}
+	}
+}
+
 func assertNoArtifacts(t *testing.T, opts Options) {
 	t.Helper()
-	for _, p := range []string{
-		filepath.Join(opts.Dir, "frostroot.lock"),
-		filepath.Join(opts.Dir, "frostroot.lock.tmp"),
-		tarball(opts),
-	} {
+	for _, p := range []string{filepath.Join(opts.Dir, "frostroot.lock"), tarball(opts)} {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
 			t.Fatalf("%s must not exist after a failed build: %v", p, err)
 		}
 	}
+	assertNoTmp(t, opts.Dir)
 }
 
 func TestBuildSuccessWritesLockAndTarball(t *testing.T) {
@@ -170,8 +178,56 @@ func TestBuildSuccessWritesLockAndTarball(t *testing.T) {
 	if _, err := os.Stat(spec.WorkDir); !os.IsNotExist(err) {
 		t.Fatalf("workdir still exists: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(opts.Dir, "frostroot.lock.tmp")); !os.IsNotExist(err) {
-		t.Fatalf("tmp lock left behind: %v", err)
+	assertNoTmp(t, opts.Dir)
+}
+
+func TestBuildsInOneDirectoryDoNotShareTempFiles(t *testing.T) {
+	// Two builds in the same recipe directory: a failing one must not remove
+	// the other's temporary lock, and a succeeding one must not either.
+	// (Concurrent builds are still last-writer-wins; this only keeps them
+	// from sabotaging each other.)
+	opts, _ := testOptions(t)
+	theirs := filepath.Join(opts.Dir, ".frostroot.lock.424242.tmp")
+	if err := os.WriteFile(theirs, []byte("theirs"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&Builder{Bootstrap: &fakeBoot{noTar: true}}).Build(context.Background(), testRecipe(), opts); err == nil {
+		t.Fatal("expected failure")
+	}
+	if body, err := os.ReadFile(theirs); err != nil || string(body) != "theirs" {
+		t.Fatalf("another build's temporary lock was touched by a failure: %q %v", body, err)
+	}
+	if _, err := (&Builder{Bootstrap: &fakeBoot{}}).Build(context.Background(), testRecipe(), opts); err != nil {
+		t.Fatal(err)
+	}
+	if body, err := os.ReadFile(theirs); err != nil || string(body) != "theirs" {
+		t.Fatalf("another build's temporary lock was touched by a success: %q %v", body, err)
+	}
+	if _, err := recipe.LoadLock(filepath.Join(opts.Dir, "frostroot.lock")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBuildRefusesUnwritableOutputBeforeBootstrapping(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root can write anywhere")
+	}
+	opts, root := testOptions(t)
+	dist := filepath.Join(opts.Dir, "dist")
+	if err := os.Mkdir(dist, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dist, 0o755) })
+	boot := &fakeBoot{}
+	res, err := (&Builder{Bootstrap: boot}).Build(context.Background(), testRecipe(), opts)
+	if !errors.Is(err, ErrUnwritableOutput) {
+		t.Fatalf("want ErrUnwritableOutput, got %v", err)
+	}
+	if boot.calls != 0 || res.WorkDir != "" {
+		t.Fatalf("a build that could never be placed must not start: calls=%d res=%+v", boot.calls, res)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatal("no work directory should be created")
 	}
 }
 

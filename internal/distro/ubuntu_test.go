@@ -125,6 +125,22 @@ func TestLookupEmptyArch(t *testing.T) {
 	}
 }
 
+func TestLookupReportsReleaseAndArchTogether(t *testing.T) {
+	// validate prints every problem; one Lookup call must not hide the
+	// release problem behind the arch problem.
+	_, err := Lookup("18.04", "arm64")
+	if !errors.Is(err, ErrUnknownRelease) || !errors.Is(err, ErrUnsupportedArch) {
+		t.Fatalf("want both errors, got %v", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `"18.04"`) || !strings.Contains(msg, `"arm64"`) {
+		t.Fatalf("message should name both values: %q", msg)
+	}
+	if strings.Index(msg, "release") > strings.Index(msg, "arch") {
+		t.Fatalf("release should be reported first, in recipe order: %q", msg)
+	}
+}
+
 func TestKnownReleases(t *testing.T) {
 	got := KnownReleases()
 	want := []string{"20.04", "22.04", "24.04"}

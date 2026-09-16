@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"text/template"
+	"unicode"
 
 	"frostroot/internal/distro"
 	"frostroot/internal/recipe"
@@ -83,7 +84,7 @@ func (a *App) cmdInit(args []string) int {
 		{"User name", "student"},
 		{"Timezone, e.g. UTC or Europe/Istanbul", "UTC"},
 		{"Package preset (" + strings.Join(presetNames, ", ") + ")", "none"},
-		{"Extra packages, comma-separated", ""},
+		{"Extra packages, separated by spaces or commas", ""},
 	} {
 		answer, err := a.Prompt.Ask(q.question, q.def)
 		if err != nil {
@@ -126,13 +127,14 @@ func (a *App) cmdInit(args []string) int {
 	return 0
 }
 
-// packageList expands a preset and appends comma-separated extras, keeping
-// the first occurrence of each name.
+// packageList expands a preset and appends the extras, keeping the first
+// occurrence of each name. Extras may be separated by commas or whitespace:
+// package names contain neither, and people type them as for apt install.
 func packageList(preset []string, extra string) []string {
 	out := []string{}
 	seen := map[string]bool{}
 	add := func(p string) {
-		if p = strings.TrimSpace(p); p != "" && !seen[p] {
+		if p != "" && !seen[p] {
 			seen[p] = true
 			out = append(out, p)
 		}
@@ -140,7 +142,7 @@ func packageList(preset []string, extra string) []string {
 	for _, p := range preset {
 		add(p)
 	}
-	for _, p := range strings.Split(extra, ",") {
+	for _, p := range strings.FieldsFunc(extra, func(c rune) bool { return c == ',' || unicode.IsSpace(c) }) {
 		add(p)
 	}
 	return out

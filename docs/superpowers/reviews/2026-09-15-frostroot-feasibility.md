@@ -410,6 +410,33 @@ without its fix.
    exits 0. Found by running the provision script against the spike's noble
    and focal userlands before wiring it in.
 
+### Code review and second bug hunt
+
+After the release verification, a review of the whole branch found three
+defects, and a further hunt (reading every file again, probing the platform,
+and an independent reviewer) found more. All were invisible to the green
+suite; each now has a test that fails without its fix.
+
+| Defect | How it showed |
+|---|---|
+| One `sudo frostroot build` left a root-owned `/var/tmp/frostroot`; every later unprivileged build then failed at `MkdirTemp` with exit 2 | review; fixed with a per-user work root that must be owned by the current user |
+| The same `sudo` build leaves `dist/` and the lock root-owned; the next unprivileged build in that directory failed only after the whole bootstrap | follow-on from the above; `build` now probes the output directories first |
+| Two builds in one directory shared `frostroot.lock.tmp`; a failing one deleted the other's, which then failed after its tarball was already placed | review; unique O_EXCL temporary names |
+| `validate` hid an unknown release behind an unsupported arch | review; `distro.Lookup` reports both |
+| A UTF-8 byte order mark, as Notepad's "UTF-8 with BOM" writes, made the recipe unparseable with `invalid character at start of key: U+00EF` | writing the CRLF/BOM test; CRLF was already fine |
+| A closed terminal no longer interrupted mmdebstrap, because it now runs in its own process group | reasoning about the process-group change; SIGHUP is handled like SIGINT |
+
+Checked and found sound: `rename(2)` replaces an existing file on drvfs, even
+one that is open, so `Place` and `init --force` behave on Windows drives.
+
+Verified with real builds, as root inside the build host:
+
+| Step | Result |
+|---|---|
+| `frostroot build` as root (mode `root`), tiny 24.04 recipe in a directory owned by `builder` | exit 0 in 163 s; 111 MB, 225 packages; `dist/`, the lock and `/var/tmp/frostroot-0` owned by root |
+| `builder` then builds in the same directory | exit 1 in 0 s, before any download: `cannot write the build output: … dist/… permission denied (was a previous build run with sudo? …)` |
+| `builder` builds in a fresh directory, with `/var/tmp/frostroot-0` still there | exit 0 in 130 s, working in `/var/tmp/frostroot-1000`; before the fix this was the exit-2 failure |
+
 ### Success criteria
 
 | # | Criterion | Status |

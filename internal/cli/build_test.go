@@ -160,6 +160,27 @@ func TestBuildNotLinuxExit1(t *testing.T) {
 	}
 }
 
+func TestBuildUnwritableOutputExit1(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root can write anywhere")
+	}
+	dir := recipeDir(t, "valid.toml")
+	dist := filepath.Join(dir, "dist")
+	if err := os.Mkdir(dist, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dist, 0o755) })
+	var out, errb bytes.Buffer
+	boot := &stubBoot{}
+	app := newApp(t, dir, boot, &out, &errb)
+	if code := app.Run([]string{"build"}); code != 1 {
+		t.Fatalf("code %d: %s", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "sudo") || boot.spec.Suite != "" {
+		t.Fatalf("should explain before bootstrapping: %s", errb.String())
+	}
+}
+
 func TestBuildPreflightFailuresExit1(t *testing.T) {
 	for _, err := range []error{
 		fmt.Errorf("%w; install it with: sudo apt install mmdebstrap", builder.ErrNoMmdebstrap),

@@ -122,6 +122,56 @@ func TestValidateProblems(t *testing.T) {
 	}
 }
 
+func TestValidateReportsReleaseAndArchTogether(t *testing.T) {
+	r := loadValid(t)
+	r.Image.Release = "18.04"
+	r.Image.Arch = "arm64"
+	probs := Validate(r)
+	if len(probs) != 2 {
+		t.Fatalf("want one problem for the release and one for the arch, got %v", probs)
+	}
+	if !strings.Contains(probs[0], "unknown ubuntu release") || !strings.Contains(probs[1], "arm64") {
+		t.Fatalf("got %v", probs)
+	}
+	for _, p := range probs {
+		if strings.Contains(p, "\n") {
+			t.Fatalf("one problem per line: %q", p)
+		}
+	}
+}
+
+func TestLoadAcceptsWindowsEditors(t *testing.T) {
+	// Recipes get edited in Notepad: CRLF line endings, sometimes a UTF-8 BOM.
+	body, err := os.ReadFile(testdata("valid.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	crlf := strings.ReplaceAll(string(body), "\n", "\r\n")
+	const bom = "\xef\xbb\xbf" // UTF-8 encoding of U+FEFF
+	for name, text := range map[string]string{
+		"crlf":     crlf,
+		"bom":      bom + string(body),
+		"bom+crlf": bom + crlf,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "frostroot.toml")
+			if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			r, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.Image.Name != "cpp-lab" || len(r.Packages.Include) != 3 {
+				t.Fatalf("got %+v", r)
+			}
+			if probs := Validate(r); len(probs) != 0 {
+				t.Fatal(probs)
+			}
+		})
+	}
+}
+
 func TestValidateAcceptsRealisticValues(t *testing.T) {
 	for _, lang := range []string{"en_US.UTF-8", "C.UTF-8", "tr_TR.UTF-8", "de_DE.ISO-8859-1", "en_US.utf8"} {
 		r := loadValid(t)

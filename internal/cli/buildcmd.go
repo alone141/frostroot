@@ -69,7 +69,10 @@ func (a *App) cmdBuild(args []string) int {
 	fmt.Fprintf(a.Stderr, "frostroot: building %s from Ubuntu %s (%s, %s) using %s\n",
 		r.Image.Name, r.Image.Release, info.Suite, r.Image.Arch, base)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// SIGHUP too: mmdebstrap runs in its own process group, so a closed
+	// terminal no longer reaches it directly and frostroot must pass the
+	// interrupt on instead of leaving an orphan bootstrapping for minutes.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	var finished atomic.Bool
 	go func() {
@@ -100,7 +103,8 @@ func (a *App) cmdBuild(args []string) int {
 			a.printKept(res.WorkDir)
 			return 130
 		case errors.Is(err, builder.ErrNotLinux), errors.Is(err, builder.ErrNoMmdebstrap),
-			errors.Is(err, builder.ErrNoKeyring), errors.Is(err, builder.ErrBadWorkRoot):
+			errors.Is(err, builder.ErrNoKeyring), errors.Is(err, builder.ErrBadWorkRoot),
+			errors.Is(err, builder.ErrUnwritableOutput):
 			fmt.Fprintf(a.Stderr, "frostroot: %v\n", err)
 			return 1
 		default:
