@@ -87,15 +87,17 @@ readers, a terminal the full-screen view misbehaves in, a log that should
 show what was answered).
 
 Exit codes are unchanged: 0, 1 (user error), 2 (build failed), 130
-(interrupted). Leaving the form with Esc or Ctrl-C is a user error (1) and
-writes nothing.
+(interrupted). Leaving the form with Ctrl-C, or answering no on its summary
+page, is a user error (1) and writes nothing.
 
 ## The form (`init` and `edit`)
 
 One form, several pages. Enter accepts a field and moves on; Shift-Tab goes
-back; Esc cancels. Selects are chosen with the arrow keys; long selects filter
-as the user types (the timezone list), so choosing `Europe/Istanbul` is typing
-`ist` and pressing Enter. Every field validates on the spot with the same
+back; Ctrl-C cancels. Esc is not a cancel key: in a filtering list it clears
+the filter, and a stray Esc must never throw away five pages of answers.
+Selects are chosen with the arrow keys; long selects filter as the user types
+(the timezone list), so choosing `Europe/Istanbul` is typing `ist`, Enter to
+close the filter and Enter to accept. Every field validates on the spot with the same
 rules as `recipe.Validate`, so the form cannot produce a recipe that
 `validate` rejects.
 

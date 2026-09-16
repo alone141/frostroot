@@ -133,7 +133,7 @@ func Fields(host Host) []Field {
 		{
 			Key: KeyPackages, Page: PagePackages, Kind: KindMultiSelect, Filterable: true,
 			Title:       "Packages",
-			Description: "Space selects, Enter continues; type to filter",
+			Description: "Space selects, Enter continues, / filters",
 			Options:     catalogOptions(),
 		},
 		{

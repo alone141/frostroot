@@ -1,6 +1,7 @@
 package form
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
@@ -104,6 +105,30 @@ func ToRecipe(values Values) recipe.Recipe {
 			Include: MergePackages(values.Strings(KeyPackages), values.String(KeyOtherPackages), values.Strings(keyOriginalInclude)),
 		},
 	}
+}
+
+// Summary describes the answers in four lines, for the page before the
+// recipe is written.
+func Summary(values Values) string {
+	sudo := "no sudo"
+	if values.Bool(KeySudo) {
+		sudo = "passwordless sudo"
+	}
+	systemd := "systemd off"
+	if values.Bool(KeySystemd) {
+		systemd = "systemd on"
+	}
+	packages := MergePackages(values.Strings(KeyPackages), values.String(KeyOtherPackages), values.Strings(keyOriginalInclude))
+	packagesText := "none"
+	if len(packages) > 0 {
+		packagesText = strings.Join(packages, " ")
+	}
+	return strings.Join([]string{
+		fmt.Sprintf("Image     %s, Ubuntu %s %s", values.String(KeyImageName), values.String(KeyRelease), distro.SupportedArch),
+		fmt.Sprintf("User      %s, %s", values.String(KeyUserName), sudo),
+		fmt.Sprintf("System    %s, %s, %s", values.String(KeyTimezone), values.String(KeyLocale), systemd),
+		fmt.Sprintf("Packages  %s", packagesText),
+	}, "\n")
 }
 
 // MergePackages returns the package list a recipe should carry: every

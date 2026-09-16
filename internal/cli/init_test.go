@@ -16,30 +16,62 @@ import (
 // scriptedPrompt answers questions from a list, recording each question. An
 // empty or missing answer accepts the default, like pressing Enter.
 type scriptedPrompt struct {
-	answers        []string
-	questionsAsked []string
+	answers         []string
+	questionsAsked  []string
+	defaultsOffered []string // the default shown with each question
 }
 
 func (p *scriptedPrompt) Ask(question, defaultAnswer string) (string, error) {
 	answerIndex := len(p.questionsAsked)
 	p.questionsAsked = append(p.questionsAsked, question)
+	p.defaultsOffered = append(p.defaultsOffered, defaultAnswer)
 	if answerIndex >= len(p.answers) || p.answers[answerIndex] == "" {
 		return defaultAnswer, nil
 	}
 	return p.answers[answerIndex], nil
 }
 
+// The plain init asks these questions, in this order. Tests script answers
+// by position; "" accepts the default.
+const (
+	answerImageName = iota
+	answerRelease
+	answerUserName
+	answerSudo
+	answerTimezone
+	answerLocale
+	answerSystemd
+	answerPackages
+	answerOtherPackages
+	answerWrite
+	answerCount
+)
+
+// answersWith returns a default-accepting answer list with the given
+// positions overridden.
+func answersWith(overrides map[int]string) []string {
+	answers := make([]string, answerCount)
+	for position, answer := range overrides {
+		answers[position] = answer
+	}
+	return answers
+}
+
+// noHostFile stands in for os.ReadFile on a host with no timezone
+// configuration, so defaults do not depend on the machine running the tests.
+func noHostFile(string) ([]byte, error) { return nil, os.ErrNotExist }
+
 // runInitWithAnswers runs `frostroot init` in recipeDir, answering its
 // questions from answers, and returns the exit code, standard output and
-// standard error.
+// standard error. Without a terminal, init uses the plain interface.
 func runInitWithAnswers(recipeDir string, answers []string, args ...string) (exitCode int, stdout, stderr string) {
 	var stdoutBuffer, stderrBuffer bytes.Buffer
-	app := App{Stdout: &stdoutBuffer, Stderr: &stderrBuffer, RecipeDir: recipeDir, Prompt: &scriptedPrompt{answers: answers}}
+	app := App{Stdout: &stdoutBuffer, Stderr: &stderrBuffer, RecipeDir: recipeDir, Prompt: &scriptedPrompt{answers: answers}, ReadFile: noHostFile}
 	exitCode = app.Run(append([]string{"init"}, args...))
 	return exitCode, stdoutBuffer.String(), stderrBuffer.String()
 }
 
-// loadWrittenRecipe loads the frostroot.toml init wrote in recipeDir.
+// loadWrittenRecipe loads the frostroot.toml in recipeDir.
 func loadWrittenRecipe(t *testing.T, recipeDir string) recipe.Recipe {
 	t.Helper()
 	imageRecipe, err := recipe.Load(filepath.Join(recipeDir, "frostroot.toml"))
@@ -51,7 +83,10 @@ func loadWrittenRecipe(t *testing.T, recipeDir string) recipe.Recipe {
 
 func TestInitWritesValidRecipe(t *testing.T) {
 	recipeDir := t.TempDir()
-	answers := []string{"cpp-lab", "22.04", "student", "Europe/Istanbul", "build-essential", "cmake"}
+	answers := answersWith(map[int]string{
+		answerImageName: "cpp-lab", answerRelease: "22.04", answerTimezone: "Europe/Istanbul",
+		answerPackages: "build-essential cmake",
+	})
 	if exitCode, _, stderr := runInitWithAnswers(recipeDir, answers); exitCode != exitSuccess {
 		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr)
 	}
@@ -62,10 +97,8 @@ func TestInitWritesValidRecipe(t *testing.T) {
 	if wantLocale := (recipe.Locale{Lang: "en_US.UTF-8", Timezone: "Europe/Istanbul"}); imageRecipe.Locale != wantLocale {
 		t.Errorf("locale = %+v, want %+v", imageRecipe.Locale, wantLocale)
 	}
-	for _, wantPackage := range []string{"build-essential", "cmake"} {
-		if !slices.Contains(imageRecipe.Packages.Include, wantPackage) {
-			t.Errorf("packages %#v lack %q", imageRecipe.Packages.Include, wantPackage)
-		}
+	if want := []string{"build-essential", "cmake"}; !slices.Equal(imageRecipe.Packages.Include, want) {
+		t.Errorf("packages = %q, want %q", imageRecipe.Packages.Include, want)
 	}
 	if problems := recipe.Validate(imageRecipe); len(problems) != 0 {
 		t.Errorf("init wrote a recipe that does not validate: %v", problems)
@@ -95,11 +128,11 @@ func TestInitDefaults(t *testing.T) {
 
 func TestInitAsksInOrder(t *testing.T) {
 	prompt := &scriptedPrompt{}
-	app := App{Stdout: io.Discard, Stderr: io.Discard, RecipeDir: t.TempDir(), Prompt: prompt}
+	app := App{Stdout: io.Discard, Stderr: io.Discard, RecipeDir: t.TempDir(), Prompt: prompt, ReadFile: noHostFile}
 	if exitCode := app.Run([]string{"init"}); exitCode != exitSuccess {
 		t.Fatalf("exit code = %d", exitCode)
 	}
-	wantTopics := []string{"image name", "release", "user", "timezone", "preset", "packages"}
+	wantTopics := []string{"image name", "release", "user name", "sudo", "timezone", "locale", "systemd", "packages", "other packages", "write frostroot.toml"}
 	if len(prompt.questionsAsked) != len(wantTopics) {
 		t.Fatalf("questions asked = %q, want one about each of %q", prompt.questionsAsked, wantTopics)
 	}
@@ -110,31 +143,45 @@ func TestInitAsksInOrder(t *testing.T) {
 	}
 }
 
-func TestInitPresetsExpandAndExtrasAppend(t *testing.T) {
-	// Extras may be separated by commas, spaces or both: people type them the
-	// way they would for apt install.
-	extraPackageAnswers := []string{" numpy-dev , ,git,python3 ", "numpy-dev git python3", "numpy-dev, git  python3"}
-	for _, extraPackages := range extraPackageAnswers {
-		t.Run(extraPackages, func(t *testing.T) {
+func TestInitListsOptionsForSelects(t *testing.T) {
+	_, stdout, _ := runInitWithAnswers(t.TempDir(), nil)
+	for _, wantText := range []string{"Ubuntu 24.04 LTS (noble)", "Ubuntu 20.04 LTS (focal)  (past standard support", "C/C++", "build-essential", "choices, for example UTC", "English (United States)"} {
+		if !strings.Contains(stdout, wantText) {
+			t.Errorf("plain init should list %q among the options:\n%s", wantText, stdout)
+		}
+	}
+	if strings.Contains(stdout, "Africa/Abidjan") {
+		t.Errorf("plain init must not dump the whole timezone list:\n%s", stdout[:min(2000, len(stdout))])
+	}
+	if !strings.Contains(stdout, "Image     lab, Ubuntu 24.04 amd64") {
+		t.Errorf("plain init should show the summary before writing:\n%s", stdout)
+	}
+}
+
+func TestInitPackagesByNumberOrName(t *testing.T) {
+	// Catalog positions: 1 build-essential, 2 cmake, 3 gdb. Names and
+	// numbers may be mixed, separated by commas, spaces or both.
+	for _, packagesAnswer := range []string{"1, 3 git", "build-essential gdb 13", "1,gdb,git"} {
+		t.Run(packagesAnswer, func(t *testing.T) {
 			recipeDir := t.TempDir()
-			answers := []string{"py", "22.04", "", "", "python-lab", extraPackages}
+			answers := answersWith(map[int]string{answerPackages: packagesAnswer, answerOtherPackages: " numpy-dev , libfoo-dev"})
 			if exitCode, _, stderr := runInitWithAnswers(recipeDir, answers); exitCode != exitSuccess {
 				t.Fatalf("exit code = %d, stderr %s", exitCode, stderr)
 			}
-			want := []string{"python3", "python3-pip", "python3-venv", "git", "numpy-dev"}
-			if got := loadWrittenRecipe(t, recipeDir).Packages.Include; !reflect.DeepEqual(got, want) {
-				t.Errorf("packages = %#v, want %#v", got, want)
+			want := []string{"build-essential", "gdb", "git", "numpy-dev", "libfoo-dev"}
+			if got := loadWrittenRecipe(t, recipeDir).Packages.Include; !slices.Equal(got, want) {
+				t.Errorf("packages = %q, want %q", got, want)
 			}
 		})
 	}
 }
 
-func TestInitPythonLabNoteOnlyOnNoble(t *testing.T) {
-	_, stdout, _ := runInitWithAnswers(t.TempDir(), []string{"py", "24.04", "", "", "python-lab", ""})
+func TestInitPythonNoteOnlyOnNoble(t *testing.T) {
+	_, stdout, _ := runInitWithAnswers(t.TempDir(), answersWith(map[int]string{answerRelease: "24.04", answerPackages: "python3-pip"}))
 	if !strings.Contains(stdout, "venv") || !strings.Contains(stdout, "PEP 668") {
-		t.Errorf("24.04 python-lab should warn about PEP 668:\n%s", stdout)
+		t.Errorf("24.04 with pip should warn about PEP 668:\n%s", stdout)
 	}
-	_, stdout, _ = runInitWithAnswers(t.TempDir(), []string{"py", "22.04", "", "", "python-lab", ""})
+	_, stdout, _ = runInitWithAnswers(t.TempDir(), answersWith(map[int]string{answerRelease: "22.04", answerPackages: "python3-pip"}))
 	if strings.Contains(stdout, "PEP 668") {
 		t.Errorf("22.04 has no PEP 668 restriction:\n%s", stdout)
 	}
@@ -148,12 +195,14 @@ func TestInitRefusesToOverwrite(t *testing.T) {
 	}
 	prompt := &scriptedPrompt{}
 	var stderr bytes.Buffer
-	app := App{Stdout: io.Discard, Stderr: &stderr, RecipeDir: recipeDir, Prompt: prompt}
+	app := App{Stdout: io.Discard, Stderr: &stderr, RecipeDir: recipeDir, Prompt: prompt, ReadFile: noHostFile}
 	if exitCode := app.Run([]string{"init"}); exitCode != exitUserError {
 		t.Fatalf("exit code = %d, want %d", exitCode, exitUserError)
 	}
-	if !strings.Contains(stderr.String(), "--force") {
-		t.Errorf("stderr should mention --force:\n%s", stderr.String())
+	for _, wantText := range []string{"--force", "frostroot edit"} {
+		if !strings.Contains(stderr.String(), wantText) {
+			t.Errorf("stderr should mention %s:\n%s", wantText, stderr.String())
+		}
 	}
 	if len(prompt.questionsAsked) != 0 {
 		t.Error("init must refuse before asking anything")
@@ -179,22 +228,28 @@ func TestInitForceOverwrites(t *testing.T) {
 }
 
 func TestInitRejectsInvalidAnswers(t *testing.T) {
-	answersByInvalidField := map[string][]string{
-		"release":  {"cpp-lab", "18.04", "student", "UTC", "none", ""},
-		"user":     {"cpp-lab", "24.04", "root", "UTC", "none", ""},
-		"timezone": {"cpp-lab", "24.04", "student", "../etc/passwd", "none", ""},
-		"package":  {"cpp-lab", "24.04", "student", "UTC", "none", "git; rm -rf /"},
-		"preset":   {"cpp-lab", "24.04", "student", "UTC", "gaming", ""},
+	testCases := map[string]struct {
+		answers      []string
+		wantInStderr string
+	}{
+		"release":       {answersWith(map[int]string{answerRelease: "18.04"}), "unknown ubuntu release"},
+		"user":          {answersWith(map[int]string{answerUserName: "root"}), "invalid user name"},
+		"sudo":          {answersWith(map[int]string{answerSudo: "maybe"}), "answer y or n"},
+		"timezone":      {answersWith(map[int]string{answerTimezone: "../etc/passwd"}), "unknown timezone"},
+		"package":       {answersWith(map[int]string{answerOtherPackages: "git; rm -rf /"}), "invalid package name"},
+		"catalog":       {answersWith(map[int]string{answerPackages: "gaming"}), "not one of the options"},
+		"option number": {answersWith(map[int]string{answerLocale: "99"}), "unknown locale"},
+		"declined":      {answersWith(map[int]string{answerWrite: "n"}), "nothing written"},
 	}
-	for invalidField, answers := range answersByInvalidField {
-		t.Run(invalidField, func(t *testing.T) {
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
 			recipeDir := t.TempDir()
-			exitCode, _, stderr := runInitWithAnswers(recipeDir, answers)
+			exitCode, _, stderr := runInitWithAnswers(recipeDir, testCase.answers)
 			if exitCode != exitUserError {
 				t.Fatalf("exit code = %d, want %d", exitCode, exitUserError)
 			}
-			if stderr == "" {
-				t.Error("expected an explanation on stderr")
+			if !strings.Contains(stderr, testCase.wantInStderr) || !strings.Contains(stderr, "nothing written") {
+				t.Errorf("stderr should explain with %q and say nothing was written:\n%s", testCase.wantInStderr, stderr)
 			}
 			entries, err := os.ReadDir(recipeDir)
 			if err != nil {
@@ -228,21 +283,30 @@ func TestInitWithLinePrompt(t *testing.T) {
 	recipeDir := t.TempDir()
 	var stdout bytes.Buffer
 	app := App{
-		Stdin:     strings.NewReader("cpp-lab\n22.04\n\n\nbuild-essential\n"), // then end of input: accept the rest
+		// image name, release, then defaults up to packages, one package by
+		// number, then end of input: accept the rest.
+		Stdin:     strings.NewReader("cpp-lab\n22.04\n\n\n\n\n\n1\n"),
 		Stdout:    &stdout,
 		Stderr:    io.Discard,
 		RecipeDir: recipeDir,
+		ReadFile:  noHostFile,
 	}
 	if exitCode := app.Run([]string{"init"}); exitCode != exitSuccess {
 		t.Fatalf("exit code = %d, stdout %s", exitCode, stdout.String())
 	}
 	imageRecipe := loadWrittenRecipe(t, recipeDir)
 	if imageRecipe.Image.Name != "cpp-lab" || imageRecipe.Image.Release != "22.04" ||
-		imageRecipe.User.Name != "student" || len(imageRecipe.Packages.Include) != 4 {
+		imageRecipe.User.Name != "student" || !slices.Equal(imageRecipe.Packages.Include, []string{"build-essential"}) {
 		t.Errorf("recipe = %+v", imageRecipe)
 	}
 	if !strings.Contains(stdout.String(), "[24.04]") {
 		t.Errorf("prompts should show defaults:\n%s", stdout.String())
+	}
+}
+
+func TestInitPlainFlagIsAccepted(t *testing.T) {
+	if exitCode, _, stderr := runInitWithAnswers(t.TempDir(), nil, "--plain"); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr)
 	}
 }
 
