@@ -12,25 +12,27 @@ import (
 	"strings"
 )
 
-// Runner runs a command to completion, streaming its output.
-type Runner func(ctx context.Context, name string, args, env []string, stdout, stderr io.Writer) error
+// CommandRunner runs a program to completion, streaming its output. Tests
+// replace it to record the command line instead of running mmdebstrap.
+type CommandRunner func(ctx context.Context, program string, args, environment []string, stdout, stderr io.Writer) error
 
 // Mmdebstrap is the real Bootstrapper. mmdebstrap writes the tarball itself,
 // from inside its user namespace, which is what keeps ownership, symlink
 // targets, hardlinks and file capabilities correct.
 type Mmdebstrap struct {
-	RunCmd   Runner                       // default execRun
-	Mode     string                       // "unshare", "root", or "" to pick from Uid
-	Uid      func() int                   // default os.Getuid
-	Stderr   io.Writer                    // progress passthrough; nil discards
-	LookPath func(string) (string, error) // default exec.LookPath
+	RunCommand     CommandRunner                // defaults to runInterruptibly
+	Mode           string                       // "unshare", "root", or "" to choose from the current uid
+	CurrentUID     func() int                   // defaults to os.Getuid
+	ProgressOutput io.Writer                    // receives mmdebstrap's output as it runs; nil discards it
+	LookPath       func(string) (string, error) // defaults to exec.LookPath
 }
 
-// tailSize is how much of mmdebstrap's output is repeated in a build error.
-const tailSize = 4 << 10
+// errorTailBytes is how much of mmdebstrap's output is repeated in a build
+// error.
+const errorTailBytes = 4 << 10
 
-// Preflight checks the host before any work is done. spec.WorkDir is the
-// work root the build directory will be created in; it may not exist yet.
+// Preflight checks the host before any work is done. spec.WorkDir is the work
+// root the build directory will be created in; it need not exist yet.
 func (m *Mmdebstrap) Preflight(spec BootstrapSpec) error {
 	lookPath := m.LookPath
 	if lookPath == nil {
@@ -39,176 +41,188 @@ func (m *Mmdebstrap) Preflight(spec BootstrapSpec) error {
 	if _, err := lookPath("mmdebstrap"); err != nil {
 		return fmt.Errorf("%w; install it with: sudo apt install mmdebstrap", ErrNoMmdebstrap)
 	}
-	if err := checkKeyring(keyringOf(spec)); err != nil {
+	if err := checkKeyringExists(keyringPath(spec)); err != nil {
 		return err
 	}
-	if m.mode() == "unshare" && spec.WorkDir != "" {
-		return checkReachable(spec.WorkDir)
+	if m.bootstrapMode() == "unshare" && spec.WorkDir != "" {
+		return checkReachableFromUserNamespace(spec.WorkDir)
 	}
 	return nil
 }
 
-// Run bootstraps the image described by spec. Output is streamed to m.Stderr
-// as it happens, because a silent five-minute build looks hung and
-// mmdebstrap's own messages are the best explanation of a failure (a missing
-// user namespace, an unknown package). The last 4 KiB are repeated in the
-// error.
+// Run bootstraps the image described by spec. Output is streamed to
+// m.ProgressOutput as it happens, because a silent five-minute build looks
+// hung, and mmdebstrap's own messages are the best explanation of a failure
+// such as a missing user namespace or an unknown package. The last lines are
+// repeated in the error.
 func (m *Mmdebstrap) Run(ctx context.Context, spec BootstrapSpec) error {
-	if err := checkKeyring(keyringOf(spec)); err != nil {
+	if err := checkKeyringExists(keyringPath(spec)); err != nil {
 		return err
 	}
-	if m.mode() == "unshare" {
-		if err := checkReachable(spec.WorkDir); err != nil {
+	if m.bootstrapMode() == "unshare" {
+		if err := checkReachableFromUserNamespace(spec.WorkDir); err != nil {
 			return err
 		}
 	}
 	// mmdebstrap(1): in unshare mode TMPDIR must be world-writable. Sticky,
 	// like /tmp, so other users cannot remove what the build puts there.
-	tmp := tmpDirOf(spec)
-	if err := os.Mkdir(tmp, 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+	temporaryDir := temporaryDirFor(spec)
+	if err := os.Mkdir(temporaryDir, 0o755); err != nil && !errors.Is(err, os.ErrExist) {
 		return err
 	}
-	if err := os.Chmod(tmp, os.ModeSticky|0o777); err != nil {
+	if err := os.Chmod(temporaryDir, os.ModeSticky|0o777); err != nil {
 		return err
 	}
-	run := m.RunCmd
-	if run == nil {
-		run = execRun
+
+	runCommand := m.RunCommand
+	if runCommand == nil {
+		runCommand = runInterruptibly
 	}
-	progress := m.Stderr
-	if progress == nil {
-		progress = io.Discard
+	progressOutput := m.ProgressOutput
+	if progressOutput == nil {
+		progressOutput = io.Discard
 	}
-	tail := newTailBuffer(tailSize)
-	out := io.MultiWriter(progress, tail)
-	args, env := m.command(spec)
-	if err := run(ctx, "mmdebstrap", args, env, out, out); err != nil {
+	outputTail := newTailBuffer(errorTailBytes)
+	combinedOutput := io.MultiWriter(progressOutput, outputTail)
+	args, environment := m.commandLine(spec)
+	if err := runCommand(ctx, "mmdebstrap", args, environment, combinedOutput, combinedOutput); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("mmdebstrap interrupted: %w", ctx.Err())
 		}
-		return fmt.Errorf("mmdebstrap failed: %w\n--- last lines of mmdebstrap output ---\n%s", err, strings.TrimRight(tail.String(), "\n"))
+		return fmt.Errorf("mmdebstrap failed: %w\n--- last lines of mmdebstrap output ---\n%s", err, strings.TrimRight(outputTail.String(), "\n"))
 	}
 	return nil
 }
 
-// mode is --mode: as configured, else root for uid 0 and unshare otherwise.
-func (m *Mmdebstrap) mode() string {
+// bootstrapMode returns the value for mmdebstrap's --mode: as configured,
+// otherwise root for uid 0 and unshare for everyone else.
+func (m *Mmdebstrap) bootstrapMode() string {
 	if m.Mode != "" {
 		return m.Mode
 	}
-	uid := os.Getuid
-	if m.Uid != nil {
-		uid = m.Uid
+	currentUID := os.Getuid
+	if m.CurrentUID != nil {
+		currentUID = m.CurrentUID
 	}
-	if uid() == 0 {
+	if currentUID() == 0 {
 		return "root"
 	}
 	return "unshare"
 }
 
-// command builds the mmdebstrap argument list and extra environment.
-func (m *Mmdebstrap) command(spec BootstrapSpec) (args, env []string) {
+// commandLine returns the mmdebstrap arguments for spec and the variables to
+// add to its environment.
+func (m *Mmdebstrap) commandLine(spec BootstrapSpec) (args, environment []string) {
 	args = []string{
-		"--mode=" + m.mode(),
+		"--mode=" + m.bootstrapMode(),
 		"--variant=important",
 		"--architectures=" + spec.Arch,
-		"--keyring=" + keyringOf(spec),
+		"--keyring=" + keyringPath(spec),
 	}
-	if spec.Recommends {
+	if spec.InstallRecommends {
 		args = append(args, `--aptopt=Apt::Install-Recommends "true"`)
 	}
 	if len(spec.Include) > 0 {
 		args = append(args, "--include="+strings.Join(spec.Include, ","))
 	}
-	for _, h := range spec.Hooks {
-		args = append(args, "--customize-hook="+h)
+	for _, hook := range spec.CustomizeHooks {
+		args = append(args, "--customize-hook="+hook)
 	}
 	// The source lines carry the components, so --components is not needed.
-	args = append(args, spec.Suite, spec.TarPath)
-	args = append(args, spec.Sources...)
-	// mmdebstrap builds the rootfs in TMPDIR before packing it; /tmp may be
-	// small or tmpfs.
-	return args, []string{"TMPDIR=" + tmpDirOf(spec)}
+	args = append(args, spec.Suite, spec.TarballPath)
+	args = append(args, spec.SourceLines...)
+	// mmdebstrap assembles the root filesystem in TMPDIR before packing it,
+	// and /tmp may be small or a tmpfs.
+	return args, []string{"TMPDIR=" + temporaryDirFor(spec)}
 }
 
-func tmpDirOf(spec BootstrapSpec) string { return filepath.Join(spec.WorkDir, "tmp") }
+// temporaryDirFor returns the TMPDIR mmdebstrap uses for spec.
+func temporaryDirFor(spec BootstrapSpec) string {
+	return filepath.Join(spec.WorkDir, "tmp")
+}
 
-// checkReachable reports whether mmdebstrap's user namespace can reach dir.
-// In unshare mode the namespace's root is a subordinate uid, so it is "other"
-// to the user's own files: every existing ancestor must be world-executable.
-// Components that do not exist yet are created 0755 by the builder. Home
-// directories are 0750 on current Ubuntu, which is why the default work root
-// is /var/tmp/frostroot and not ~/.cache.
-func checkReachable(dir string) error {
-	for p := filepath.Clean(dir); ; p = filepath.Dir(p) {
-		fi, err := os.Stat(p)
+// checkReachableFromUserNamespace reports whether mmdebstrap's user namespace
+// can reach dir. In unshare mode the namespace's root is a subordinate uid, so
+// it is "other" to the user's own files: every existing ancestor must be
+// world-executable. Components that do not exist yet are created 0755 by the
+// builder. Home directories are 0750 on current Ubuntu, which is why the
+// default work root is under /var/tmp and not ~/.cache.
+func checkReachableFromUserNamespace(dir string) error {
+	for ancestor := filepath.Clean(dir); ; ancestor = filepath.Dir(ancestor) {
+		ancestorInfo, err := os.Stat(ancestor)
 		switch {
-		case err == nil && fi.Mode().Perm()&0o001 == 0:
+		case err == nil && ancestorInfo.Mode().Perm()&0o001 == 0:
 			return fmt.Errorf("%w: mmdebstrap runs in a user namespace that cannot enter %s (mode %04o), so it cannot use %s; set XDG_CACHE_HOME to a directory whose parents are all world-executable, or unset it to use the default under /var/tmp",
-				ErrBadWorkRoot, p, fi.Mode().Perm(), dir)
+				ErrBadWorkRoot, ancestor, ancestorInfo.Mode().Perm(), dir)
 		case err != nil && !errors.Is(err, os.ErrNotExist):
 			return err
 		}
-		if p == filepath.Dir(p) {
+		if ancestor == filepath.Dir(ancestor) {
 			return nil
 		}
 	}
 }
 
-func keyringOf(spec BootstrapSpec) string {
-	if spec.Keyring != "" {
-		return spec.Keyring
+// keyringPath returns the keyring for spec, defaulting to the Ubuntu archive
+// keyring.
+func keyringPath(spec BootstrapSpec) string {
+	if spec.KeyringPath != "" {
+		return spec.KeyringPath
 	}
-	return UbuntuKeyring
+	return UbuntuArchiveKeyring
 }
 
-func checkKeyring(path string) error {
+// checkKeyringExists returns ErrNoKeyring, with an install hint, when path
+// does not exist.
+func checkKeyringExists(path string) error {
 	if _, err := os.Stat(path); err != nil {
 		return fmt.Errorf("%w at %s; install it with: sudo apt install ubuntu-keyring", ErrNoKeyring, path)
 	}
 	return nil
 }
 
-// execRun runs a command. Cancelling ctx interrupts it like Ctrl-C in a
-// terminal (see interruptOnCancel) and then waits for it to exit however long
-// that takes. Never SIGKILL mmdebstrap: in root mode it has proc, sys and dev
-// mounted inside the chroot and needs to unmount them. That is also why
-// WaitDelay is unset: when it expires Go kills the child.
-func execRun(ctx context.Context, name string, args, env []string, stdout, stderr io.Writer) error {
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Env = append(os.Environ(), env...)
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	interruptOnCancel(cmd)
-	return cmd.Run()
+// runInterruptibly runs a program. Canceling ctx interrupts it the way Ctrl-C
+// in a terminal does (see interruptOnCancel) and then waits for it to exit,
+// however long that takes. mmdebstrap is never sent SIGKILL: in root mode it
+// has proc, sys and dev mounted inside the chroot and must unmount them. That
+// is also why WaitDelay stays unset, since Go kills the child when it expires.
+func runInterruptibly(ctx context.Context, program string, args, environment []string, stdout, stderr io.Writer) error {
+	command := exec.CommandContext(ctx, program, args...)
+	command.Env = append(os.Environ(), environment...)
+	command.Stdout = stdout
+	command.Stderr = stderr
+	interruptOnCancel(command)
+	return command.Run()
 }
 
-// tailBuffer keeps the last max bytes written to it.
+// tailBuffer is an io.Writer that keeps only the last capacity bytes written
+// to it.
 type tailBuffer struct {
-	max       int
-	buf       []byte
-	truncated bool
+	capacity  int
+	kept      []byte
+	truncated bool // older output has been dropped
 }
 
-func newTailBuffer(max int) *tailBuffer { return &tailBuffer{max: max} }
+func newTailBuffer(capacity int) *tailBuffer { return &tailBuffer{capacity: capacity} }
 
-func (t *tailBuffer) Write(p []byte) (int, error) {
-	t.buf = append(t.buf, p...)
-	if over := len(t.buf) - t.max; over > 0 {
-		t.buf = append(t.buf[:0:0], t.buf[over:]...)
-		t.truncated = true
+// Write keeps the end of data and never fails.
+func (b *tailBuffer) Write(data []byte) (int, error) {
+	b.kept = append(b.kept, data...)
+	if excess := len(b.kept) - b.capacity; excess > 0 {
+		b.kept = append([]byte(nil), b.kept[excess:]...)
+		b.truncated = true
 	}
-	return len(p), nil
+	return len(data), nil
 }
 
 // String returns the kept output, starting at a line boundary once older
 // output has been dropped.
-func (t *tailBuffer) String() string {
-	b := t.buf
-	if t.truncated {
-		if i := bytes.IndexByte(b, '\n'); i >= 0 {
-			b = b[i+1:]
+func (b *tailBuffer) String() string {
+	kept := b.kept
+	if b.truncated {
+		if newline := bytes.IndexByte(kept, '\n'); newline >= 0 {
+			kept = kept[newline+1:]
 		}
 	}
-	return string(b)
+	return string(kept)
 }

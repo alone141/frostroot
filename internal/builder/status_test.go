@@ -1,11 +1,16 @@
 package builder
 
 import (
+	"slices"
 	"strings"
 	"testing"
+
+	"frostroot/internal/recipe"
 )
 
-const sampleStatus = `Package: bash
+// realisticDpkgStatus has a multi-line field that repeats a Status line, a
+// removed package that left configuration files, and an epoch version.
+const realisticDpkgStatus = `Package: bash
 Essential: yes
 Status: install ok installed
 Priority: required
@@ -36,51 +41,34 @@ Architecture: amd64
 Version: 2.39-0ubuntu8.3
 `
 
-func TestParseDpkgStatusKeepsOnlyInstalled(t *testing.T) {
-	pkgs, err := ParseDpkgStatus(strings.NewReader(sampleStatus))
+// parseDpkgStatus parses status text, failing the test on error.
+func parseDpkgStatus(t *testing.T, statusText string) []recipe.LockPackage {
+	t.Helper()
+	installedPackages, err := ParseDpkgStatus(strings.NewReader(statusText))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pkgs) != 3 {
-		t.Fatalf("want 3 installed packages, got %#v", pkgs)
+	return installedPackages
+}
+
+func TestParseDpkgStatusRealisticFile(t *testing.T) {
+	got := parseDpkgStatus(t, realisticDpkgStatus)
+	want := []recipe.LockPackage{
+		// Continuation lines must not clobber fields, the removed package is
+		// skipped, the epoch survives, and the result is sorted by name.
+		{Name: "bash", Version: "5.2.21-2ubuntu4", Arch: "amd64"},
+		{Name: "git", Version: "1:2.43.0-1ubuntu7.1", Arch: "amd64"},
+		{Name: "libc6", Version: "2.39-0ubuntu8.3", Arch: "amd64"},
 	}
-	for _, p := range pkgs {
-		if p.Name == "gone" {
-			t.Fatal("deinstalled package must not be in the lock")
-		}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ParseDpkgStatus =\n%+v\nwant\n%+v", got, want)
 	}
 }
 
-func TestParseDpkgStatusSortedByName(t *testing.T) {
-	pkgs, err := ParseDpkgStatus(strings.NewReader(sampleStatus))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"bash", "git", "libc6"}
-	for i, w := range want {
-		if pkgs[i].Name != w {
-			t.Fatalf("order: got %#v", pkgs)
-		}
-	}
-}
-
-func TestParseDpkgStatusFields(t *testing.T) {
-	pkgs, err := ParseDpkgStatus(strings.NewReader(sampleStatus))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pkgs[1].Name != "git" || pkgs[1].Version != "1:2.43.0-1ubuntu7.1" || pkgs[1].Arch != "amd64" {
-		t.Fatalf("git entry (epoch must survive): %#v", pkgs[1])
-	}
-	if pkgs[0].Version != "5.2.21-2ubuntu4" {
-		t.Fatalf("continuation lines must not clobber fields: %#v", pkgs[0])
-	}
-}
-
-func TestParseDpkgStatusWantStateDoesNotMatter(t *testing.T) {
+func TestParseDpkgStatusSelectionStateDoesNotMatter(t *testing.T) {
 	// "hold ok installed" and "deinstall ok installed" are both still on disk;
 	// half-configured, unpacked and not-installed packages are not usable.
-	in := `Package: held
+	statusText := `Package: held
 Status: hold ok installed
 Architecture: amd64
 Version: 1
@@ -104,76 +92,72 @@ Package: purged
 Status: purge ok not-installed
 Architecture: amd64
 `
-	pkgs, err := ParseDpkgStatus(strings.NewReader(in))
-	if err != nil {
-		t.Fatal(err)
+	got := parseDpkgStatus(t, statusText)
+	want := []recipe.LockPackage{
+		{Name: "held", Version: "1", Arch: "amd64"},
+		{Name: "marked", Version: "2", Arch: "all"},
 	}
-	if len(pkgs) != 2 || pkgs[0].Name != "held" || pkgs[1].Name != "marked" || pkgs[1].Arch != "all" {
-		t.Fatalf("got %#v", pkgs)
+	if !slices.Equal(got, want) {
+		t.Fatalf("ParseDpkgStatus = %+v, want %+v", got, want)
 	}
 }
 
-func TestParseDpkgStatusSameNameSortsByArch(t *testing.T) {
-	in := "Package: libc6\nStatus: install ok installed\nArchitecture: i386\nVersion: 2\n\n" +
+func TestParseDpkgStatusSortsSameNameByArch(t *testing.T) {
+	statusText := "Package: libc6\nStatus: install ok installed\nArchitecture: i386\nVersion: 2\n\n" +
 		"Package: libc6\nStatus: install ok installed\nArchitecture: amd64\nVersion: 2\n"
-	pkgs, err := ParseDpkgStatus(strings.NewReader(in))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pkgs) != 2 || pkgs[0].Arch != "amd64" || pkgs[1].Arch != "i386" {
-		t.Fatalf("order must be total so the lock is deterministic: %#v", pkgs)
+	installedPackages := parseDpkgStatus(t, statusText)
+	if len(installedPackages) != 2 || installedPackages[0].Arch != "amd64" || installedPackages[1].Arch != "i386" {
+		t.Fatalf("ParseDpkgStatus = %+v, want amd64 before i386 so that the lock is deterministic", installedPackages)
 	}
 }
 
-func TestParseDpkgStatusHandlesTrailingStanzaWithoutBlankLine(t *testing.T) {
-	in := "Package: only\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1"
-	pkgs, err := ParseDpkgStatus(strings.NewReader(in))
-	if err != nil {
-		t.Fatal(err)
+func TestParseDpkgStatusLayoutEdgeCases(t *testing.T) {
+	testCases := []struct {
+		name       string
+		statusText string
+		wantCount  int
+	}{
+		{
+			name:       "last stanza without a trailing blank line",
+			statusText: "Package: only\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1",
+			wantCount:  1,
+		},
+		{
+			name:       "extra blank lines",
+			statusText: "\n\nPackage: a1\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1\n\n\n\nPackage: b1\nStatus: install ok installed\nArchitecture: amd64\nVersion: 2\n\n",
+			wantCount:  2,
+		},
+		{
+			name:       "very long line",
+			statusText: "Package: big\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1\nDepends: " + strings.Repeat("x", 200<<10) + "\n",
+			wantCount:  1,
+		},
 	}
-	if len(pkgs) != 1 || pkgs[0].Name != "only" {
-		t.Fatalf("got %#v", pkgs)
-	}
-}
-
-func TestParseDpkgStatusToleratesExtraBlankLines(t *testing.T) {
-	in := "\n\nPackage: a1\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1\n\n\n\nPackage: b1\nStatus: install ok installed\nArchitecture: amd64\nVersion: 2\n\n"
-	pkgs, err := ParseDpkgStatus(strings.NewReader(in))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pkgs) != 2 {
-		t.Fatalf("got %#v", pkgs)
-	}
-}
-
-func TestParseDpkgStatusLongLines(t *testing.T) {
-	long := strings.Repeat("x", 200*1024)
-	in := "Package: big\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1\nDepends: " + long + "\n"
-	pkgs, err := ParseDpkgStatus(strings.NewReader(in))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pkgs) != 1 {
-		t.Fatalf("got %#v", pkgs)
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := parseDpkgStatus(t, testCase.statusText); len(got) != testCase.wantCount {
+				t.Fatalf("ParseDpkgStatus = %+v, want %d packages", got, testCase.wantCount)
+			}
+		})
 	}
 }
 
-func TestParseDpkgStatusInstalledWithoutVersionIsError(t *testing.T) {
-	// The lock promises exact versions; a malformed stanza must not become a
-	// lock entry with an empty version.
-	in := "Package: odd\nStatus: install ok installed\nArchitecture: amd64\n"
-	if _, err := ParseDpkgStatus(strings.NewReader(in)); err == nil || !strings.Contains(err.Error(), "odd") {
-		t.Fatalf("want an error naming the package, got %v", err)
+func TestParseDpkgStatusInstalledWithoutVersionIsAnError(t *testing.T) {
+	// The lock promises exact versions, so a malformed stanza must not become
+	// a lock entry with an empty version.
+	statusText := "Package: odd\nStatus: install ok installed\nArchitecture: amd64\n"
+	_, err := ParseDpkgStatus(strings.NewReader(statusText))
+	if err == nil || !strings.Contains(err.Error(), "odd") {
+		t.Fatalf("ParseDpkgStatus error = %v, want one naming the package", err)
 	}
 }
 
-func TestParseDpkgStatusEmptyIsError(t *testing.T) {
-	// An empty status file means the bootstrap produced nothing; a lock with
-	// zero packages must never be written.
-	for _, in := range []string{"", "\n\n", "Package: gone\nStatus: purge ok not-installed\n"} {
-		if _, err := ParseDpkgStatus(strings.NewReader(in)); err == nil {
-			t.Fatalf("expected error for %q", in)
+func TestParseDpkgStatusWithNothingInstalledIsAnError(t *testing.T) {
+	// An empty status file means the bootstrap produced nothing, and a lock
+	// with no packages must never be written.
+	for _, statusText := range []string{"", "\n\n", "Package: gone\nStatus: purge ok not-installed\n"} {
+		if _, err := ParseDpkgStatus(strings.NewReader(statusText)); err == nil {
+			t.Errorf("ParseDpkgStatus(%q) succeeded, want an error", statusText)
 		}
 	}
 }

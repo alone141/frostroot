@@ -7,8 +7,9 @@ import (
 	"os/exec"
 )
 
-// interruptOnCancel: frostroot only builds on Linux (Build returns
-// ErrNotLinux elsewhere); this keeps the package compiling on other systems.
-func interruptOnCancel(cmd *exec.Cmd) {
-	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+// interruptOnCancel sends os.Interrupt to command on cancel. frostroot only
+// builds on Linux (Build returns ErrNotLinux elsewhere); this keeps the package
+// compiling on other systems.
+func interruptOnCancel(command *exec.Cmd) {
+	command.Cancel = func() error { return command.Process.Signal(os.Interrupt) }
 }

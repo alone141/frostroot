@@ -3,10 +3,12 @@ package recipe
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
 
+// sampleLock returns a small, complete lockfile.
 func sampleLock() Lockfile {
 	return Lockfile{
 		Version: 1,
@@ -29,101 +31,80 @@ func sampleLock() Lockfile {
 	}
 }
 
-func TestLockRoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "frostroot.lock")
-	in := sampleLock()
-	if err := SaveLock(path, in); err != nil {
+// saveAndRead saves lock to a temporary file and returns the path and the
+// file's content.
+func saveAndRead(t *testing.T, lock Lockfile) (path, content string) {
+	t.Helper()
+	path = filepath.Join(t.TempDir(), "frostroot.lock")
+	if err := SaveLock(path, lock); err != nil {
 		t.Fatal(err)
 	}
-	out, err := LoadLock(path)
+	written, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Version != 1 || out.Distro != "ubuntu" || out.Release != "22.04" || out.Suite != "jammy" ||
-		out.Arch != "amd64" || out.Mirror != in.Mirror || out.FrostrootVersion != "0.1.0" {
-		t.Fatalf("header: %+v", out)
+	return path, string(written)
+}
+
+func TestLockRoundTrip(t *testing.T) {
+	original := sampleLock()
+	path, _ := saveAndRead(t, original)
+	reloaded, err := LoadLock(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(out.Sources) != 3 || !strings.Contains(out.Sources[2], "jammy-security") {
-		t.Fatalf("sources: %#v", out.Sources)
-	}
-	if len(out.Requested) != 3 || out.Requested[0] != "git" {
-		t.Fatalf("requested: %#v", out.Requested)
-	}
-	if len(out.Packages) != 2 || out.Packages[0] != in.Packages[0] || out.Packages[1] != in.Packages[1] {
-		t.Fatalf("packages: %#v", out.Packages)
+	if !reflect.DeepEqual(reloaded, original) {
+		t.Fatalf("round trip =\n%+v\nwant\n%+v", reloaded, original)
 	}
 }
 
 func TestSaveLockIsDeterministic(t *testing.T) {
-	// Same input must produce byte-identical output, so a rebuild that
+	// The same input must produce byte-identical output, so a rebuild that
 	// changes nothing produces an empty git diff.
-	dir := t.TempDir()
-	in := sampleLock()
-	a := filepath.Join(dir, "a.lock")
-	b := filepath.Join(dir, "b.lock")
-	if err := SaveLock(a, in); err != nil {
-		t.Fatal(err)
-	}
-	if err := SaveLock(b, in); err != nil {
-		t.Fatal(err)
-	}
-	ba, _ := os.ReadFile(a)
-	bb, _ := os.ReadFile(b)
-	if string(ba) != string(bb) {
-		t.Fatal("SaveLock is not deterministic")
+	_, firstContent := saveAndRead(t, sampleLock())
+	_, secondContent := saveAndRead(t, sampleLock())
+	if firstContent != secondContent {
+		t.Fatalf("two saves of the same lock differ:\n%s\n---\n%s", firstContent, secondContent)
 	}
 }
 
 func TestSaveLockIsDiffFriendly(t *testing.T) {
 	// One source line and one package field per line, so a changed version
 	// shows up as a one-line diff.
-	path := filepath.Join(t.TempDir(), "frostroot.lock")
-	if err := SaveLock(path, sampleLock()); err != nil {
-		t.Fatal(err)
-	}
-	body, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(body)
-	lines := strings.Split(text, "\n")
-	count := func(prefix string) int {
-		n := 0
-		for _, l := range lines {
-			if strings.HasPrefix(strings.TrimSpace(l), prefix) {
-				n++
+	_, content := saveAndRead(t, sampleLock())
+	countLinesStartingWith := func(prefix string) int {
+		count := 0
+		for _, line := range strings.Split(content, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), prefix) {
+				count++
 			}
 		}
-		return n
+		return count
 	}
-	if n := count("'deb ") + count(`"deb `); n != 3 {
-		t.Fatalf("want each source on its own line, got %d:\n%s", n, text)
+	if got := countLinesStartingWith("'deb ") + countLinesStartingWith(`"deb `); got != 3 {
+		t.Errorf("found %d source lines, want each of the 3 on its own line:\n%s", got, content)
 	}
-	if n := count("[[packages]]"); n != 2 {
-		t.Fatalf("want one [[packages]] table per package, got %d:\n%s", n, text)
+	if got := countLinesStartingWith("[[packages]]"); got != 2 {
+		t.Errorf("found %d [[packages]] tables, want one per package:\n%s", got, content)
 	}
-	if !strings.HasPrefix(text, "version = 1\n") {
-		t.Fatalf("version must lead the file:\n%s", text)
+	if !strings.HasPrefix(content, "version = 1\n") {
+		t.Errorf("version must lead the file:\n%s", content)
 	}
 }
 
-func TestSaveLockEmptyRequestedIsExplicit(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "frostroot.lock")
-	in := sampleLock()
-	in.Requested = nil
-	if err := SaveLock(path, in); err != nil {
-		t.Fatal(err)
+func TestSaveLockRecordsEmptyRequestedExplicitly(t *testing.T) {
+	lock := sampleLock()
+	lock.Requested = nil
+	path, content := saveAndRead(t, lock)
+	if !strings.Contains(content, "requested = []") {
+		t.Fatalf("an empty include list should still be written:\n%s", content)
 	}
-	body, _ := os.ReadFile(path)
-	if !strings.Contains(string(body), "requested = []") {
-		t.Fatalf("an empty include list should still be recorded:\n%s", body)
-	}
-	out, err := LoadLock(path)
+	reloaded, err := LoadLock(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out.Requested) != 0 {
-		t.Fatalf("requested %#v", out.Requested)
+	if len(reloaded.Requested) != 0 {
+		t.Fatalf("Requested = %q, want empty", reloaded.Requested)
 	}
 }
 
@@ -133,6 +114,6 @@ func TestLoadLockRejectsUnknownField(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := LoadLock(path); err == nil {
-		t.Fatal("expected error for unknown field")
+		t.Fatal("LoadLock succeeded, want an error for the unknown field")
 	}
 }
