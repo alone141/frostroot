@@ -104,6 +104,10 @@ func (b *Builder) Build(ctx context.Context, r recipe.Recipe, opts Options) (Res
 	if opts.Mirror != "" {
 		mirror = opts.Mirror
 	}
+	root, err := WorkRoot(getenv)
+	if err != nil {
+		return Result{}, err
+	}
 	spec := BootstrapSpec{
 		Suite:      info.Suite,
 		Sources:    info.Sources(opts.Mirror),
@@ -111,6 +115,7 @@ func (b *Builder) Build(ctx context.Context, r recipe.Recipe, opts Options) (Res
 		Arch:       r.Image.Arch,
 		Recommends: true,
 		Keyring:    UbuntuKeyring,
+		WorkDir:    root, // for Preflight: where the build directory will go
 	}
 	if p, ok := b.Bootstrap.(Preflighter); ok {
 		if err := p.Preflight(spec); err != nil {
@@ -118,14 +123,15 @@ func (b *Builder) Build(ctx context.Context, r recipe.Recipe, opts Options) (Res
 		}
 	}
 
-	root, err := WorkRoot(getenv)
-	if err != nil {
-		return Result{}, err
-	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	// Explicit modes, whatever the umask: in unshare mode mmdebstrap's root
+	// is "other" to these directories and must be able to enter them.
+	if err := mkdirAllMode(root, 0o755); err != nil {
 		return Result{}, fmt.Errorf("creating work root: %w (set XDG_CACHE_HOME to use another location)", err)
 	}
 	work, err := os.MkdirTemp(root, "build-*")
+	if err == nil {
+		err = os.Chmod(work, 0o755)
+	}
 	if err != nil {
 		return Result{}, fmt.Errorf("creating work directory: %w (set XDG_CACHE_HOME to use another location)", err)
 	}
@@ -203,6 +209,30 @@ func (b *Builder) Build(ctx context.Context, r recipe.Recipe, opts Options) (Res
 	}
 	res.WorkDir = ""
 	return res, nil
+}
+
+// mkdirAllMode is os.MkdirAll that gives every directory it creates exactly
+// mode perm instead of perm minus the umask. Existing directories are left
+// alone.
+func mkdirAllMode(path string, perm os.FileMode) error {
+	if fi, err := os.Stat(path); err == nil {
+		if !fi.IsDir() {
+			return fmt.Errorf("%s exists and is not a directory", path)
+		}
+		return nil
+	}
+	if parent := filepath.Dir(path); parent != path {
+		if err := mkdirAllMode(parent, perm); err != nil {
+			return err
+		}
+	}
+	if err := os.Mkdir(path, perm); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return nil // created concurrently
+		}
+		return err
+	}
+	return os.Chmod(path, perm)
 }
 
 func readStatus(path string) ([]recipe.LockPackage, error) {

@@ -25,24 +25,40 @@ func keyringFile(t *testing.T) string {
 	return p
 }
 
+// reachableDir returns a temp directory that mmdebstrap's user namespace
+// could reach: t.TempDir creates its parents 0700, so open them up.
+func reachableDir(t *testing.T) string {
+	t.Helper()
+	d := t.TempDir()
+	base := filepath.Clean(os.TempDir())
+	for p := d; strings.HasPrefix(p, base+string(filepath.Separator)); p = filepath.Dir(p) {
+		if err := os.Chmod(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return d
+}
+
 type recorded struct {
-	name string
-	args []string
-	env  []string
+	calls int
+	name  string
+	args  []string
+	env   []string
 }
 
 func recorder(rec *recorded) Runner {
 	return func(ctx context.Context, name string, args, env []string, stdout, stderr io.Writer) error {
+		rec.calls++
 		rec.name, rec.args, rec.env = name, append([]string{}, args...), append([]string{}, env...)
 		return nil
 	}
 }
 
+func unprivileged() func() int { return func() int { return 1000 } }
+
 func TestMmdebstrapCommand(t *testing.T) {
-	var rec recorded
-	keyring := keyringFile(t)
-	m := Mmdebstrap{Uid: func() int { return 1000 }, RunCmd: recorder(&rec)}
-	spec := BootstrapSpec{
+	m := Mmdebstrap{Uid: unprivileged()}
+	args, env := m.command(BootstrapSpec{
 		Suite:      "jammy",
 		Sources:    []string{"deb http://a jammy main universe", "deb http://a jammy-updates main universe", "deb http://a jammy-security main universe"},
 		Include:    []string{"git", "systemd"},
@@ -51,19 +67,13 @@ func TestMmdebstrapCommand(t *testing.T) {
 		WorkDir:    "/w",
 		Arch:       "amd64",
 		Recommends: true,
-		Keyring:    keyring,
-	}
-	if err := m.Run(context.Background(), spec); err != nil {
-		t.Fatal(err)
-	}
-	if rec.name != "mmdebstrap" {
-		t.Fatalf("name %q", rec.name)
-	}
+		Keyring:    "/k.gpg",
+	})
 	want := []string{
 		"--mode=unshare",
 		"--variant=important",
 		"--architectures=amd64",
-		"--keyring=" + keyring,
+		"--keyring=/k.gpg",
 		`--aptopt=Apt::Install-Recommends "true"`,
 		"--include=git,systemd",
 		"--customize-hook=upload '/w/wsl.conf' /etc/wsl.conf",
@@ -75,30 +85,100 @@ func TestMmdebstrapCommand(t *testing.T) {
 		"deb http://a jammy-updates main universe",
 		"deb http://a jammy-security main universe",
 	}
-	if strings.Join(rec.args, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("args:\n%s\nwant:\n%s", strings.Join(rec.args, "\n"), strings.Join(want, "\n"))
+	if strings.Join(args, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("args:\n%s\nwant:\n%s", strings.Join(args, "\n"), strings.Join(want, "\n"))
 	}
-	if !contains(rec.env, "TMPDIR=/w") {
-		t.Fatalf("TMPDIR must point at the work dir: %v", rec.env)
+	if len(env) != 1 || env[0] != "TMPDIR=/w/tmp" {
+		t.Fatalf("TMPDIR must point into the work dir: %v", env)
+	}
+}
+
+func TestMmdebstrapRunPreparesTMPDIR(t *testing.T) {
+	// mmdebstrap(1): in unshare mode TMPDIR must be world-writable and all its
+	// ancestors world-executable, because the namespace's root is a
+	// subordinate uid and "other" to the user's files.
+	var rec recorded
+	work := reachableDir(t)
+	m := Mmdebstrap{Uid: unprivileged(), RunCmd: recorder(&rec)}
+	if err := m.Run(context.Background(), BootstrapSpec{Suite: "noble", TarPath: filepath.Join(work, "image.tar.gz"), WorkDir: work, Arch: "amd64", Keyring: keyringFile(t)}); err != nil {
+		t.Fatal(err)
+	}
+	if rec.name != "mmdebstrap" || rec.calls != 1 {
+		t.Fatalf("recorded %+v", rec)
+	}
+	tmp := filepath.Join(work, "tmp")
+	fi, err := os.Stat(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o777 || fi.Mode()&os.ModeSticky == 0 {
+		t.Fatalf("TMPDIR mode %v, want sticky and world-writable", fi.Mode())
+	}
+	if !contains(rec.env, "TMPDIR="+tmp) {
+		t.Fatalf("env %v", rec.env)
+	}
+}
+
+// closedDir returns a directory that mmdebstrap's user namespace cannot enter,
+// like a 0750 home directory.
+func closedDir(t *testing.T) string {
+	t.Helper()
+	d := filepath.Join(reachableDir(t), "closed")
+	if err := os.Mkdir(d, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(d, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func TestMmdebstrapUnreachableWorkDir(t *testing.T) {
+	work := filepath.Join(closedDir(t), "work")
+	if err := os.Mkdir(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	spec := BootstrapSpec{Suite: "noble", TarPath: filepath.Join(work, "image.tar.gz"), WorkDir: work, Arch: "amd64", Keyring: keyringFile(t)}
+
+	var rec recorded
+	m := Mmdebstrap{Uid: unprivileged(), RunCmd: recorder(&rec)}
+	err := m.Run(context.Background(), spec)
+	if !errors.Is(err, ErrBadWorkRoot) || !strings.Contains(err.Error(), "XDG_CACHE_HOME") {
+		t.Fatalf("want an actionable ErrBadWorkRoot, got %v", err)
+	}
+	if rec.calls != 0 {
+		t.Fatal("mmdebstrap must not run")
+	}
+
+	// Root mode has no user namespace, so there is nothing to reach.
+	m = Mmdebstrap{Uid: func() int { return 0 }, RunCmd: recorder(&rec)}
+	if err := m.Run(context.Background(), spec); err != nil {
+		t.Fatalf("root mode: %v", err)
+	}
+}
+
+func TestCheckReachable(t *testing.T) {
+	if err := checkReachable(filepath.Join(reachableDir(t), "not", "created", "yet")); err != nil {
+		t.Fatalf("missing components are created 0755 later: %v", err)
+	}
+	closed := closedDir(t)
+	err := checkReachable(filepath.Join(closed, "frostroot"))
+	if !errors.Is(err, ErrBadWorkRoot) || !strings.Contains(err.Error(), closed) {
+		t.Fatalf("want the blocking directory named, got %v", err)
 	}
 }
 
 func TestMmdebstrapDefaultKeyring(t *testing.T) {
-	args, _ := (&Mmdebstrap{Uid: func() int { return 1000 }}).command(BootstrapSpec{Suite: "noble", TarPath: "/t", WorkDir: "/w", Arch: "amd64"})
+	args, _ := (&Mmdebstrap{Uid: unprivileged()}).command(BootstrapSpec{Suite: "noble", TarPath: "/t", WorkDir: "/w", Arch: "amd64"})
 	if !contains(args, "--keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg") {
 		t.Fatalf("args %v", args)
 	}
 }
 
 func TestMmdebstrapHooksPassedInOrder(t *testing.T) {
-	var rec recorded
-	m := Mmdebstrap{Uid: func() int { return 1000 }, RunCmd: recorder(&rec)}
-	hooks := []string{"first", "second", "third"}
-	if err := m.Run(context.Background(), BootstrapSpec{Suite: "noble", TarPath: "/t", WorkDir: "/w", Arch: "amd64", Hooks: hooks, Keyring: keyringFile(t)}); err != nil {
-		t.Fatal(err)
-	}
+	args, _ := (&Mmdebstrap{Uid: unprivileged()}).command(BootstrapSpec{Suite: "noble", TarPath: "/t", WorkDir: "/w", Arch: "amd64", Hooks: []string{"first", "second", "third"}})
 	var seen []string
-	for _, a := range rec.args {
+	for _, a := range args {
 		if h, ok := strings.CutPrefix(a, "--customize-hook="); ok {
 			seen = append(seen, h)
 		}
@@ -127,7 +207,7 @@ func TestMmdebstrapModes(t *testing.T) {
 }
 
 func TestMmdebstrapOptionalFlags(t *testing.T) {
-	args, _ := (&Mmdebstrap{Uid: func() int { return 1000 }}).command(BootstrapSpec{Suite: "noble", TarPath: "/t", WorkDir: "/w", Arch: "amd64"})
+	args, _ := (&Mmdebstrap{Uid: unprivileged()}).command(BootstrapSpec{Suite: "noble", TarPath: "/t", WorkDir: "/w", Arch: "amd64"})
 	joined := strings.Join(args, " ")
 	if strings.Contains(joined, "Install-Recommends") {
 		t.Fatalf("no Recommends flag when off: %q", joined)
@@ -137,10 +217,16 @@ func TestMmdebstrapOptionalFlags(t *testing.T) {
 	}
 }
 
+func runSpec(t *testing.T) BootstrapSpec {
+	t.Helper()
+	work := reachableDir(t)
+	return BootstrapSpec{Suite: "noble", TarPath: filepath.Join(work, "image.tar.gz"), WorkDir: work, Arch: "amd64", Keyring: keyringFile(t)}
+}
+
 func TestMmdebstrapStreamsProgressAndKeepsTail(t *testing.T) {
 	var progress bytes.Buffer
 	m := Mmdebstrap{
-		Uid:    func() int { return 1000 },
+		Uid:    unprivileged(),
 		Stderr: &progress,
 		RunCmd: func(ctx context.Context, name string, args, env []string, stdout, stderr io.Writer) error {
 			for i := 0; i < 400; i++ {
@@ -150,7 +236,7 @@ func TestMmdebstrapStreamsProgressAndKeepsTail(t *testing.T) {
 			return errors.New("exit status 1")
 		},
 	}
-	err := m.Run(context.Background(), BootstrapSpec{Suite: "noble", TarPath: "/t", WorkDir: "/w", Arch: "amd64", Keyring: keyringFile(t)})
+	err := m.Run(context.Background(), runSpec(t))
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -171,32 +257,27 @@ func TestMmdebstrapStreamsProgressAndKeepsTail(t *testing.T) {
 func TestMmdebstrapInterruptedIsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := Mmdebstrap{
-		Uid: func() int { return 1000 },
+		Uid: unprivileged(),
 		RunCmd: func(ctx context.Context, name string, args, env []string, stdout, stderr io.Writer) error {
 			cancel()
 			return errors.New("signal: interrupt")
 		},
 	}
-	err := m.Run(ctx, BootstrapSpec{Suite: "noble", TarPath: "/t", WorkDir: "/w", Arch: "amd64", Keyring: keyringFile(t)})
-	if !errors.Is(err, context.Canceled) {
+	if err := m.Run(ctx, runSpec(t)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("an interrupted run must report context.Canceled, got %v", err)
 	}
 }
 
 func TestMmdebstrapMissingKeyringIsClear(t *testing.T) {
-	called := false
-	m := Mmdebstrap{
-		Uid: func() int { return 1000 },
-		RunCmd: func(context.Context, string, []string, []string, io.Writer, io.Writer) error {
-			called = true
-			return nil
-		},
-	}
-	err := m.Run(context.Background(), BootstrapSpec{Suite: "noble", TarPath: "/t", WorkDir: "/w", Arch: "amd64", Keyring: filepath.Join(t.TempDir(), "absent.gpg")})
+	var rec recorded
+	m := Mmdebstrap{Uid: unprivileged(), RunCmd: recorder(&rec)}
+	spec := runSpec(t)
+	spec.Keyring = filepath.Join(t.TempDir(), "absent.gpg")
+	err := m.Run(context.Background(), spec)
 	if !errors.Is(err, ErrNoKeyring) || !strings.Contains(err.Error(), "ubuntu-keyring") {
 		t.Fatalf("want a keyring error with an install hint, got %v", err)
 	}
-	if called {
+	if rec.calls != 0 {
 		t.Fatal("mmdebstrap must not run without a keyring")
 	}
 }
@@ -204,16 +285,20 @@ func TestMmdebstrapMissingKeyringIsClear(t *testing.T) {
 func TestMmdebstrapPreflight(t *testing.T) {
 	found := func(string) (string, error) { return "/usr/bin/mmdebstrap", nil }
 	missing := func(string) (string, error) { return "", errors.New("not found") }
+	root := filepath.Join(reachableDir(t), "frostroot") // does not exist yet
 
-	m := Mmdebstrap{LookPath: missing}
-	if err := m.Preflight(BootstrapSpec{Keyring: keyringFile(t)}); !errors.Is(err, ErrNoMmdebstrap) || !strings.Contains(err.Error(), "sudo apt install mmdebstrap") {
+	m := Mmdebstrap{LookPath: missing, Uid: unprivileged()}
+	if err := m.Preflight(BootstrapSpec{Keyring: keyringFile(t), WorkDir: root}); !errors.Is(err, ErrNoMmdebstrap) || !strings.Contains(err.Error(), "sudo apt install mmdebstrap") {
 		t.Fatalf("got %v", err)
 	}
-	m = Mmdebstrap{LookPath: found}
-	if err := m.Preflight(BootstrapSpec{Keyring: filepath.Join(t.TempDir(), "absent.gpg")}); !errors.Is(err, ErrNoKeyring) {
+	m = Mmdebstrap{LookPath: found, Uid: unprivileged()}
+	if err := m.Preflight(BootstrapSpec{Keyring: filepath.Join(t.TempDir(), "absent.gpg"), WorkDir: root}); !errors.Is(err, ErrNoKeyring) {
 		t.Fatalf("got %v", err)
 	}
-	if err := m.Preflight(BootstrapSpec{Keyring: keyringFile(t)}); err != nil {
+	if err := m.Preflight(BootstrapSpec{Keyring: keyringFile(t), WorkDir: filepath.Join(closedDir(t), "frostroot")}); !errors.Is(err, ErrBadWorkRoot) {
+		t.Fatalf("an unreachable work root must fail before any work: %v", err)
+	}
+	if err := m.Preflight(BootstrapSpec{Keyring: keyringFile(t), WorkDir: root}); err != nil {
 		t.Fatalf("got %v", err)
 	}
 }
