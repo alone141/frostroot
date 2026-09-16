@@ -246,7 +246,7 @@ git commit -m "docs: record frostroot spike results"
 `Info.EOL` drives the 20.04 warning in Task 9. `Sources` is the only place pocket
 lines are constructed — the builder must never hand-assemble a `deb` line.
 
-- [ ] **Step 1: Create the module and a failing test**
+- [x] **Step 1: Create the module and a failing test**
 
 ```
 go mod init frostroot
@@ -380,13 +380,13 @@ func TestKnownReleases(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/distro/ -v`
 
 Expected: FAIL, undefined `Lookup`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```go
 package distro
@@ -452,13 +452,13 @@ old-releases), so the three-line shape is unchanged. Standard support ended in
 May 2025 and fixes since go to Ubuntu Pro, not `focal-security`. That is what
 `EOL` warns about.
 
-- [ ] **Step 4: Run tests and make sure they pass**
+- [x] **Step 4: Run tests and make sure they pass**
 
 Run: `go test ./internal/distro/ -v`
 
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```
 git add go.mod internal/distro
@@ -483,7 +483,7 @@ Two changes from the old Task 2, both security-relevant: `Load` rejects unknown
 fields, and `[locale]` values are validated because Task 5 splices them into
 shell.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 package recipe
@@ -638,13 +638,13 @@ include = ["git", "build-essential", "cmake"]
 `valid.toml` with the one field broken; they back the `validate` CLI tests in
 Task 7.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/recipe/ -v`
 
 Expected: FAIL, undefined `Load`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `recipe.go` — types as in the spec, plus strict decoding:
 
@@ -732,13 +732,13 @@ minimum.
 `Validate` does not check that the timezone *exists* — that needs the chroot.
 Task 5 adds a hook that fails the build if `/usr/share/zoneinfo/<tz>` is absent.
 
-- [ ] **Step 4: Run tests and make sure they pass**
+- [x] **Step 4: Run tests and make sure they pass**
 
 Run: `go test ./internal/recipe/ ./internal/distro/ -v`
 
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```
 git add go.mod go.sum internal/recipe testdata
@@ -760,7 +760,7 @@ Two additions to the spec's shape, both for the vendoring follow-up: `sources`
 records the three `deb` lines actually used, and each package records `arch`.
 Adding them now costs nothing; adding them later is a lock-format migration.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```go
 func TestLockRoundTrip(t *testing.T) {
@@ -830,13 +830,13 @@ func TestSaveLockIsDeterministic(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/recipe/ -run TestLock -v`
 
 Expected: FAIL, undefined `Lockfile`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```go
 type Lockfile struct {
@@ -865,13 +865,13 @@ type LockPackage struct {
 caller sorts `Packages` by name before saving (Task 6) — that is what makes the
 determinism test pass.
 
-- [ ] **Step 4: Run tests and make sure they pass**
+- [x] **Step 4: Run tests and make sure they pass**
 
 Run: `go test ./internal/recipe/ -v`
 
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```
 git add internal/recipe/lock.go internal/recipe/recipe_test.go
@@ -901,7 +901,7 @@ and the image will not boot, while every test in this package still passes.
 `$XDG_CACHE_HOME` while `dist/` sits next to the recipe, which on WSL is often a
 9p mount of a Windows drive. `os.Rename` returns `EXDEV` there.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```go
 package export
@@ -984,13 +984,13 @@ func TestPlaceLeavesNoTmpOnSuccess(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/export/ -v`
 
 Expected: FAIL, undefined symbols.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```go
 package export
@@ -1048,13 +1048,13 @@ func Place(src, dest string) error {
 }
 ```
 
-- [ ] **Step 4: Run tests and make sure they pass**
+- [x] **Step 4: Run tests and make sure they pass**
 
 Run: `go test ./internal/export/ -v`
 
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```
 git add internal/export
@@ -1081,7 +1081,7 @@ Status file format: RFC822-ish stanzas separated by blank lines. Keep only
 `Status: install ok installed` — a status file lists removed-but-not-purged
 packages too, and those are not in the image.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```go
 package builder
@@ -1173,13 +1173,13 @@ func TestParseDpkgStatusEmptyIsError(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/builder/ -run TestParseDpkgStatus -v`
 
 Expected: FAIL, undefined `ParseDpkgStatus`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```go
 package builder
@@ -1242,13 +1242,13 @@ func ParseDpkgStatus(r io.Reader) ([]recipe.LockPackage, error) {
 }
 ```
 
-- [ ] **Step 4: Run tests and make sure they pass**
+- [x] **Step 4: Run tests and make sure they pass**
 
 Run: `go test ./internal/builder/ -v`
 
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```
 git add internal/builder/status.go internal/builder/status_test.go
@@ -1283,7 +1283,7 @@ spec criteria 4 and 6 cannot be met. `ca-certificates` is there because
 Recommends alone does not guarantee it early enough, and an image where
 `git clone https://…` fails is a support ticket on day one.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```go
 package builder
@@ -1473,13 +1473,13 @@ func count(xs []string, w string) int {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/builder/ -v`
 
 Expected: FAIL, undefined symbols.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```go
 package builder
@@ -1621,13 +1621,13 @@ Notes:
 There is no `WriteProvisionFiles` in production code. If you need rootfs files
 in a test, write them in the test.
 
-- [ ] **Step 4: Run tests and make sure they pass**
+- [x] **Step 4: Run tests and make sure they pass**
 
 Run: `go test ./internal/builder/ -v`
 
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```
 git add internal/builder/provision.go internal/builder/provision_test.go
@@ -1675,7 +1675,7 @@ file), which is what makes these tests meaningful rather than decorative.
 and never returned it. mmdebstrap's own stderr explains a missing userns better
 than we can; Task 11 streams it.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 package builder
@@ -1937,13 +1937,13 @@ func TestWorkRootFallsBackToVarTmp(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/builder/ -run "TestBuild|TestWorkRoot" -v`
 
 Expected: FAIL, undefined `Builder`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `workdir.go`:
 
@@ -2037,13 +2037,13 @@ Ordering rules, unchanged from the spec and load-bearing:
 - Sort `lock.Packages` by name (`ParseDpkgStatus` already does) so a no-op
   rebuild produces an empty git diff.
 
-- [ ] **Step 4: Run tests and make sure they pass**
+- [x] **Step 4: Run tests and make sure they pass**
 
 Run: `go test ./... -v`
 
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```
 git add internal/builder/builder.go internal/builder/workdir.go internal/builder/builder_test.go internal/builder/workdir_test.go
@@ -2088,7 +2088,7 @@ tests never need a TTY.
 Unchanged from the previous plan apart from the `Getenv` field and dropping the
 Windows-specific test workarounds.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```go
 func TestValidateOK(t *testing.T) {
@@ -2159,13 +2159,13 @@ func TestUnknownVerbAndNoArgs(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/cli/ -v`
 
 Expected: FAIL, undefined `App`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `App.Run` switches on `args[0]`: `init`, `validate`, `build`. Anything else (and
 the empty case) prints usage to stderr and returns 1. `cmdValidate` loads
@@ -2183,13 +2183,13 @@ func main() { os.Exit(cli.New().Run(os.Args[1:])) }
 
 `cli.New()` fills the defaults. Do not leave `main` uncompilable at any commit.
 
-- [ ] **Step 4: Run tests and make sure they pass**
+- [x] **Step 4: Run tests and make sure they pass**
 
 Run: `go test ./... && go build ./cmd/frostroot/`
 
 Expected: PASS and a binary.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```
 git add cmd internal/cli testdata
@@ -2230,7 +2230,7 @@ Two changes from the previous plan:
 - **The result must validate.** `init` writing a recipe that `validate` then
   rejects is a bug; assert it in the test.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```go
 type scriptedPrompt struct {
@@ -2359,13 +2359,13 @@ func TestInitWritesComments(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/cli/ -run TestInit -v`
 
 Expected: FAIL.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `cmdInit` parses `--force`, refuses when `frostroot.toml` exists without it,
 asks the six questions, builds a `recipe.Recipe` (`arch = "amd64"`,
@@ -2381,13 +2381,13 @@ question; put the same line in the README.
 
 `init` does not need root, writes no lock and no tarball, and touches no network.
 
-- [ ] **Step 4: Run tests and make sure they pass**
+- [x] **Step 4: Run tests and make sure they pass**
 
 Run: `go test ./... -v`
 
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```
 git add internal/cli
@@ -2428,7 +2428,7 @@ Three additions the previous plan lacked:
 - **A pasteable import line under WSL.** If `wslpath` is on PATH, print the
   Windows form of the tarball path so it can go straight into PowerShell.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 type stubBoot struct{ err error }
@@ -2586,13 +2586,13 @@ func TestBuildMirrorFlagReachesBuilder(t *testing.T) {
 `recordBoot` is `stubBoot` that also captures the spec. `mutateRelease` rewrites
 the release line in a fixture copy.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/cli/ -run TestBuild -v`
 
 Expected: FAIL.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `cmdBuild`:
 
@@ -2617,13 +2617,13 @@ If `wslpath` is on PATH, also print the `\\wsl$\...` form of the absolute
 tarball path. A failure to run `wslpath` is not a build failure — skip the extra
 line.
 
-- [ ] **Step 4: Run tests and make sure they pass**
+- [x] **Step 4: Run tests and make sure they pass**
 
 Run: `go test ./... && go build ./cmd/frostroot/`
 
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```
 git add internal/cli
@@ -2675,7 +2675,7 @@ mmdebstrap
 with `TMPDIR=<spec.WorkDir>` in the child environment — mmdebstrap stages the
 tarball there, and the default `/tmp` may be small or on tmpfs.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```go
 func TestMmdebstrapCommand(t *testing.T) {
@@ -2817,13 +2817,13 @@ func TestMmdebstrapMissingKeyringIsClear(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/builder/ -run TestMmdebstrap -v`
 
 Expected: FAIL.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Default `Runner`:
 
@@ -2851,13 +2851,13 @@ missing user namespace — which is why `ErrNoPrivilege` does not exist.
 
 Mode detection: `Mode` if set, else `root` when `Uid() == 0`, else `unshare`.
 
-- [ ] **Step 4: Run tests and make sure they pass**
+- [x] **Step 4: Run tests and make sure they pass**
 
 Run: `go test ./... && go build ./cmd/frostroot/`
 
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```
 git add internal/builder/bootstrap.go internal/builder/bootstrap_test.go
@@ -2881,7 +2881,7 @@ structurally sound. Defect 1 passed every unit test in the old plan, so the
 symlink assertion below is not optional decoration — it is the regression test
 for the worst bug this plan fixes.
 
-- [ ] **Step 1: Write the integration test**
+- [x] **Step 1: Write the integration test**
 
 ```go
 //go:build integration
@@ -2971,7 +2971,7 @@ Run: `go test -tags=integration ./internal/builder/ -run TestIntegration -v`
 Expected: PASS on a Linux host with mmdebstrap, network, and userns or root.
 Several minutes and a few hundred MB of downloads.
 
-- [ ] **Step 2: Replace README.md**
+- [x] **Step 2: Replace README.md**
 
 Cover, in this order: what frostroot does; install (`go build ./cmd/frostroot`);
 host requirements (`sudo apt install mmdebstrap`, plus userns or root); the three
@@ -2989,7 +2989,7 @@ commands; a worked example from `init` to `wsl --import`; and these four notes:
 Document the manual WSL check as a manual check — it is not automated and will
 not be.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```
 git add internal/builder/integration_test.go README.md
