@@ -11,8 +11,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -54,7 +58,7 @@ func copyInto(src, dest string) (err error) {
 	}
 	defer in.Close()
 
-	tmp, err := os.CreateTemp(filepath.Dir(dest), "."+filepath.Base(dest)+".*.tmp")
+	tmp, err := createTemp(filepath.Dir(dest), "."+filepath.Base(dest)+".*.tmp")
 	if err != nil {
 		return err
 	}
@@ -64,9 +68,6 @@ func copyInto(src, dest string) (err error) {
 			os.Remove(tmp.Name())
 		}
 	}()
-	if err = tmp.Chmod(0o644); err != nil {
-		return err
-	}
 	if _, err = io.Copy(tmp, in); err != nil {
 		return err
 	}
@@ -77,4 +78,20 @@ func copyInto(src, dest string) (err error) {
 		return err
 	}
 	return os.Rename(tmp.Name(), dest)
+}
+
+// createTemp is os.CreateTemp with mode 0644 instead of 0600, so the umask
+// decides the final mode without a chmod. chmod fails with EPERM on drvfs, the
+// mount WSL uses for Windows drives, which is exactly where dist/ often is.
+func createTemp(dir, pattern string) (*os.File, error) {
+	prefix, suffix, _ := strings.Cut(pattern, "*")
+	for range 1000 {
+		name := filepath.Join(dir, prefix+strconv.FormatUint(uint64(rand.Uint32()), 10)+suffix)
+		f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		return f, err
+	}
+	return nil, fmt.Errorf("could not create a temporary file in %s", dir)
 }

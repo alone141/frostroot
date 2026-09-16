@@ -99,6 +99,8 @@ func crossDevice(t *testing.T) {
 
 func TestPlaceCopiesAcrossDevices(t *testing.T) {
 	crossDevice(t)
+	old := syscall.Umask(0o022)
+	defer syscall.Umask(old)
 	src := writeSrc(t, "payload")
 	dest := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
@@ -128,6 +130,46 @@ func TestPlaceCopiesAcrossDevices(t *testing.T) {
 		t.Fatalf("mode %v, want 0644 so the tarball is readable for wsl --import", info.Mode().Perm())
 	}
 	assertOnly(t, filepath.Dir(dest), "out.tar.gz")
+}
+
+func TestPlaceAcrossDevicesRespectsUmaskWithoutChmod(t *testing.T) {
+	// dist/ is routinely on a drvfs mount of a Windows drive, where chmod
+	// fails with EPERM. The copy must not depend on chmod: create the
+	// temporary file with the final mode and let the umask apply, as for any
+	// file a user creates.
+	crossDevice(t)
+	old := syscall.Umask(0o027)
+	defer syscall.Umask(old)
+	dest := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
+	if err := Place(writeSrc(t, "payload"), dest); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Fatalf("mode %v, want 0644 minus umask 027", info.Mode().Perm())
+	}
+}
+
+func TestPlaceAcrossDevicesDoesNotClobberConcurrentTemps(t *testing.T) {
+	crossDevice(t)
+	dir := filepath.Join(t.TempDir(), "dist")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Another build's temporary file for the same destination.
+	other := filepath.Join(dir, ".out.tar.gz.12345.tmp")
+	if err := os.WriteFile(other, []byte("theirs"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Place(writeSrc(t, "ours"), filepath.Join(dir, "out.tar.gz")); err != nil {
+		t.Fatal(err)
+	}
+	if body, _ := os.ReadFile(other); string(body) != "theirs" {
+		t.Fatal("another build's temporary file was touched")
+	}
 }
 
 func TestPlaceMissingSourceAcrossDevices(t *testing.T) {
