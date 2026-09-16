@@ -160,11 +160,6 @@ func (a *App) cmdValidate(args []string) int {
 	return 0
 }
 
-func (a *App) cmdInit(args []string) int {
-	fmt.Fprintln(a.Stderr, "frostroot init: not implemented")
-	return 1
-}
-
 func (a *App) cmdBuild(args []string) int {
 	fmt.Fprintln(a.Stderr, "frostroot build: not implemented")
 	return 1
