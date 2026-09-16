@@ -1,0 +1,3 @@
+# frostroot is a Linux tool that is often edited from a Windows checkout and
+# built inside WSL. Keep LF everywhere so gofmt and the Linux toolchain agree.
+* text=auto eol=lf

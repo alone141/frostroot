@@ -1,7 +1,7 @@
 # frostroot Design
 
-Date: 2026-09-14, revised 2026-09-15
-Status: approved; revised to match the corrected implementation plan
+Date: 2026-09-14, revised 2026-09-15 and 2026-09-16
+Status: approved; implemented as v0.1.0 (2026-09-16); revised to match the corrected plan, the Task 0 spike, and what real builds taught the implementation
 Repo: `frostroot/` (new project, Linux CLI)
 
 This spec is the source of truth for v1. Implement it via
@@ -9,6 +9,44 @@ This spec is the source of truth for v1. Implement it via
 invent extra product scope.
 
 ## Revision history
+
+**2026-09-16, review.** A code review of the finished branch and a further
+bug hunt found four more defects, each fixed with a test that fails without
+the fix:
+
+| Was | Now | Why |
+|---|---|---|
+| Default work root `/var/tmp/frostroot` | `/var/tmp/frostroot-<uid>`; the root must be a directory owned by the current user | `/var/tmp` is shared: one `sudo frostroot build` left a root-owned directory that made every later unprivileged build fail with exit 2 |
+| Nothing checked about the output location until the tarball was placed | `build` verifies up front that the recipe directory (and `dist/`, if present) is writable | The same `sudo` history leaves a root-owned `dist/`; the failure came after minutes of bootstrapping, as a build error |
+| Temporary lock `frostroot.lock.tmp` | `.frostroot.lock.<random>.tmp`, created O_EXCL | Two builds in one directory shared the name; a failing one deleted the other's, which then failed after its tarball had landed |
+| Release and arch validated through one call that returned the first error | both reported | `validate` promised every problem and hid the release problem behind the arch problem |
+| BOM in the recipe was a parse error naming U+00EF | a leading UTF-8 byte order mark is ignored | Notepad's "UTF-8 with BOM" is a real way for a recipe to be saved |
+| Ctrl-C and SIGTERM interrupt a build | SIGHUP too | mmdebstrap now runs in its own process group, so a closed terminal no longer reaches it directly |
+
+**2026-09-16, implementation.** v0.1.0 was implemented from the plan and built,
+imported and logged into for all three releases. Real builds exposed four
+defects that every unit test had passed; each is fixed with a test that fails
+without the fix. The product is unchanged.
+
+| Was | Now | Why |
+|---|---|---|
+| mmdebstrap `TMPDIR` is the per-build directory, created by `os.MkdirTemp` | `TMPDIR` is `<work>/tmp`, sticky and world-writable; every directory frostroot creates gets an explicit mode regardless of umask; in unshare mode a preflight checks the work root is reachable | In unshare mode mmdebstrap's root is a subordinate uid, "other" to the user's files, and `MkdirTemp` makes 0700 directories: every non-root build failed. mmdebstrap(1) requires a world-writable `TMPDIR` with world-executable ancestors. Home directories are 0750 on 24.04, so a cache under `$HOME` is refused up front |
+| Provision hooks: one shell snippet per step, values quoted inside `sh -c '…'` | Go renders one provision script; the hook runs it in the chroot. Values are assigned once, single-quoted, and only expanded in double quotes. The script checks results, not exit codes | Nested quoting was only safe because validation happens to exclude quotes. `locale-gen` exits 0 without generating anything for an unknown locale, and does nothing at all if `/etc/locale.gen` is empty |
+| Cross-device `Place` copies to a temp file and chmods it 0644 | the temp file is created with mode 0644 directly; no chmod | chmod returns EPERM on drvfs, the mount WSL uses for Windows drives, which is where `dist/` usually is under WSL |
+| On Ctrl-C, SIGINT mmdebstrap | run mmdebstrap in its own process group and SIGINT the group | mmdebstrap's main process answers SIGINT by waiting for its workers; only a group signal, as a terminal sends, stops them. Signalling the main process alone let `kill`/`timeout` stops run the whole bootstrap |
+| Lock counts `Status: install ok installed` stanzas | counts stanzas whose status word is `installed` | A held package (`hold ok installed`) is in the image and belongs in a lock of every installed package |
+| mmdebstrap/keyring checked by the builder | a bootstrapper preflight runs before any work directory exists; both, and an unusable work root, are exit 1 | Matches this spec's error table; a missing keyring would otherwise have been a build error (2) with an empty work directory left behind |
+
+**2026-09-16.** Revised after the Task 0 spike (results appended to
+[`reviews/2026-09-15-frostroot-feasibility.md`](../reviews/2026-09-15-frostroot-feasibility.md#spike-results-task-0-2026-09-16)).
+A real build was imported into WSL and logged into. The design held; two facts
+did not:
+
+| Was | Now | Why |
+|---|---|---|
+| 20.04 base URL `http://old-releases.ubuntu.com/ubuntu` | `http://archive.ubuntu.com/ubuntu` | Every focal pocket returns 404 on old-releases. LTS releases under ESM stay on the archive. The EOL warning stays: post-May-2025 security fixes go to Ubuntu Pro, not `focal-security` |
+| `wsl.conf` has `[boot]` and `[user]` | adds `[time] useWindowsTimezone=false` | WSL rewrites `/etc/localtime` to the Windows zone at every start unless told not to, so `[locale].timezone` was silently ignored |
+| Open question: does `systemd-resolved` fight WSL? | No masking hook | WSL generated `resolv.conf` and DNS worked with `systemd-resolved` active |
 
 **2026-09-15.** Revised after
 [`reviews/2026-09-14-frostroot-plan-review.md`](../reviews/2026-09-14-frostroot-plan-review.md)
@@ -66,7 +104,7 @@ Do not implement these in v1. The architecture must not block them.
 |---|---|---|
 | Name | `frostroot` | Freeze a root filesystem; not WSL-specific (bare metal later) |
 | Language | Go | Single Linux binary; fits a CLI that orchestrates apt/tar |
-| Engine | mmdebstrap → customize hooks → mmdebstrap writes the tarball | No Docker; works on any Linux; 20.04 via old-releases |
+| Engine | mmdebstrap → customize hooks → mmdebstrap writes the tarball | No Docker; works on any Linux |
 | Who tars | **mmdebstrap, inside the user namespace** | Ownership, symlinks, hardlinks and xattrs are only correct from inside; Go never walks or deletes a rootfs |
 | Distros v1 | Ubuntu 20.04, 22.04, 24.04 amd64 | 20.04 is off standard support; that is the pinning story |
 | Pockets | release, `-updates`, `-security` | A golden image must not ship release-day CVEs |
@@ -87,7 +125,7 @@ On a Linux host with `mmdebstrap` installed (user namespaces or root):
 4. The tarball contains `/etc/wsl.conf` with systemd on and the default user, plus that user's home and passwordless sudo — and systemd is actually installed.
 5. **The tarball is structurally sound**: every symlink carries a non-empty target, ownership is real (no subuid-range uids), and the host's `/etc/resolv.conf` and `/etc/hostname` are absent.
 6. `wsl --import` of that tarball on Windows boots and logs in as that user (manual check; not in default tests).
-7. Ubuntu 20.04 builds against old-releases (or `--mirror`), not archive.ubuntu.com, and `build` warns that its packages carry known unfixed CVEs.
+7. Ubuntu 20.04 builds (against archive.ubuntu.com, or `--mirror`), and `build` warns that its packages carry known unfixed CVEs.
 8. Package versions come from the `-updates`/`-security` pockets, not release day.
 9. `go test ./...` passes offline, without root, without mmdebstrap.
 
@@ -183,6 +221,11 @@ user exists with no sudo. No password field. WSL login uses
 `[wsl].default_user` (defaults to `[user].name`). This is a lab image, not a
 hardened server.
 
+The rendered `/etc/wsl.conf` also carries `[time] useWindowsTimezone=false`.
+WSL's default is to rewrite `/etc/localtime` to the Windows zone every time the
+distro starts, which would silently override `[locale].timezone`. The recipe
+is intent, so the recipe wins.
+
 ### `frostroot.lock` (fact — build written)
 
 ```toml
@@ -251,7 +294,7 @@ real TTY). `build` installs a `signal.NotifyContext` handler and maps
 
 ### `internal/recipe`
 
-- Parse/validate toml and lock. Unknown fields rejected.
+- Parse/validate toml and lock. Unknown fields rejected. A leading UTF-8 byte order mark is ignored; CRLF is TOML.
 - Types: `Recipe`, `Lockfile`, `LockPackage`.
 - Nothing else reads the raw files.
 
@@ -262,7 +305,7 @@ one implementation.
 
 | release | suite  | base URL | EOL |
 |---------|--------|----------|-----|
-| 20.04   | focal  | `http://old-releases.ubuntu.com/ubuntu` | yes |
+| 20.04   | focal  | `http://archive.ubuntu.com/ubuntu` | yes |
 | 22.04   | jammy  | `http://archive.ubuntu.com/ubuntu` | no |
 | 24.04   | noble  | `http://archive.ubuntu.com/ubuntu` | no |
 
@@ -270,9 +313,11 @@ Components: `main universe`.
 
 `Sources(baseOverride)` is the **only** place `deb` lines are constructed. It
 returns three per release: `<suite>`, `<suite>-updates`, `<suite>-security`.
-old-releases carries focal's pockets frozen at end of standard support, so the
-shape holds there too — it simply cannot receive anything new, which is what the
-`EOL` flag warns about.
+The shape holds for focal too. Its pockets are still on the archive, because an
+LTS release under ESM is not moved to old-releases. Since standard support ended
+in May 2025, though, security fixes for it go to Ubuntu Pro rather than
+`focal-security`, which is what the `EOL` flag warns about. When a release does
+move to old-releases, this table changes; until then `--mirror` covers it.
 
 Unknown release → validation error.
 
@@ -306,13 +351,25 @@ BootstrapSpec { Suite, Sources, Include, Hooks, TarPath, WorkDir, Arch, Recommen
 `ctx` is on the interface from the start so Ctrl-C works without a later
 signature change across every fake.
 
-`Hooks` are shell snippets generated by the builder (upload wsl.conf and
-sudoers, useradd, locale, timezone, host-artifact cleanup, dpkg status
-download). They fail closed: no `|| true`. Every interpolated recipe value is
-shell-quoted even though `validate` already checked it.
+An optional `Preflighter` (`Preflight(spec) error`) runs before any work
+directory exists. The mmdebstrap implementation checks `mmdebstrap` on `PATH`,
+the keyring, and in unshare mode that the work root is reachable from the user
+namespace (every existing ancestor world-executable).
+
+`Hooks` are generated by the builder, in order: `upload` the rendered wsl.conf,
+`upload` the sudoers drop-in, run the rendered provision script inside the
+chroot, `download` the dpkg status. The provision script sets the timezone,
+creates the user, enables sudo, generates the locale and removes host
+artifacts. Everything fails closed: no `|| true`, and where a tool reports
+success without doing the work (`locale-gen`) the script checks the result.
+Every recipe value is assigned once, single-quoted, and only ever expanded in
+double quotes, even though `validate` already checked it. Host paths in hooks
+are single-quoted too; mmdebstrap splits special hooks with `shellwords`.
 
 The package list comes from parsing the downloaded `/var/lib/dpkg/status`, not
-from a host `dpkg-query`. Only `Status: install ok installed` stanzas count.
+from a host `dpkg-query`. A stanza counts when its status word is `installed`
+(`install ok installed`, `hold ok installed`); removed packages that left
+config files behind do not.
 
 There is no production `WriteProvisionFiles` helper. Tests that need files on
 disk write them themselves.
@@ -326,16 +383,19 @@ TarballRelPath(imageName, release, arch) → dist/<name>-ubuntu-<release>-<arch>
 Place(src, dest)                         → atomic where possible, copy+fsync+rename across devices
 ```
 
+`Place` never chmods: the cross-device temporary file is created with its final
+mode, because chmod fails on drvfs.
+
 Later disk/ISO exporters implement the same “artifact in → artifact out” idea.
 
 ## Build pipeline
 
 1. Validate the recipe (fail closed).
 2. Resolve release → suite + base URL + three pocket lines (`--mirror` overrides the base URL in all three). Warn if the release is EOL.
-3. Check Linux + `mmdebstrap` + the Ubuntu archive keyring.
-4. Choose a work root: `$XDG_CACHE_HOME/frostroot`, else `/var/tmp/frostroot`; never under `/mnt`. Create a per-build directory inside it. Delete on success unless `--keep-work`. Keep on failure and print the path.
-5. Render `/etc/wsl.conf` and the sudoers drop-in into `<work>/stage/` and generate the hook list.
-6. Run mmdebstrap with `TMPDIR=<work>`:
+3. Check Linux + `mmdebstrap` + the Ubuntu archive keyring, and (unshare mode) that the work root is reachable from mmdebstrap's user namespace. Check that the recipe directory, and `dist/` if it exists, can be written: a `sudo` build in the past leaves them root-owned, and that should fail now, not after the bootstrap.
+4. Choose a work root: `$XDG_CACHE_HOME/frostroot`, else `/var/tmp/frostroot-<uid>` (per user, because `/var/tmp` is shared); never under `/mnt`. It must be a directory owned by the current user. Create a per-build directory inside it, mode 0755 whatever the umask. Delete on success unless `--keep-work`. Keep on failure and print the path.
+5. Render `/etc/wsl.conf`, the sudoers drop-in and the provision script into `<work>/stage/` (0755, files 0644) and generate the hook list.
+6. Run mmdebstrap with `TMPDIR=<work>/tmp` (sticky, world-writable, as mmdebstrap(1) requires in unshare mode), in its own process group:
    - suite, three `deb` lines, components `main universe`, `--architectures=amd64`
    - `--variant=important`, `--aptopt='Apt::Install-Recommends "true"'`
    - explicit `--keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg`
@@ -344,14 +404,16 @@ Later disk/ISO exporters implement the same “artifact in → artifact out” i
    - mode `unshare` unless uid 0, then `root`
    - stderr streamed to the terminal; last 4 KiB kept for the error message
 7. Provision via `--customize-hook` (not a separate chroot tool):
-   - `upload` the rendered wsl.conf and sudoers drop-in; `chmod 0440` the sudoers file
-   - verify `/usr/share/zoneinfo/<tz>` exists, then set localtime and `/etc/timezone`
-   - `useradd --create-home --shell /bin/bash --user-group <name>`
-   - locale from `[locale].lang`
-   - remove the host `/etc/resolv.conf` and `/etc/hostname` that mmdebstrap copies in
+   - `upload` the rendered wsl.conf and sudoers drop-in
+   - run the provision script in the chroot, which:
+     - verifies `/usr/share/zoneinfo/<tz>` exists, then sets localtime and `/etc/timezone`
+     - `useradd --create-home --shell /bin/bash --user-group <name>`
+     - `chmod 0440` the sudoers drop-in and checks it with `visudo -c`
+     - generates the locale unless present, fails if it still is not, then `update-locale`
+     - removes the host `/etc/resolv.conf` and `/etc/hostname` that mmdebstrap copies in
    - `download /var/lib/dpkg/status` to the work directory, last
    - mmdebstrap's default cleanup already empties machine-id and removes apt lists and cache; do not duplicate it
-8. Parse the downloaded dpkg status → write `frostroot.lock.tmp` (`requested` = recipe include; `[[packages]]` = every installed package, sorted).
+8. Parse the downloaded dpkg status → write a uniquely named `.frostroot.lock.*.tmp` (`requested` = recipe include; `[[packages]]` = every installed package, sorted).
 9. Move `<work>/image.tar.gz` to `dist/<name>-ubuntu-<release>-amd64.tar.gz`, then rename the lock into place — so a failed move never leaves a lock describing an image that does not exist.
 10. Print the `wsl --import` line.
 
@@ -364,16 +426,16 @@ follow-up.
 
 | Class | Exit | Examples |
 |-------|------|----------|
-| User error | 1 | not Linux; missing/invalid toml; `init` without `--force` when file exists; mmdebstrap not on PATH; keyring missing |
-| Build error | 2 | no userns and not root; mmdebstrap failed (unknown package, mirror down); provision hook failed; disk full; tarball missing |
-| Interrupted | 130 | Ctrl-C |
+| User error | 1 | not Linux; missing/invalid toml; invalid `--mirror` (not http or https); `init` without `--force` when file exists; mmdebstrap not on PATH; keyring missing; work root under `/mnt`, unreachable from the user namespace, or owned by someone else; recipe directory or `dist/` not writable |
+| Build error | 2 | no userns and not root; mmdebstrap failed (unknown package, mirror down); provision hook failed (timezone or locale missing from the image); disk full; tarball missing |
+| Interrupted | 130 | Ctrl-C, SIGTERM, SIGHUP |
 
 Rules:
 
 - Do not write lock or tarball unless the whole build succeeded.
-- Write the lock to `*.tmp` and rename only after the tarball lands.
+- Write the lock to a uniquely named `*.tmp` and rename only after the tarball lands. Builds never touch another build's temporary files; concurrent builds in one directory are otherwise last-writer-wins and not supported.
 - On failure: delete tmp artifacts; keep the work directory; print its path; reprint the tail of mmdebstrap stderr when mmdebstrap failed.
-- On Ctrl-C: treat as failure (keep work directory, remove tmp artifacts). Signal mmdebstrap with SIGINT and a generous wait, never SIGKILL: in root mode it has proc, sys and dev mounted inside the chroot.
+- On Ctrl-C: treat as failure (keep work directory, remove tmp artifacts). Signal mmdebstrap's process group with SIGINT, as a terminal would, and wait however long it takes, never SIGKILL: in root mode it has proc, sys and dev mounted inside the chroot. A second Ctrl-C stops frostroot waiting; mmdebstrap's cleanup carries on.
 - frostroot never deletes a chroot directory. Under this design it never creates one it would have to.
 - Mirror failure: name the URL and suggest `--mirror`.
 - v1 **build** requires network. v1 **consume** (the tarball) does not.
@@ -386,7 +448,7 @@ not a test target — the CLI is Linux and Windows users run it inside WSL.
 **Always-on unit tests**
 
 - Recipe parse/validate tables: good file, unknown release, bad user, bad package token, bad locale, bad timezone, unknown field, missing sections, empty name.
-- Distro table: 20.04 → focal + old-releases + EOL; 22.04/24.04 → archive; unknown → error; `Sources` yields three pockets and honours `--mirror`.
+- Distro table: 20.04 → focal + archive + EOL; 22.04/24.04 → archive, not EOL; unknown → error; `Sources` yields three pockets and honours `--mirror`.
 - Lock round-trip encode/decode; `requested` vs full `[[packages]]`; deterministic output.
 - dpkg status parsing: installed-only, sorted, epoch versions, continuation lines, trailing stanza, empty input is an error.
 - Tarball name and cross-device `Place`.
@@ -511,10 +573,16 @@ Module path: `frostroot` for v1 unless/until published
 
 ## Open questions
 
-One, and it is the reason the plan opens with a manual spike: **how a
-mmdebstrap-built rootfs with systemd behaves on first boot under WSL.**
-Specifically whether `systemd-resolved` conflicts with WSL's generated
-`/etc/resolv.conf`, and which units fail. Task 0 of the plan settles it by
-observation; if masking is needed, the hook is added then and not before.
+None. The one open question was **how a mmdebstrap-built rootfs with systemd
+behaves on first boot under WSL**, and the Task 0 spike settled it on
+2026-09-16:
+
+- `systemd-resolved` does not conflict with WSL's generated
+  `/etc/resolv.conf`. DNS works, so no masking hook is added.
+- `systemctl is-system-running` reports `degraded`, never `offline`. The only
+  failed unit on 24.04 is `getty@tty1` (WSL has no tty1); on 20.04 it is
+  `ua-auto-attach` (Ubuntu Pro auto-attach). Neither affects login, sudo, DNS or
+  apt, so neither is masked.
+- WSL overrides the timezone unless `wsl.conf` says otherwise; see `Files`.
 
 Anything else not in this spec is out of scope until a new spec says otherwise.

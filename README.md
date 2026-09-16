@@ -2,18 +2,10 @@
 
 **Freeze an Ubuntu root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
 
-> ### Status: design stage — not implemented yet
->
-> There is no Go code in this repository. Nothing is installable and nothing
-> runs. What exists is a reviewed design, a corrected implementation plan, and
-> a feasibility analysis.
->
-> The build pipeline is **unverified**: it is validated on paper, not by a real
-> build. [Task 0 of the plan](docs/superpowers/plans/2026-09-15-frostroot-v1.md)
-> is a manual spike that gates all coding work.
->
-> If you want to understand the project, read the
-> [design spec](docs/superpowers/specs/2026-09-14-frostroot-design.md).
+> **Status: v0.1.0.** `init`, `validate` and `build` work. Every path in this
+> README was run for real: images for Ubuntu 20.04, 22.04 and 24.04 were built
+> with `frostroot build`, imported with `wsl --import` on Windows 11, and logged
+> into. See [Verification](#verification).
 
 ---
 
@@ -29,7 +21,7 @@ Everyone imports that same file and gets an identical machine.
 
 ## How it works
 
-You write about fifteen lines of TOML:
+You write about fifteen lines of TOML, or let `frostroot init` write them:
 
 ```toml
 [image]
@@ -43,10 +35,11 @@ sudo = true
 
 [wsl]
 systemd = true
+default_user = "student"
 
 [locale]
 lang = "en_US.UTF-8"
-timezone = "UTC"
+timezone = "Europe/Istanbul"
 
 [packages]
 include = ["git", "build-essential", "cmake"]
@@ -54,7 +47,7 @@ include = ["git", "build-essential", "cmake"]
 
 Run `frostroot build`, and you get two things:
 
-**`dist/cpp-lab-ubuntu-22.04-amd64.tar.gz`** — the frozen machine, a few
+**`dist/cpp-lab-ubuntu-22.04-amd64.tar.gz`**: the frozen machine, a few
 hundred megabytes. This is what you hand out. On Windows:
 
 ```powershell
@@ -64,52 +57,176 @@ wsl -d cpp-lab
 
 No internet needed on the receiving end.
 
-**`frostroot.lock`** — a receipt listing every package that ended up inside,
+**`frostroot.lock`**: a receipt listing every package that ended up inside,
 with exact versions. You asked for three packages; installing them pulled in
-several hundred dependencies, and the lock records all of them. Commit it to
-git and you can see exactly what changed between builds.
+several hundred, and the lock records all of them. Commit it to git and you
+can see exactly what changed between builds.
 
 ```toml
 version = 1
-distro = "ubuntu"
-suite = "jammy"
+distro = 'ubuntu'
+release = '22.04'
+suite = 'jammy'
+arch = 'amd64'
+mirror = 'http://archive.ubuntu.com/ubuntu'
 sources = [
-  "deb http://archive.ubuntu.com/ubuntu jammy main universe",
-  "deb http://archive.ubuntu.com/ubuntu jammy-updates main universe",
-  "deb http://archive.ubuntu.com/ubuntu jammy-security main universe",
+  'deb http://archive.ubuntu.com/ubuntu jammy main universe',
+  'deb http://archive.ubuntu.com/ubuntu jammy-updates main universe',
+  'deb http://archive.ubuntu.com/ubuntu jammy-security main universe'
 ]
-requested = ["git", "build-essential", "cmake"]
+frostroot_version = '0.1.0'
+requested = [
+  'git',
+  'build-essential',
+  'cmake'
+]
 
 [[packages]]
-name = "git"
-version = "1:2.34.1-1ubuntu1.11"
-arch = "amd64"
+name = 'git'
+version = '1:2.34.1-1ubuntu1.17'
+arch = 'amd64'
 ```
+
+That is an excerpt of a real lock: this recipe produced 341 `[[packages]]`
+entries and a 222 MB tarball.
 
 The recipe is **intent** and you edit it. The lock is **fact** and the build
 writes it. Versions never appear in the recipe.
+
+## Install
+
+frostroot is a **Linux** program. On Windows, run it inside WSL. The images it
+builds are imported into WSL too, but they do not have to be built there.
+
+```sh
+sudo apt install mmdebstrap        # also pulls uidmap
+go build -o frostroot ./cmd/frostroot
+```
+
+Go 1.24 or newer. On a Debian host, also `sudo apt install ubuntu-keyring`.
+
+Building needs either **user namespaces** (normal on current distributions,
+and what you get when you run frostroot as yourself) or **root** (`sudo
+frostroot build`). It needs network access; consuming the tarball does not.
+
+## Quick start
+
+```console
+$ mkdir cpp-lab && cd cpp-lab
+$ frostroot init
+Answer a few questions to create frostroot.toml. Press Enter to accept the default in [brackets].
+Image name [lab]: cpp-lab
+Ubuntu release (20.04, 22.04, 24.04) [24.04]: 22.04
+User name [student]:
+Timezone, e.g. UTC or Europe/Istanbul [UTC]: Europe/Istanbul
+Package preset (none, build-essential, python-lab) [none]: none
+Extra packages, separated by spaces or commas: git build-essential cmake
+
+Wrote frostroot.toml. Next: frostroot validate, then frostroot build.
+
+$ frostroot validate
+frostroot.toml: ok (cpp-lab, Ubuntu 22.04 amd64, 3 packages requested)
+
+$ frostroot build
+frostroot: building cpp-lab from Ubuntu 22.04 (jammy, amd64) using http://archive.ubuntu.com/ubuntu
+I: chroot architecture amd64 is equal to the host's architecture
+I: automatically chosen format: tar
+I: running apt-get update...
+I: downloading packages with apt...
+I: installing essential packages...
+I: installing remaining packages inside the chroot...
+I: running special hook: upload '/var/tmp/frostroot/build-195175832/stage/wsl.conf' /etc/wsl.conf
+...
+I: creating tarball...
+I: success in 274.2017 seconds
+
+Wrote dist/cpp-lab-ubuntu-22.04-amd64.tar.gz (222 MB)
+Wrote frostroot.lock (341 packages)
+
+Import it on Windows:
+  wsl --import cpp-lab <install-dir> dist/cpp-lab-ubuntu-22.04-amd64.tar.gz
+or from any directory in PowerShell:
+  wsl --import cpp-lab <install-dir> '\\wsl.localhost\Ubuntu\home\you\cpp-lab\dist\cpp-lab-ubuntu-22.04-amd64.tar.gz'
+```
+
+A build takes a few minutes and downloads a few hundred megabytes: about two
+minutes for a minimal 24.04 image, and four and a half for this one on a
+2 MB/s connection. On WSL, `build` also prints the tarball's Windows path, so
+the import line can be pasted into PowerShell from any directory.
+
+Then, in PowerShell:
+
+```powershell
+wsl --import cpp-lab C:\wsl\cpp-lab '\\wsl.localhost\Ubuntu\home\you\cpp-lab\dist\cpp-lab-ubuntu-22.04-amd64.tar.gz'
+wsl -d cpp-lab
+```
+
+You are logged in as `student`, with passwordless `sudo`, systemd running, and
+`apt install` working against the same three pockets the image was built from.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `frostroot init` | Asks a few questions, writes `frostroot.toml` |
-| `frostroot validate` | Checks the recipe. No network, no root |
-| `frostroot build` | Recipe → lockfile + tarball |
+| `frostroot init [--force]` | Asks six questions and writes a commented `frostroot.toml`. Refuses to overwrite one without `--force`. Writes nothing unless the answers validate. |
+| `frostroot validate` | Checks `frostroot.toml` and prints every problem. No network, no root. |
+| `frostroot build [--mirror URL] [--keep-work]` | Recipe to `frostroot.lock` plus `dist/<name>-ubuntu-<release>-amd64.tar.gz`. Never prompts. Overwrites the previous lock and tarball. |
 
-Three verbs. `build` never prompts; everything it needs is in the recipe.
+All three work on the recipe in the current directory. `--mirror` replaces
+`http://archive.ubuntu.com/ubuntu` in all three pockets, for a local or faster
+mirror. `--keep-work` keeps the work directory after a successful build (it is
+always kept after a failure).
 
-## Requirements
+| Exit code | Meaning |
+|---|---|
+| 0 | success |
+| 1 | something you can fix: invalid or missing recipe, not Linux, mmdebstrap or ubuntu-keyring missing, unusable work directory, a `dist/` you cannot write to |
+| 2 | the build failed: mmdebstrap failed (unknown package, mirror unreachable), provisioning failed, the tarball could not be placed |
+| 130 | interrupted with Ctrl-C; nothing is written and the work directory is kept |
 
-frostroot is a **Linux** CLI. Windows users run it inside WSL — WSL is an
-export target, not a host.
+## The recipe
 
-```sh
-sudo apt install mmdebstrap
-```
+| Field | Rules | `init` default |
+|---|---|---|
+| `image.name` | letters, digits, `.` `_` `-`; names the tarball and the WSL distro | `lab` |
+| `image.release` | `20.04`, `22.04` or `24.04` | `24.04` |
+| `image.arch` | `amd64` | `amd64` |
+| `user.name` | lowercase, digits, `_` `-`, 1 to 32 characters, not `root` | `student` |
+| `user.sudo` | `true` gives passwordless sudo; `false` gives none | `true` |
+| `wsl.systemd` | boot with systemd | `true` |
+| `wsl.default_user` | must equal `user.name`; may be omitted | the user name |
+| `locale.lang` | e.g. `en_US.UTF-8`, `tr_TR.UTF-8`, `C.UTF-8` | `en_US.UTF-8` |
+| `locale.timezone` | e.g. `UTC`, `Europe/Istanbul`, `America/Argentina/Buenos_Aires` | `UTC` |
+| `packages.include` | apt package names only; no versions, no suites | preset plus extras |
 
-Plus either user namespaces (normal on modern distros) or root. Building needs
-network access; consuming the resulting tarball does not.
+Unknown fields are an error, so a `[package]` typo fails loudly instead of
+building an image without your packages. `locale` and `timezone` are checked
+strictly because they reach shell scripts. Whether the timezone and locale
+actually exist can only be checked inside the image, so `build` fails if they
+do not. Files saved by Windows editors are fine: CRLF line endings and a UTF-8
+byte order mark are both accepted.
+
+`init` presets are shortcuts for package lists, not a recipe feature:
+`build-essential` is `build-essential git cmake pkg-config`, `python-lab` is
+`python3 python3-pip python3-venv git`.
+
+## What is in the image
+
+- Ubuntu `--variant=important` plus your packages, with **Recommends on**, so
+  `include` behaves like `apt install` on stock Ubuntu.
+- Always: `systemd`, `systemd-sysv`, `dbus`, `sudo`, `locales`, `tzdata`,
+  `passwd`, `ca-certificates`.
+- Packages from the release, `-updates` and `-security` pockets: patched
+  versions, not release-day ones. The same three lines are in
+  `/etc/apt/sources.list`.
+- Your user with a home directory and bash; passwordless sudo through
+  `/etc/sudoers.d/90-frostroot`.
+- `/etc/wsl.conf` with systemd on, your user as the default, and
+  `useWindowsTimezone=false` so the recipe's timezone sticks (WSL otherwise
+  resets it to the Windows zone at every start).
+- Your locale and timezone.
+- No `/etc/resolv.conf` or `/etc/hostname` from the build machine, and an empty
+  `/etc/machine-id`, so every import gets its own.
 
 ## Pipeline
 
@@ -120,43 +237,69 @@ frostroot.toml ──▶ validate ──▶ mmdebstrap ──▶ image.tar.gz �
                                   hooks
 ```
 
-`mmdebstrap` bootstraps the base system, customize hooks provision it (user,
-sudo, locale, timezone, `/etc/wsl.conf`), and mmdebstrap writes the tarball
-itself — from inside the user namespace, which is the only place ownership,
-symlinks and file capabilities come out correct.
+`mmdebstrap` bootstraps the base system and writes the tarball itself, from
+inside its user namespace, which is the only place ownership, symlinks,
+hardlinks and file capabilities come out correct. Customize hooks upload the
+rendered `wsl.conf` and sudoers drop-in and run one generated provisioning
+script (user, sudo, locale, timezone, cleanup), then download the image's dpkg
+status, which frostroot parses into the lock. The tarball is moved into
+`dist/` first and the lock renamed into place second, so a lock never describes
+an image that does not exist. A failed build writes neither.
 
-## Scope
+Work happens in `$XDG_CACHE_HOME/frostroot` if that is set, otherwise in
+`/var/tmp/frostroot-<uid>` (one per user, so a `sudo` build cannot leave a
+root-owned directory in the way of the next normal one), never under `/mnt`
+(on WSL that is a slow 9p mount of a Windows drive). The recipe directory
+itself can be on a Windows drive. Before spending minutes on a bootstrap,
+`build` checks that it will be able to write the lock and the tarball.
 
-**In v1:** Ubuntu 20.04 / 22.04 / 24.04, amd64, apt packages by name, a sudo
-user, WSL-ready images.
+## Notes
 
-**Deliberately not in v1:** Fedora or any non-Ubuntu family · PPAs and extra apt
-sources · pip / npm / cargo lockfiles · vendoring `.deb` files and offline
-builds · bit-identical rebuilds · bare-metal disk or ISO images · a package
-picker TUI · a native Windows binary · architectures other than amd64 ·
-capturing an existing machine (`frostroot capture`, planned for after v1).
+**The tarball is the golden image.** v1 does not rebuild from the lock's
+versions. Running `build` again next month fetches whatever the Ubuntu archive
+holds then, and the new lock shows exactly what moved. The file you hand out is
+reproducible; the act of building is not, yet. Vendoring `.deb` files is the
+planned next step.
 
-Each exclusion has a door left open in the design. Adding Fedora means a new
-`internal/distro` implementation, not a rewrite. The v1 job is to prove one
-narrow case works properly.
+**Builds need network; consuming the tarball does not.**
 
-## Known limitations
+**Building as root.** `sudo frostroot build` works, but everything it writes
+into the recipe directory (`dist/`, `frostroot.lock`) belongs to root
+afterwards. A later build as yourself in that directory stops before
+bootstrapping and says so; `sudo chown -R $USER dist frostroot.lock` or
+removing them fixes it. Its work directory, `/var/tmp/frostroot-0`, stays out
+of the way of unprivileged builds.
 
-**"Freeze" has a limit.** The tarball is genuinely frozen — import it in five
-years and it is identical. But *rebuilding* from the same recipe next month may
-produce slightly different versions, because the build fetches whatever the
-Ubuntu archive currently holds. Guaranteeing byte-identical rebuilds means
-vendoring the package files, which is the planned next step, not this one. The
-file you hand out is reproducible; the act of building is not, yet.
+**One build per recipe directory at a time.** Two builds running in the same
+directory do not disturb each other's temporary files, but whichever finishes
+last wins, and the lock and tarball may then come from different builds.
 
-**20.04 images ship known unfixed CVEs.** Focal is past standard support, so
-`old-releases.ubuntu.com` is frozen at its end-of-life state and security fixes
-require Ubuntu Pro. Pinning an old release is the whole point of the tool, but
-`build` warns you, and you should prefer 22.04 or 24.04 unless you specifically
-need focal.
+**20.04 images ship known, unfixed CVEs.** Focal's standard support ended in
+May 2025. Its packages are still on the archive, but security fixes since then
+go to Ubuntu Pro, not to `focal-security`, and `build` warns about it. Freezing
+an old release is a legitimate use of this tool; prefer 22.04 or 24.04 unless
+you specifically need focal.
 
-**Python on 24.04.** PEP 668 makes `pip install` outside a virtualenv fail by
-design. Use `python3 -m venv`.
+**Python on 24.04.** PEP 668 makes `pip install` outside a virtual environment
+fail by design. Use `python3 -m venv .venv`.
+
+**`systemctl is-system-running` says `degraded`, not `running`.** On 24.04 the
+failed units are gettys (`getty@tty1`, sometimes `console-getty`), because WSL
+has no console to attach them to. On 22.04 and 20.04 it is `ua-auto-attach`
+(Ubuntu Pro auto-attach, for cloud instances), and on the very first start of
+a 20.04 image `user@1000.service` can also fail once. None of them affects
+login, sudo, networking or apt.
+
+**Networks that inspect TLS.** An image trusts the public certificate
+authorities from `ca-certificates`, nothing else. On a network with a TLS
+inspection proxy, HTTPS from inside the image (`git clone https://…`) fails
+until the organisation's CA certificate is added in the image with
+`update-ca-certificates`. `apt` itself uses plain HTTP and signed metadata, so
+building is not affected.
+
+**Building from a Windows checkout.** If `go build` inside WSL reports `error
+obtaining VCS status`, git is refusing a repository owned by Windows; add
+`-buildvcs=false`.
 
 **Redistribution.** A golden image contains Ubuntu binaries. frostroot's own
 MIT licence covers frostroot, not the packages it bundles into an image.
@@ -164,37 +307,73 @@ Redistributing unmodified archive packages is fine; Canonical's trademark
 policy constrains calling a modified image "Ubuntu". Worth a look before
 publishing images publicly.
 
-**The WSL boot check is manual.** No CI runner can `wsl --import`, so the one
-test that proves the product actually works is a human at a Windows machine.
+## Scope
+
+**In v1:** Ubuntu 20.04, 22.04 and 24.04, amd64, apt packages by name, one sudo
+user, WSL-ready images.
+
+**Deliberately not in v1:** Fedora or any non-Ubuntu family · PPAs and extra
+apt sources · pip / npm / cargo lockfiles · vendoring `.deb` files and offline
+builds · bit-identical rebuilds · bare-metal disk or ISO images · a package
+picker TUI · a native Windows binary · architectures other than amd64 ·
+capturing an existing machine (`frostroot capture`, planned for after v1).
+
+Each exclusion has a door left open in the design. Adding Fedora means a new
+`internal/distro` implementation, not a rewrite.
+
+## Verification
+
+```sh
+go test ./...
+```
+
+runs offline, without root and without mmdebstrap. It covers recipe and lock
+parsing, the distro table, dpkg status parsing, the rendered files and hooks
+(including running the hook text through a real shell with hostile paths), the
+build orchestration against a fake bootstrapper, and every exit code.
+
+```sh
+go test -tags=integration -run TestIntegration -v -timeout 30m ./internal/builder/
+```
+
+builds a real 24.04 image with mmdebstrap and inspects the tarball: thousands
+of symlinks all with targets, hardlinks and file capabilities intact, no
+subordinate-uid owners, the user, sudoers, `wsl.conf`, timezone and locale in
+place, and no leaked host files. It needs Linux, mmdebstrap, ubuntu-keyring,
+network, and user namespaces or root, and takes about two minutes.
+
+**The WSL boot check is manual**, because no CI runner can run `wsl --import`.
+For every release you ship, import the tarball and check: `whoami` is your
+user, `sudo -n id` needs no password, `systemctl is-system-running` is
+`running` or `degraded`, `getent hosts archive.ubuntu.com` resolves, `locale`
+has no warnings, and `date` shows the recipe's timezone. For v0.1.0 this was
+done on Windows 11 with WSL 2.6.3 for all three releases, along with the
+failure paths; the results are recorded in the
+[feasibility analysis](docs/superpowers/reviews/2026-09-15-frostroot-feasibility.md#release-verification-v010-2026-09-16).
 
 ## Documentation
 
 | Document | What it is |
 |---|---|
-| [Design spec](docs/superpowers/specs/2026-09-14-frostroot-design.md) | Source of truth for v1. Start here. |
-| [Implementation plan](docs/superpowers/plans/2026-09-15-frostroot-v1.md) | 13 tasks, test-first. **Execute this one.** |
+| [Design spec](docs/superpowers/specs/2026-09-14-frostroot-design.md) | Source of truth for v1. |
+| [Implementation plan](docs/superpowers/plans/2026-09-15-frostroot-v1.md) | The 13 tasks v1 was built from, with the spike's amendments. |
 | [Plan review](docs/superpowers/reviews/2026-09-14-frostroot-plan-review.md) | Found four defects that would have shipped a non-booting image |
-| [Feasibility analysis](docs/superpowers/reviews/2026-09-15-frostroot-feasibility.md) | Independent assessment; confirmed the defects and added five more |
-| [Original plan](docs/superpowers/plans/2026-09-14-frostroot.md) | **Superseded — do not execute.** Kept for history. |
+| [Feasibility analysis](docs/superpowers/reviews/2026-09-15-frostroot-feasibility.md) | Independent assessment, plus the recorded spike and WSL boot results |
+| [Original plan](docs/superpowers/plans/2026-09-14-frostroot.md) | **Superseded.** Kept for history. |
 
-The two reviews are dated records of what the spec and plan said on those dates;
-the spec has since been revised to match the corrected plan.
-
-## Planned layout
+## Layout
 
 ```
 cmd/frostroot/      main
-internal/cli/       init, validate, build
-internal/recipe/    toml + lock parsing and validation
-internal/distro/    Ubuntu releases, mirrors, update pockets
-internal/builder/   orchestration, mmdebstrap, hooks, dpkg status
-internal/export/    artifact naming and placement
+internal/cli/       init, validate, build; prompts, flags, exit codes
+internal/recipe/    frostroot.toml and frostroot.lock: types, strict parsing, validation
+internal/distro/    Ubuntu releases, archive URL, the three pocket lines
+internal/builder/   orchestration, mmdebstrap runner, provisioning, dpkg status, work directory
+internal/export/    tarball naming and atomic placement
 testdata/           recipe fixtures
 ```
 
-One Go module, one binary, roughly 2,000 lines including tests.
-
 ## License
 
-[MIT](LICENSE). Note that this covers frostroot itself — the packages it
-bootstraps into an image carry their own licences from the Ubuntu archive.
+[MIT](LICENSE). This covers frostroot itself; the packages it bootstraps into
+an image carry their own licences from the Ubuntu archive.
