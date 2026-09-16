@@ -1,4 +1,4 @@
-// Package cli implements the frostroot command line: init, validate, build.
+// Package cli implements the frostroot command line: init, validate and build.
 package cli
 
 import (
@@ -14,27 +14,36 @@ import (
 	"frostroot/internal/recipe"
 )
 
-const recipeFile = "frostroot.toml"
+// recipeFileName is the recipe every command works on, in App.RecipeDir.
+const recipeFileName = "frostroot.toml"
 
-// Prompt asks one question and returns the answer, or defaultValue when the
-// answer is empty. init is the only command that prompts; tests script it.
+// Exit codes returned by App.Run.
+const (
+	exitSuccess     = 0
+	exitUserError   = 1   // something the user can fix: a recipe, a flag, the host
+	exitBuildFailed = 2   // the build itself failed
+	exitInterrupted = 130 // Ctrl-C, by shell convention 128 + SIGINT
+)
+
+// Prompt asks one question and returns the answer, or defaultAnswer when the
+// answer is empty. init is the only command that prompts, and tests script it.
 type Prompt interface {
-	Ask(question, defaultValue string) (string, error)
+	Ask(question, defaultAnswer string) (string, error)
 }
 
-// App is one invocation of frostroot. Zero-valued fields fall back to the
-// real process environment.
+// App is one invocation of frostroot. Fields left at their zero value fall
+// back to the real process environment.
 type App struct {
-	Stdin   io.Reader
-	Stdout  io.Writer
-	Stderr  io.Writer
-	Dir     string // recipe directory, default the working directory
-	GOOS    string
-	Prompt  Prompt
-	Builder *builder.Builder
-	Getenv  func(string) string
+	Stdin     io.Reader
+	Stdout    io.Writer
+	Stderr    io.Writer
+	RecipeDir string // directory holding frostroot.toml; defaults to the working directory
+	GOOS      string // operating system; defaults to runtime.GOOS
+	Prompt    Prompt
+	Builder   *builder.Builder
+	Getenv    func(string) string
 	// WSLPath converts a Linux path to its Windows form for the import hint.
-	// An error just means the hint is not printed.
+	// An error only means that the hint is not printed.
 	WSLPath func(linuxPath string) (string, error)
 }
 
@@ -43,6 +52,7 @@ func New() *App {
 	return (&App{}).withDefaults()
 }
 
+// withDefaults fills every unset field from the real process and returns a.
 func (a *App) withDefaults() *App {
 	if a.Stdin == nil {
 		a.Stdin = os.Stdin
@@ -53,9 +63,9 @@ func (a *App) withDefaults() *App {
 	if a.Stderr == nil {
 		a.Stderr = os.Stderr
 	}
-	if a.Dir == "" {
-		if wd, err := os.Getwd(); err == nil {
-			a.Dir = wd
+	if a.RecipeDir == "" {
+		if workingDir, err := os.Getwd(); err == nil {
+			a.RecipeDir = workingDir
 		}
 	}
 	if a.GOOS == "" {
@@ -68,15 +78,15 @@ func (a *App) withDefaults() *App {
 		a.Prompt = newLinePrompt(a.Stdin, a.Stdout)
 	}
 	if a.WSLPath == nil {
-		a.WSLPath = wslpath
+		a.WSLPath = windowsPathOf
 	}
 	if a.Builder == nil {
-		a.Builder = &builder.Builder{Bootstrap: &builder.Mmdebstrap{Stderr: a.Stderr}}
+		a.Builder = &builder.Builder{Bootstrapper: &builder.Mmdebstrap{ProgressOutput: a.Stderr}}
 	}
 	return a
 }
 
-const usage = `usage: frostroot <command> [flags]
+const usageText = `usage: frostroot <command> [flags]
 
 Commands:
   init       ask a few questions and write frostroot.toml
@@ -86,89 +96,90 @@ Commands:
 Run "frostroot <command> -h" for a command's flags.
 `
 
-// Run executes one command and returns the process exit code: 0 success,
-// 1 user error, 2 build error, 130 interrupted.
+// Run executes the command named by args[0] and returns the process exit
+// code: 0 success, 1 user error, 2 build error, 130 interrupted.
 func (a *App) Run(args []string) int {
 	a.withDefaults()
 	if len(args) == 0 {
-		fmt.Fprint(a.Stderr, usage)
-		return 1
+		a.stderrf("%s", usageText)
+		return exitUserError
 	}
-	switch args[0] {
+	command, commandArgs := args[0], args[1:]
+	switch command {
 	case "init":
-		return a.cmdInit(args[1:])
+		return a.runInit(commandArgs)
 	case "validate":
-		return a.cmdValidate(args[1:])
+		return a.runValidate(commandArgs)
 	case "build":
-		return a.cmdBuild(args[1:])
+		return a.runBuild(commandArgs)
 	case "help", "-h", "--help":
-		fmt.Fprint(a.Stdout, usage)
-		return 0
+		a.stdoutf("%s", usageText)
+		return exitSuccess
 	default:
-		fmt.Fprintf(a.Stderr, "frostroot: unknown command %q\n\n%s", args[0], usage)
-		return 1
+		a.stderrf("frostroot: unknown command %q\n\n%s", command, usageText)
+		return exitUserError
 	}
 }
 
-// parseFlags parses a subcommand's flags. It returns done=true with the exit
-// code when the command should stop (help requested, or bad flags).
-func (a *App) parseFlags(fs *flag.FlagSet, args []string) (code int, done bool) {
-	fs.SetOutput(a.Stderr)
-	if err := fs.Parse(args); err != nil {
+// stdoutf writes formatted text to standard output. A failed write to the
+// terminal has nowhere better to be reported, so its error is deliberately
+// discarded here, in one place, rather than at every call site.
+func (a *App) stdoutf(format string, args ...any) {
+	_, _ = fmt.Fprintf(a.Stdout, format, args...)
+}
+
+// stderrf writes formatted text to standard error; see stdoutf about errors.
+func (a *App) stderrf(format string, args ...any) {
+	_, _ = fmt.Fprintf(a.Stderr, format, args...)
+}
+
+// newFlagSet returns a flag set for a subcommand that prints usageText,
+// followed by the flag defaults, to standard error.
+func (a *App) newFlagSet(command, usageText string) *flag.FlagSet {
+	flags := flag.NewFlagSet(command, flag.ContinueOnError)
+	flags.SetOutput(a.Stderr)
+	flags.Usage = func() {
+		a.stderrf("%s", usageText)
+		flags.PrintDefaults()
+	}
+	return flags
+}
+
+// parseFlags parses a subcommand's flags. When the command should stop, for
+// help or for bad flags, it returns stop == true and the exit code.
+func (a *App) parseFlags(flags *flag.FlagSet, args []string) (exitCode int, stop bool) {
+	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return 0, true
+			return exitSuccess, true
 		}
-		return 1, true
+		return exitUserError, true
 	}
-	if fs.NArg() > 0 {
-		fmt.Fprintf(a.Stderr, "frostroot %s: unexpected argument %q\n", fs.Name(), fs.Arg(0))
-		fs.Usage()
-		return 1, true
+	if flags.NArg() > 0 {
+		a.stderrf("frostroot %s: unexpected argument %q\n", flags.Name(), flags.Arg(0))
+		flags.Usage()
+		return exitUserError, true
 	}
-	return 0, false
+	return exitSuccess, false
 }
 
-// loadRecipe loads and validates frostroot.toml, printing every problem.
-func (a *App) loadRecipe() (recipe.Recipe, bool) {
-	path := filepath.Join(a.Dir, recipeFile)
-	r, err := recipe.Load(path)
+// loadRecipe loads and validates the recipe, printing every problem. ok is
+// false when the command should stop with exitUserError.
+func (a *App) loadRecipe() (imageRecipe recipe.Recipe, ok bool) {
+	recipePath := filepath.Join(a.RecipeDir, recipeFileName)
+	imageRecipe, err := recipe.Load(recipePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(a.Stderr, "frostroot: no %s in %s; create one with: frostroot init\n", recipeFile, a.Dir)
+			a.stderrf("frostroot: no %s in %s; create one with: frostroot init\n", recipeFileName, a.RecipeDir)
 		} else {
-			fmt.Fprintf(a.Stderr, "frostroot: %v\n", err)
+			a.stderrf("frostroot: %v\n", err)
 		}
 		return recipe.Recipe{}, false
 	}
-	if probs := recipe.Validate(r); len(probs) > 0 {
-		for _, p := range probs {
-			fmt.Fprintf(a.Stderr, "%s: %s\n", recipeFile, p)
+	if problems := recipe.Validate(imageRecipe); len(problems) > 0 {
+		for _, problem := range problems {
+			a.stderrf("%s: %s\n", recipeFileName, problem)
 		}
 		return recipe.Recipe{}, false
 	}
-	return r, true
-}
-
-func (a *App) cmdValidate(args []string) int {
-	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
-	fs.Usage = func() {
-		fmt.Fprint(fs.Output(), "usage: frostroot validate\n\nCheck frostroot.toml in the current directory. No network, no root.\n")
-	}
-	if code, done := a.parseFlags(fs, args); done {
-		return code
-	}
-	r, ok := a.loadRecipe()
-	if !ok {
-		return 1
-	}
-	fmt.Fprintf(a.Stdout, "%s: ok (%s, Ubuntu %s %s, %s requested)\n",
-		recipeFile, r.Image.Name, r.Image.Release, r.Image.Arch, packages(len(r.Packages.Include)))
-	return 0
-}
-
-func packages(n int) string {
-	if n == 1 {
-		return "1 package"
-	}
-	return fmt.Sprintf("%d packages", n)
+	return imageRecipe, true
 }
