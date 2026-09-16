@@ -33,33 +33,75 @@ const maxUserNameLength = 32
 // does that during provisioning.
 func Validate(imageRecipe Recipe) []string {
 	var problems []string
-	if !imageNamePattern.MatchString(imageRecipe.Image.Name) {
-		problems = append(problems, fmt.Sprintf("invalid image name %q (letters, digits, dot, dash, underscore; must not be empty)", imageRecipe.Image.Name))
+	addProblem := func(err error) {
+		if err != nil {
+			problems = append(problems, err.Error())
+		}
 	}
+	addProblem(CheckImageName(imageRecipe.Image.Name))
 	if _, err := distro.Lookup(imageRecipe.Image.Release, imageRecipe.Image.Arch); err != nil {
 		for _, lookupErr := range splitJoinedError(err) {
-			problems = append(problems, lookupErr.Error())
+			addProblem(lookupErr)
 		}
 	}
 	userName := imageRecipe.User.Name
-	if userName == "root" || !userNamePattern.MatchString(userName) || len(userName) > maxUserNameLength {
-		problems = append(problems, fmt.Sprintf("invalid user name %q (lowercase letters, digits, - and _; 1-%d chars; not root)", userName, maxUserNameLength))
-	}
+	addProblem(CheckUserName(userName))
 	if defaultUser := imageRecipe.WSL.DefaultUser; defaultUser != "" && defaultUser != userName {
 		problems = append(problems, fmt.Sprintf("wsl.default_user %q must equal user.name %q", defaultUser, userName))
 	}
-	if lang := imageRecipe.Locale.Lang; lang != "" && !localePattern.MatchString(lang) {
-		problems = append(problems, fmt.Sprintf("invalid locale lang %q (expected e.g. en_US.UTF-8)", lang))
+	if lang := imageRecipe.Locale.Lang; lang != "" {
+		addProblem(CheckLocale(lang))
 	}
-	if timezone := imageRecipe.Locale.Timezone; timezone != "" && !timezonePattern.MatchString(timezone) {
-		problems = append(problems, fmt.Sprintf("invalid timezone %q (expected e.g. UTC or Europe/Istanbul)", timezone))
+	if timezone := imageRecipe.Locale.Timezone; timezone != "" {
+		addProblem(CheckTimezone(timezone))
 	}
 	for _, packageName := range imageRecipe.Packages.Include {
-		if !packageNamePattern.MatchString(packageName) {
-			problems = append(problems, fmt.Sprintf("invalid package name %q (apt package names only; versions belong in the lock)", packageName))
-		}
+		addProblem(CheckPackageName(packageName))
 	}
 	return problems
+}
+
+// CheckImageName reports why name cannot be an image name, or nil. The name
+// becomes a file name and a WSL distribution name.
+func CheckImageName(name string) error {
+	if !imageNamePattern.MatchString(name) {
+		return fmt.Errorf("invalid image name %q (letters, digits, dot, dash, underscore; must not be empty)", name)
+	}
+	return nil
+}
+
+// CheckUserName reports why name cannot be the image's user, or nil.
+func CheckUserName(name string) error {
+	if name == "root" || !userNamePattern.MatchString(name) || len(name) > maxUserNameLength {
+		return fmt.Errorf("invalid user name %q (lowercase letters, digits, - and _; 1-%d chars; not root)", name, maxUserNameLength)
+	}
+	return nil
+}
+
+// CheckLocale reports why lang is not an acceptable locale, or nil. Whether
+// the locale exists can only be checked inside the image.
+func CheckLocale(lang string) error {
+	if !localePattern.MatchString(lang) {
+		return fmt.Errorf("invalid locale lang %q (expected e.g. en_US.UTF-8)", lang)
+	}
+	return nil
+}
+
+// CheckTimezone reports why timezone is not an acceptable IANA zone name, or
+// nil. Whether the zone exists can only be checked inside the image.
+func CheckTimezone(timezone string) error {
+	if !timezonePattern.MatchString(timezone) {
+		return fmt.Errorf("invalid timezone %q (expected e.g. UTC or Europe/Istanbul)", timezone)
+	}
+	return nil
+}
+
+// CheckPackageName reports why name is not an apt package name, or nil.
+func CheckPackageName(name string) error {
+	if !packageNamePattern.MatchString(name) {
+		return fmt.Errorf("invalid package name %q (apt package names only; versions belong in the lock)", name)
+	}
+	return nil
 }
 
 // splitJoinedError returns the errors combined by errors.Join, or err itself

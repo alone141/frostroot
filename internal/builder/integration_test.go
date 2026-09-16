@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -68,15 +69,29 @@ func TestIntegrationNobleTiny(t *testing.T) {
 	if problems := recipe.Validate(imageRecipe); len(problems) != 0 {
 		t.Fatal(problems)
 	}
-	builder := Builder{Bootstrapper: &Mmdebstrap{ProgressOutput: testLogWriter{t}}}
+	builder := Builder{Bootstrapper: &Mmdebstrap{}}
+	progress := &testLogProgress{t: t}
 	result, err := builder.Build(context.Background(), imageRecipe, Options{
 		RecipeDir: t.TempDir(),
 		GOOS:      "linux",
 		Getenv:    fakeEnvironment(map[string]string{"XDG_CACHE_HOME": cacheHome}),
+		Progress:  progress,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Run("progress", func(t *testing.T) {
+		wantStarted := []Phase{PhaseUpdateIndex, PhaseDownload, PhaseExtract, PhaseInstallEssential, PhaseInstallRequested, PhaseProvision, PhaseCreateTarball, PhaseWriteLock, PhasePlaceTarball}
+		if !slices.Equal(progress.started, wantStarted) {
+			t.Errorf("phases started = %v, want %v", progress.started, wantStarted)
+		}
+		if progress.downloadTotalBytes <= 0 {
+			t.Error("the download phase never reported a total")
+		}
+		if progress.installSteps <= 0 {
+			t.Error("the install phases never reported a step")
+		}
+	})
 	if result.WorkDir != "" {
 		t.Errorf("the work directory should be removed after success: %+v", result)
 	}
@@ -237,12 +252,30 @@ func TestIntegrationUnreachableWorkRootFailsFast(t *testing.T) {
 	}
 }
 
-// testLogWriter sends mmdebstrap's progress output to the test log.
-type testLogWriter struct{ t *testing.T }
+// testLogProgress sends mmdebstrap's output to the test log and records what
+// the parser made of it.
+type testLogProgress struct {
+	t                  *testing.T
+	started            []Phase
+	downloadTotalBytes int64
+	installSteps       int64
+}
 
-func (w testLogWriter) Write(data []byte) (int, error) {
-	w.t.Log(strings.TrimRight(string(data), "\n"))
-	return len(data), nil
+func (p *testLogProgress) Report(event ProgressEvent) {
+	switch event.Kind {
+	case EventLogLine:
+		p.t.Log(event.Line)
+	case EventPhaseStarted:
+		p.started = append(p.started, event.Phase)
+	case EventProgress:
+		if event.Phase == PhaseDownload && event.Unit == UnitBytes {
+			p.downloadTotalBytes = event.Total
+		}
+		if event.Unit == UnitSteps {
+			p.installSteps = event.Done
+		}
+	case EventPhaseFinished:
+	}
 }
 
 // maxRecordedFileBytes bounds which regular files readTarball keeps the

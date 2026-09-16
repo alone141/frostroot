@@ -7,27 +7,15 @@ import (
 	"reflect"
 	"strings"
 	"text/template"
-	"unicode"
 
-	"frostroot/internal/distro"
 	"frostroot/internal/export"
+	"frostroot/internal/form"
 	"frostroot/internal/recipe"
 )
 
-// presetPackages maps each init preset to the packages it expands to. Presets
-// exist only in init; they are not a recipe feature.
-var presetPackages = map[string][]string{
-	"none":            {},
-	"build-essential": {"build-essential", "git", "cmake", "pkg-config"},
-	"python-lab":      {"python3", "python3-pip", "python3-venv", "git"},
-}
-
-// presetNames lists the presets in the order init offers them.
-var presetNames = []string{"none", "build-essential", "python-lab"}
-
-// recipeTemplate renders the recipe init writes. The recipe is read and edited
-// by people, so it is written from a commented template rather than with
-// toml.Marshal, which cannot emit comments.
+// recipeTemplate renders the recipe init and edit write. The recipe is read
+// and edited by people, so it is written from a commented template rather
+// than with toml.Marshal, which cannot emit comments.
 var recipeTemplate = template.Must(template.New("recipe").Funcs(template.FuncMap{
 	"tomlQuote":     tomlQuote,
 	"tomlQuoteList": tomlQuoteList,
@@ -61,114 +49,25 @@ timezone = {{tomlQuote .Locale.Timezone}}  # kept under WSL instead of following
 include = {{tomlQuoteList .Packages.Include}}
 `))
 
-// initAnswers are the user's answers to init's questions.
-type initAnswers struct {
-	imageName     string
-	release       string
-	userName      string
-	timezone      string
-	presetName    string
-	extraPackages string // separated by commas or whitespace
-}
+const initUsageText = `usage: frostroot init [--force] [--plain]
+
+Answer a few questions and write frostroot.toml in the current directory.
+
+`
 
 func (a *App) runInit(args []string) int {
-	flags := a.newFlagSet("init", "usage: frostroot init [--force]\n\nAsk a few questions and write frostroot.toml in the current directory.\n\n")
+	flags := a.newFlagSet("init", initUsageText)
 	overwrite := flags.Bool("force", false, "overwrite an existing frostroot.toml")
+	plain := flags.Bool("plain", false, "ask line by line instead of showing the full-screen form")
 	if exitCode, stop := a.parseFlags(flags, args); stop {
 		return exitCode
 	}
-
 	recipePath := filepath.Join(a.RecipeDir, recipeFileName)
 	if _, err := os.Stat(recipePath); err == nil && !*overwrite {
-		a.stderrf("frostroot: %s already exists; use --force to overwrite it\n", recipePath)
+		a.stderrf("frostroot: %s already exists; use --force to overwrite it, or frostroot edit to change it\n", recipePath)
 		return exitUserError
 	}
-
-	a.stdoutf("Answer a few questions to create frostroot.toml. Press Enter to accept the default in [brackets].\n")
-	answers, err := a.askInitQuestions()
-	if err != nil {
-		a.stderrf("frostroot: %v\n", err)
-		return exitUserError
-	}
-
-	var problems []string
-	chosenPresetPackages, presetExists := presetPackages[answers.presetName]
-	if !presetExists {
-		problems = append(problems, fmt.Sprintf("unknown preset %q (choose one of: %s)", answers.presetName, strings.Join(presetNames, ", ")))
-	}
-	imageRecipe := recipe.Recipe{
-		Image:    recipe.Image{Name: answers.imageName, Release: answers.release, Arch: distro.SupportedArch},
-		User:     recipe.User{Name: answers.userName, Sudo: true},
-		WSL:      recipe.WSL{Systemd: true, DefaultUser: answers.userName},
-		Locale:   recipe.Locale{Lang: "en_US.UTF-8", Timezone: answers.timezone},
-		Packages: recipe.Packages{Include: combinePackages(chosenPresetPackages, answers.extraPackages)},
-	}
-	problems = append(problems, recipe.Validate(imageRecipe)...)
-	if len(problems) > 0 {
-		for _, problem := range problems {
-			a.stderrf("frostroot init: %s\n", problem)
-		}
-		a.stderrf("frostroot init: nothing written\n")
-		return exitUserError
-	}
-
-	if err := writeRecipe(recipePath, imageRecipe); err != nil {
-		a.stderrf("frostroot: %v\n", err)
-		return exitUserError
-	}
-	a.stdoutf("\nWrote %s. Next: frostroot validate, then frostroot build.\n", recipeFileName)
-	if answers.presetName == "python-lab" && answers.release == "24.04" {
-		a.stdoutf("Note: Ubuntu 24.04 enforces PEP 668, so pip install outside a virtual environment fails by design. Use: python3 -m venv .venv\n")
-	}
-	return exitSuccess
-}
-
-// askInitQuestions asks init's questions in order, trimming each answer.
-func (a *App) askInitQuestions() (initAnswers, error) {
-	var answers initAnswers
-	questions := []struct {
-		text          string
-		defaultAnswer string
-		answer        *string
-	}{
-		{"Image name", "lab", &answers.imageName},
-		{"Ubuntu release (" + strings.Join(distro.SupportedVersions(), ", ") + ")", "24.04", &answers.release},
-		{"User name", "student", &answers.userName},
-		{"Timezone, e.g. UTC or Europe/Istanbul", "UTC", &answers.timezone},
-		{"Package preset (" + strings.Join(presetNames, ", ") + ")", "none", &answers.presetName},
-		{"Extra packages, separated by spaces or commas", "", &answers.extraPackages},
-	}
-	for _, question := range questions {
-		answer, err := a.Prompt.Ask(question.text, question.defaultAnswer)
-		if err != nil {
-			return initAnswers{}, err
-		}
-		*question.answer = strings.TrimSpace(answer)
-	}
-	return answers, nil
-}
-
-// combinePackages returns the preset's packages followed by the extras,
-// keeping the first occurrence of each name. Extras may be separated by
-// commas or whitespace: package names contain neither, and people type them
-// as they would for apt install.
-func combinePackages(presetPackageNames []string, extraPackages string) []string {
-	combined := []string{}
-	alreadyListed := map[string]bool{}
-	addOnce := func(packageName string) {
-		if packageName != "" && !alreadyListed[packageName] {
-			alreadyListed[packageName] = true
-			combined = append(combined, packageName)
-		}
-	}
-	for _, packageName := range presetPackageNames {
-		addOnce(packageName)
-	}
-	isSeparator := func(character rune) bool { return character == ',' || unicode.IsSpace(character) }
-	for _, packageName := range strings.FieldsFunc(extraPackages, isSeparator) {
-		addOnce(packageName)
-	}
-	return combined
+	return a.runRecipeForm("init", form.Defaults(a.host()), recipePath, *plain)
 }
 
 // writeRecipe renders imageRecipe to a temporary file next to recipePath,

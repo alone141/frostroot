@@ -45,6 +45,11 @@ type App struct {
 	// WSLPath converts a Linux path to its Windows form for the import hint.
 	// An error only means that the hint is not printed.
 	WSLPath func(linuxPath string) (string, error)
+	// IsTerminal reports whether Stdin or Stdout is a terminal, which decides
+	// between the full-screen and the plain interface. Tests set it.
+	IsTerminal func(stream any) bool
+	// ReadFile reads host files the form consults, such as the timezone list.
+	ReadFile func(name string) ([]byte, error)
 }
 
 // New returns an App wired to the real process.
@@ -80,8 +85,14 @@ func (a *App) withDefaults() *App {
 	if a.WSLPath == nil {
 		a.WSLPath = windowsPathOf
 	}
+	if a.IsTerminal == nil {
+		a.IsTerminal = isCharacterDevice
+	}
+	if a.ReadFile == nil {
+		a.ReadFile = os.ReadFile
+	}
 	if a.Builder == nil {
-		a.Builder = &builder.Builder{Bootstrapper: &builder.Mmdebstrap{ProgressOutput: a.Stderr}}
+		a.Builder = &builder.Builder{Bootstrapper: &builder.Mmdebstrap{}}
 	}
 	return a
 }
@@ -89,11 +100,14 @@ func (a *App) withDefaults() *App {
 const usageText = `usage: frostroot <command> [flags]
 
 Commands:
-  init       ask a few questions and write frostroot.toml
+  init       answer a few questions and write frostroot.toml
+  edit       change an existing frostroot.toml with the same questions
   validate   check frostroot.toml (no network, no root)
   build      build frostroot.lock and dist/<name>-ubuntu-<release>-amd64.tar.gz
 
-Run "frostroot <command> -h" for a command's flags.
+init, edit and build show a full-screen interface in a terminal and plain
+lines otherwise; --plain asks for the lines. Run "frostroot <command> -h" for
+a command's flags.
 `
 
 // Run executes the command named by args[0] and returns the process exit
@@ -108,6 +122,8 @@ func (a *App) Run(args []string) int {
 	switch command {
 	case "init":
 		return a.runInit(commandArgs)
+	case "edit":
+		return a.runEdit(commandArgs)
 	case "validate":
 		return a.runValidate(commandArgs)
 	case "build":

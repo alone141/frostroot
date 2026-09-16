@@ -18,7 +18,7 @@ import (
 )
 
 // Version is the frostroot version recorded in every lockfile.
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 // UbuntuArchiveKeyring is the keyring that verifies the Ubuntu archive's
 // Release files.
@@ -50,6 +50,7 @@ type BootstrapSpec struct {
 	Arch              string   // CPU architecture, such as "amd64"
 	InstallRecommends bool     // install Recommends, as apt does by default
 	KeyringPath       string   // keyring that verifies the archive
+	Progress          Progress // receives phases and output lines; nil discards them
 }
 
 // Bootstrapper builds an image tarball. Implementations write the tarball to
@@ -72,6 +73,7 @@ type Options struct {
 	KeepWork  bool                // keep the work directory after a successful build
 	GOOS      string              // operating system; defaults to runtime.GOOS
 	Getenv    func(string) string // environment lookup; defaults to os.Getenv
+	Progress  Progress            // receives the build's phases and output; nil discards them
 }
 
 // Result describes a finished or failed build.
@@ -118,6 +120,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if err != nil {
 		return Result{}, err
 	}
+	progress := progressOrDiscard(options.Progress)
 	bootstrapSpec := BootstrapSpec{
 		Suite:             release.Suite,
 		SourceLines:       release.SourceLines(options.MirrorURL),
@@ -126,6 +129,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		InstallRecommends: true,
 		KeyringPath:       UbuntuArchiveKeyring,
 		WorkDir:           workRoot,
+		Progress:          progress,
 	}
 	if preflighter, ok := b.Bootstrapper.(Preflighter); ok {
 		if err := preflighter.Preflight(bootstrapSpec); err != nil {
@@ -168,6 +172,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		return failBuild(err)
 	}
 
+	progress.Report(ProgressEvent{Phase: PhaseWriteLock, Kind: EventPhaseStarted})
 	installedPackages, err := readDpkgStatus(stage.DpkgStatusPath)
 	if err != nil {
 		return failBuild(err)
@@ -192,14 +197,19 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if err != nil {
 		return failBuild(err)
 	}
+	progress.Report(ProgressEvent{Phase: PhaseWriteLock, Kind: EventPhaseFinished})
 
 	// mmdebstrap creates its output file before it starts, so existence alone
 	// proves nothing.
 	if builtTarball, err := os.Stat(bootstrapSpec.TarballPath); err != nil || builtTarball.Size() == 0 {
 		return failBuild(fmt.Errorf("bootstrap reported success but left no tarball at %s", bootstrapSpec.TarballPath))
 	}
+	progress.Report(ProgressEvent{Phase: PhasePlaceTarball, Kind: EventPhaseStarted})
 	tarballPath := filepath.Join(options.RecipeDir, export.TarballRelPath(imageRecipe.Image.Name, imageRecipe.Image.Release, imageRecipe.Image.Arch))
-	if err := export.Place(bootstrapSpec.TarballPath, tarballPath); err != nil {
+	reportCopied := func(copiedBytes, totalBytes int64) {
+		progress.Report(ProgressEvent{Phase: PhasePlaceTarball, Kind: EventProgress, Done: copiedBytes, Total: totalBytes, Unit: UnitBytes})
+	}
+	if err := export.Place(bootstrapSpec.TarballPath, tarballPath, reportCopied); err != nil {
 		return failBuild(fmt.Errorf("placing tarball: %w", err))
 	}
 	// The lock goes into place only after the tarball has landed, so a lock
@@ -208,6 +218,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if err := os.Rename(temporaryLockPath, lockPath); err != nil {
 		return failBuild(fmt.Errorf("placing lock: %w", err))
 	}
+	progress.Report(ProgressEvent{Phase: PhasePlaceTarball, Kind: EventPhaseFinished})
 
 	result.LockPath = lockPath
 	result.TarballPath = tarballPath
