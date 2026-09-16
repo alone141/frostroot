@@ -169,17 +169,17 @@ func checkKeyring(path string) error {
 	return nil
 }
 
-// execRun runs a command. Cancelling ctx sends SIGINT, exactly like Ctrl-C in
-// a terminal, and then waits for the command to exit however long that takes.
-// Never SIGKILL mmdebstrap: in root mode it has proc, sys and dev mounted inside
-// the chroot and needs to unmount them. That is also why WaitDelay is unset:
-// when it expires Go kills the child.
+// execRun runs a command. Cancelling ctx interrupts it like Ctrl-C in a
+// terminal (see interruptOnCancel) and then waits for it to exit however long
+// that takes. Never SIGKILL mmdebstrap: in root mode it has proc, sys and dev
+// mounted inside the chroot and needs to unmount them. That is also why
+// WaitDelay is unset: when it expires Go kills the child.
 func execRun(ctx context.Context, name string, args, env []string, stdout, stderr io.Writer) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+	interruptOnCancel(cmd)
 	return cmd.Run()
 }
 

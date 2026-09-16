@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -321,21 +323,27 @@ func (s *syncBuffer) String() string {
 	return s.buf.String()
 }
 
-func TestExecRunInterruptsWithSIGINT(t *testing.T) {
-	// Never SIGKILL mmdebstrap: in root mode it has proc, sys and dev mounted
-	// inside the chroot and must be allowed to clean up. Prove cancellation
-	// delivers a catchable SIGINT and waits for the child to finish.
+func TestExecRunInterruptsTheWholeProcessGroup(t *testing.T) {
+	// mmdebstrap's main process reacts to SIGINT by waiting for its worker,
+	// counting on a terminal to deliver Ctrl-C to the whole process group. So
+	// cancelling must signal the group, or a build interrupted with kill,
+	// timeout or a service stop runs to the end regardless. And never SIGKILL:
+	// in root mode mmdebstrap has proc, sys and dev mounted inside the chroot.
+	// TestHelperProcess has the same shape: a main that notes the signal and
+	// waits, and a worker that cleans up. (Not a shell script: sh starts
+	// background jobs with SIGINT ignored, which no trap can undo.)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var out syncBuffer
-	script := `trap 'sleep 0.3; echo "cleaned up after INT"; exit 3' INT; echo ready; while :; do sleep 0.05; done`
 	done := make(chan error, 1)
-	go func() { done <- execRun(ctx, "sh", []string{"-c", script}, nil, &out, &out) }()
+	go func() {
+		done <- execRun(ctx, os.Args[0], []string{"-test.run=^TestHelperProcess$"}, []string{"FROSTROOT_HELPER=main"}, &out, &out)
+	}()
 
 	deadline := time.Now().Add(10 * time.Second)
 	for !strings.Contains(out.String(), "ready") {
 		if time.Now().After(deadline) {
-			t.Fatal("child never started")
+			t.Fatal("worker never started")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -343,13 +351,49 @@ func TestExecRunInterruptsWithSIGINT(t *testing.T) {
 	select {
 	case err := <-done:
 		if err == nil {
-			t.Fatal("expected the child's non-zero exit")
+			t.Fatal("expected a non-zero exit")
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("child did not exit after SIGINT")
+		t.Fatalf("still running 10s after cancel; only the main process was signalled: %q", out.String())
 	}
-	if !strings.Contains(out.String(), "cleaned up after INT") {
-		t.Fatalf("child was not allowed to handle SIGINT: %q", out.String())
+	for _, want := range []string{"main got INT", "worker cleaned up", "main done"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q; every process must get a catchable SIGINT: %q", want, out.String())
+		}
+	}
+}
+
+// TestHelperProcess is not a test: TestExecRunInterruptsTheWholeProcessGroup
+// runs the test binary as these two processes.
+func TestHelperProcess(t *testing.T) {
+	sigs := make(chan os.Signal, 1)
+	switch os.Getenv("FROSTROOT_HELPER") {
+	case "main":
+		signal.Notify(sigs, os.Interrupt)
+		worker := exec.Command(os.Args[0], "-test.run=^TestHelperProcess$")
+		worker.Env = append(os.Environ(), "FROSTROOT_HELPER=worker")
+		worker.Stdout, worker.Stderr = os.Stdout, os.Stderr
+		if err := worker.Start(); err != nil {
+			os.Exit(10)
+		}
+		exited := make(chan struct{})
+		go func() { worker.Wait(); close(exited) }()
+		for {
+			select {
+			case <-sigs:
+				fmt.Println("main got INT, waiting for worker")
+			case <-exited:
+				fmt.Println("main done")
+				os.Exit(1)
+			}
+		}
+	case "worker":
+		signal.Notify(sigs, os.Interrupt)
+		fmt.Println("ready")
+		<-sigs
+		time.Sleep(200 * time.Millisecond)
+		fmt.Println("worker cleaned up")
+		os.Exit(3)
 	}
 }
 
