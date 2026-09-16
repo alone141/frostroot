@@ -4,6 +4,25 @@ Date: 2026-09-17
 Status: approved by the project owner in conversation ("first let's do capture, then vendoring"); implementation on branch `feature/capture`
 Extends: [`2026-09-14-frostroot-design.md`](2026-09-14-frostroot-design.md) (the extension point "Capturing an existing machine") and [`2026-09-17-frostroot-tui.md`](2026-09-17-frostroot-tui.md) (the form it reuses)
 
+## Verification (2026-09-17, build host)
+
+- `gofmt`, `go vet` with and without the `integration` tag, `go test -race
+  ./...`, `GOOS=windows go build ./...` and `golangci-lint`: clean. The
+  fixture tests cover a WSL-like machine (PPA package, pip and npm installs,
+  an edited conffile, a hand-written unit, a cron job, a second user, a
+  docker group, dotfiles with `.ssh`), a bare server without `wsl.conf` or
+  `extended_states`, and the four refusals; one fixture makes the secrets
+  unreadable to prove they are never opened.
+- `frostroot capture --plain` on the build host itself, accepting every
+  default: 582 packages installed, 5 asked for (`curl git golang-1.24
+  libattr1 mmdebstrap`), which is `apt-mark showmanual` minus the base,
+  `ca-certificates` (an essential) and the two metapackages. User `builder`
+  with no sudo, `C.UTF-8`, `Europe/Istanbul`, systemd on. The report lists
+  the one hand-added file in `/etc` (`/etc/profile.d/go.sh`), the home's
+  eleven entries, and "nothing found" for the other eight areas.
+- `frostroot build` from that recipe, unchanged: a 308 MB image with 351
+  packages and `requested` equal to the five names, in 236 seconds.
+
 ## Why
 
 Most people do not start from a blank recipe. They start from a machine that
