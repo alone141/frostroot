@@ -67,6 +67,9 @@ func (a *App) withDefaults() *App {
 	if a.Prompt == nil {
 		a.Prompt = newLinePrompt(a.Stdin, a.Stdout)
 	}
+	if a.WSLPath == nil {
+		a.WSLPath = wslpath
+	}
 	return a
 }
 
@@ -158,9 +161,4 @@ func (a *App) cmdValidate(args []string) int {
 	fmt.Fprintf(a.Stdout, "%s: ok (%s, Ubuntu %s %s, %d packages requested)\n",
 		recipeFile, r.Image.Name, r.Image.Release, r.Image.Arch, len(r.Packages.Include))
 	return 0
-}
-
-func (a *App) cmdBuild(args []string) int {
-	fmt.Fprintln(a.Stderr, "frostroot build: not implemented")
-	return 1
 }

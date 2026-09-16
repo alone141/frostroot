@@ -1,6 +1,7 @@
 package builder
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -52,6 +53,9 @@ func TestWorkRootRefusesMnt(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "XDG_CACHE_HOME") {
 			t.Fatalf("%s: message should say how to fix it: %v", cache, err)
+		}
+		if !errors.Is(err, ErrBadWorkRoot) {
+			t.Fatalf("%s: want ErrBadWorkRoot so the CLI can call it a user error: %v", cache, err)
 		}
 	}
 }
