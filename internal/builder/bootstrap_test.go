@@ -108,6 +108,7 @@ func TestMmdebstrapCommandLine(t *testing.T) {
 		KeyringPath:       "/k.gpg",
 	})
 	wantArgs := []string{
+		"--verbose",
 		"--mode=unshare",
 		"--variant=important",
 		"--architectures=amd64",
@@ -174,8 +175,8 @@ func TestMmdebstrapMode(t *testing.T) {
 	for _, testCase := range testCases {
 		bootstrapper := Mmdebstrap{Mode: testCase.configuredMode, CurrentUID: uidFunc(testCase.currentUID)}
 		args, _ := bootstrapper.commandLine(BootstrapSpec{Suite: "noble", TarballPath: "/t", WorkDir: "/w", Arch: "amd64"})
-		if args[0] != testCase.wantModeArg {
-			t.Errorf("Mode %q, uid %d: first argument = %q, want %q", testCase.configuredMode, testCase.currentUID, args[0], testCase.wantModeArg)
+		if !slices.Contains(args, testCase.wantModeArg) {
+			t.Errorf("Mode %q, uid %d: arguments %q lack %q", testCase.configuredMode, testCase.currentUID, args, testCase.wantModeArg)
 		}
 	}
 }
@@ -242,12 +243,12 @@ func TestCheckReachableFromUserNamespace(t *testing.T) {
 	}
 }
 
-func TestMmdebstrapRunStreamsProgressAndKeepsTail(t *testing.T) {
-	var progressOutput bytes.Buffer
+func TestMmdebstrapRunLogsParsesAndKeepsTail(t *testing.T) {
+	recorder := &recordingProgress{}
 	bootstrapper := Mmdebstrap{
-		CurrentUID:     uidFunc(1000),
-		ProgressOutput: &progressOutput,
+		CurrentUID: uidFunc(1000),
 		RunCommand: func(_ context.Context, _ string, _, _ []string, _, stderr io.Writer) error {
+			_, _ = fmt.Fprintln(stderr, "I: running apt-get update...")
 			for lineNumber := range 400 {
 				_, _ = fmt.Fprintf(stderr, "I: line %03d of chatter that fills the buffer\n", lineNumber)
 			}
@@ -255,9 +256,24 @@ func TestMmdebstrapRunStreamsProgressAndKeepsTail(t *testing.T) {
 			return errors.New("exit status 1")
 		},
 	}
-	err := bootstrapper.Run(context.Background(), runnableSpec(t))
+	spec := runnableSpec(t)
+	spec.Progress = recorder
+	err := bootstrapper.Run(context.Background(), spec)
 	if err == nil {
 		t.Fatal("Run succeeded, want the command's failure")
+	}
+	logContent, readErr := os.ReadFile(filepath.Join(spec.WorkDir, LogFileName))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.HasPrefix(string(logContent), "I: running apt-get update...\n") || !strings.HasSuffix(string(logContent), "nosuchpkg\n") {
+		t.Errorf("the log file must hold the whole output; got %d bytes starting %q", len(logContent), logContent[:min(40, len(logContent))])
+	}
+	if started := recorder.ofKind(EventPhaseStarted); len(started) != 1 || started[0].Phase != PhaseUpdateIndex {
+		t.Errorf("progress events = %+v, want the update phase started", started)
+	}
+	if lines := recorder.ofKind(EventLogLine); len(lines) != 402 {
+		t.Errorf("log line events = %d, want every line (402)", len(lines))
 	}
 	message := err.Error()
 	if !strings.Contains(message, "nosuchpkg") || !strings.Contains(message, "exit status 1") {
@@ -268,9 +284,6 @@ func TestMmdebstrapRunStreamsProgressAndKeepsTail(t *testing.T) {
 	}
 	if strings.Contains(message, "line 000") {
 		t.Error("the tail should drop the oldest output")
-	}
-	if !strings.Contains(progressOutput.String(), "line 000") || !strings.Contains(progressOutput.String(), "nosuchpkg") {
-		t.Error("all output must be streamed as it happens")
 	}
 }
 

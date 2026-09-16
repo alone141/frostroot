@@ -81,7 +81,7 @@ func (a *App) withDefaults() *App {
 		a.WSLPath = windowsPathOf
 	}
 	if a.Builder == nil {
-		a.Builder = &builder.Builder{Bootstrapper: &builder.Mmdebstrap{ProgressOutput: a.Stderr}}
+		a.Builder = &builder.Builder{Bootstrapper: &builder.Mmdebstrap{}}
 	}
 	return a
 }

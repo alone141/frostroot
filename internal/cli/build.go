@@ -96,6 +96,7 @@ func (a *App) runBuild(args []string) int {
 		KeepWork:  *keepWork,
 		GOOS:      a.GOOS,
 		Getenv:    a.Getenv,
+		Progress:  newPlainProgress(a.Stderr),
 	})
 	interrupted := ctx.Err() != nil
 	buildFinished.Store(true)

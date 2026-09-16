@@ -20,16 +20,19 @@ type CommandRunner func(ctx context.Context, program string, args, environment [
 // from inside its user namespace, which is what keeps ownership, symlink
 // targets, hardlinks and file capabilities correct.
 type Mmdebstrap struct {
-	RunCommand     CommandRunner                // defaults to runInterruptibly
-	Mode           string                       // "unshare", "root", or "" to choose from the current uid
-	CurrentUID     func() int                   // defaults to os.Getuid
-	ProgressOutput io.Writer                    // receives mmdebstrap's output as it runs; nil discards it
-	LookPath       func(string) (string, error) // defaults to exec.LookPath
+	RunCommand CommandRunner                // defaults to runInterruptibly
+	Mode       string                       // "unshare", "root", or "" to choose from the current uid
+	CurrentUID func() int                   // defaults to os.Getuid
+	LookPath   func(string) (string, error) // defaults to exec.LookPath
 }
 
 // errorTailBytes is how much of mmdebstrap's output is repeated in a build
 // error.
 const errorTailBytes = 4 << 10
+
+// LogFileName is the file in the work directory that receives mmdebstrap's
+// complete output.
+const LogFileName = "mmdebstrap.log"
 
 // Preflight checks the host before any work is done. spec.WorkDir is the work
 // root the build directory will be created in; it need not exist yet.
@@ -50,11 +53,12 @@ func (m *Mmdebstrap) Preflight(spec BootstrapSpec) error {
 	return nil
 }
 
-// Run bootstraps the image described by spec. Output is streamed to
-// m.ProgressOutput as it happens, because a silent five-minute build looks
-// hung, and mmdebstrap's own messages are the best explanation of a failure
-// such as a missing user namespace or an unknown package. The last lines are
-// repeated in the error.
+// Run bootstraps the image described by spec. mmdebstrap's output goes three
+// ways as it happens: parsed into phases and progress for spec.Progress,
+// written whole to LogFileName in the work directory, and kept in a tail that
+// is repeated in the error, because mmdebstrap's own messages are the best
+// explanation of a failure such as a missing user namespace or an unknown
+// package.
 func (m *Mmdebstrap) Run(ctx context.Context, spec BootstrapSpec) error {
 	if err := checkKeyringExists(keyringPath(spec)); err != nil {
 		return err
@@ -78,18 +82,24 @@ func (m *Mmdebstrap) Run(ctx context.Context, spec BootstrapSpec) error {
 	if runCommand == nil {
 		runCommand = runInterruptibly
 	}
-	progressOutput := m.ProgressOutput
-	if progressOutput == nil {
-		progressOutput = io.Discard
+	logFile, err := os.OpenFile(filepath.Join(spec.WorkDir, LogFileName), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("creating the mmdebstrap log: %w", err)
 	}
+	parser := newProgressParser(spec.Progress)
 	outputTail := newTailBuffer(errorTailBytes)
-	combinedOutput := io.MultiWriter(progressOutput, outputTail)
+	combinedOutput := io.MultiWriter(logFile, parser, outputTail)
 	args, environment := m.commandLine(spec)
-	if err := runCommand(ctx, "mmdebstrap", args, environment, combinedOutput, combinedOutput); err != nil {
+	runErr := runCommand(ctx, "mmdebstrap", args, environment, combinedOutput, combinedOutput)
+	parser.flush()
+	if err := logFile.Close(); err != nil && runErr == nil {
+		return fmt.Errorf("writing the mmdebstrap log: %w", err)
+	}
+	if runErr != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("mmdebstrap interrupted: %w", ctx.Err())
 		}
-		return fmt.Errorf("mmdebstrap failed: %w\n--- last lines of mmdebstrap output ---\n%s", err, strings.TrimRight(outputTail.String(), "\n"))
+		return fmt.Errorf("mmdebstrap failed: %w\n--- last lines of mmdebstrap output ---\n%s", runErr, strings.TrimRight(outputTail.String(), "\n"))
 	}
 	return nil
 }
@@ -114,6 +124,10 @@ func (m *Mmdebstrap) bootstrapMode() string {
 // add to its environment.
 func (m *Mmdebstrap) commandLine(spec BootstrapSpec) (args, environment []string) {
 	args = []string{
+		// Without a terminal mmdebstrap prints only its phase messages;
+		// --verbose adds apt's and dpkg's output, which is what the progress
+		// parser measures.
+		"--verbose",
 		"--mode=" + m.bootstrapMode(),
 		"--variant=important",
 		"--architectures=" + spec.Arch,
