@@ -96,8 +96,8 @@ One form, several pages. Enter accepts a field and moves on; Shift-Tab goes
 back; Ctrl-C cancels. Esc is not a cancel key: in a filtering list it clears
 the filter, and a stray Esc must never throw away five pages of answers.
 Selects are chosen with the arrow keys; long selects filter as the user types
-(the timezone list), so choosing `Europe/Istanbul` is typing `ist`, Enter to
-close the filter and Enter to accept. Every field validates on the spot with the same
+(the timezone list), so choosing `Europe/Istanbul` is typing `ist` and
+pressing Enter. Every field validates on the spot with the same
 rules as `recipe.Validate`, so the form cannot produce a recipe that
 `validate` rejects.
 

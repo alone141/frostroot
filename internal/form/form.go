@@ -116,8 +116,11 @@ func Fields(host Host) []Field {
 		},
 		{
 			Key: KeyTimezone, Page: PageSystem, Kind: KindSelect, Filterable: true,
-			Title:       "Timezone",
-			Description: "Type to filter, for example \"ist\" for Europe/Istanbul",
+			Title: "Timezone",
+			// The full-screen list starts in filter mode, where the filter
+			// box takes the title's place, so the description names the
+			// question too.
+			Description: "Timezone: type to filter, for example \"ist\" for Europe/Istanbul, then Enter",
 			Options:     timezoneOptions(host),
 		},
 		{
