@@ -12,6 +12,24 @@ Supersedes `2026-09-14-frostroot.md`. Revised after
 
 **Tech Stack:** Go (current stable, ≥1.23), stdlib `flag`/`os/exec`/`context`/`os/signal`, `github.com/pelletier/go-toml/v2`. Host tools (Linux build only): `mmdebstrap`. No `dpkg-query` dependency.
 
+## Amendments from the Task 0 spike (2026-09-16)
+
+Task 0 ran, including `wsl --import` and a real login; results are in
+`reviews/2026-09-15-frostroot-feasibility.md`. The gate passed. Two facts below
+were wrong, and the listings in this document have been corrected where they
+encoded them:
+
+1. **20.04 is on `http://archive.ubuntu.com/ubuntu`, not old-releases.** All
+   three focal pockets 404 on old-releases; LTS releases under ESM stay on the
+   archive. `EOL` stays true. The warning's reason is that security fixes after
+   May 2025 go to Ubuntu Pro, not that the mirror is frozen.
+2. **`RenderWSLConf` also writes `[time]\nuseWindowsTimezone=false`.** Without
+   it, WSL rewrites `/etc/localtime` to the Windows zone at every start and
+   `[locale].timezone` does nothing. Verified with a controlled restart.
+
+The plan's one open question is settled with **no** masking hook:
+`systemd-resolved` coexists with WSL's generated `resolv.conf`.
+
 ## What changed from the 2026-09-14 plan, and why
 
 Read this before executing. Four defects in the previous plan would have shipped
@@ -47,9 +65,10 @@ Also fixed, from the same reviews:
 - **Windows test constraint dropped.** The spec never asked for it — it says the
   CLI is Linux and Windows users run it inside WSL. It only bought `0440`-mode
   cleanup workarounds and symlink-test skips.
-- **20.04 ships a loud warning.** old-releases carries focal frozen at EOL, so
-  its CVEs are unfixable without Ubuntu Pro. Freezing an old distro is the point;
-  handing a classroom an unpatchable image by surprise is not.
+- **20.04 ships a loud warning.** Standard support ended in May 2025; security
+  fixes since then go to Ubuntu Pro, not `focal-security`, so its CVEs are
+  unfixable without Pro. Freezing an old distro is the point; handing a
+  classroom an unpatchable image by surprise is not.
 - **`--keep-rootfs` renamed `--keep-work`.** Under the new design there is no
   rootfs directory to keep; the work directory (tarball, dpkg status, mmdebstrap
   log) is what is useful.
@@ -57,7 +76,7 @@ Also fixed, from the same reviews:
 ## Global Constraints
 
 - Language is Go; module path is `frostroot`; binary name is `frostroot`.
-- v1 distros: Ubuntu 20.04 (`focal`, base `http://old-releases.ubuntu.com/ubuntu`), 22.04 (`jammy`) and 24.04 (`noble`) (base `http://archive.ubuntu.com/ubuntu`); arch `amd64` only; components `main universe`.
+- v1 distros: Ubuntu 20.04 (`focal`, EOL), 22.04 (`jammy`) and 24.04 (`noble`), all with base `http://archive.ubuntu.com/ubuntu` (spike: focal is not on old-releases); arch `amd64` only; components `main universe`.
 - Every build uses three pockets: `<suite>`, `<suite>-updates`, `<suite>-security`, all against one base URL. `--mirror` replaces the base URL for all three.
 - v1 packages: apt names only. No PPAs, no pip/npm/cargo, no Fedora, no `.deb` vendoring, no `build --offline`.
 - Recipe is source of truth (`frostroot.toml`); versions live only in `frostroot.lock`. `build` never prompts.
@@ -119,7 +138,7 @@ sudo apt install mmdebstrap
 That pulls `uidmap`, `fakeroot`, `fakechroot` and `arch-test`. Confirm
 `unshare -Ur true` succeeds and `/etc/subuid` has a range for your user.
 
-- [ ] **Step 1: One real build, by hand**
+- [x] **Step 1: One real build, by hand**
 
 Run as your normal (non-root) user, not under `sudo`, so you exercise the
 `--mode=unshare` path real users will hit. Put the work directory on a native
@@ -157,7 +176,7 @@ TMPDIR="$W/tmp" mmdebstrap \
 Record the wall-clock time and the tarball size. You will want them for the
 README and for judging whether a classroom can rebuild on demand.
 
-- [ ] **Step 2: Check the tarball before importing anything**
+- [x] **Step 2: Check the tarball before importing anything**
 
 These four checks are the ones that catch defects 1, 2 and 4. Do not skip them
 because the build exited 0.
@@ -176,7 +195,7 @@ grep -A2 '^Package: git$' "$W/dpkg-status" | grep ^Version:
 If symlink targets are empty or ownership is in the 100000+ range, **stop** —
 the design assumption is wrong and this plan needs revising before any Go.
 
-- [ ] **Step 3: Import on Windows and actually log in**
+- [x] **Step 3: Import on Windows and actually log in**
 
 ```powershell
 wsl --import spike C:\wsl\spike \\wsl$\Ubuntu\var\tmp\frostroot-spike\image.tar.gz
@@ -197,7 +216,7 @@ locale                      # LANG=en_US.UTF-8, no warnings
 date                        # correct timezone
 ```
 
-- [ ] **Step 4: Write down what you learned**
+- [x] **Step 4: Write down what you learned**
 
 Append a short "spike results" section to
 `reviews/2026-09-15-frostroot-feasibility.md`: build time, tarball size, whether
@@ -244,7 +263,7 @@ import (
 	"testing"
 )
 
-func TestLookupFocalOldReleases(t *testing.T) {
+func TestLookupFocalIsEOLOnArchive(t *testing.T) {
 	info, err := Lookup("20.04", "amd64")
 	if err != nil {
 		t.Fatal(err)
@@ -252,7 +271,8 @@ func TestLookupFocalOldReleases(t *testing.T) {
 	if info.Suite != "focal" {
 		t.Fatalf("suite: got %q", info.Suite)
 	}
-	if info.Base != "http://old-releases.ubuntu.com/ubuntu" {
+	// Spike 2026-09-16: every focal pocket 404s on old-releases.
+	if info.Base != "http://archive.ubuntu.com/ubuntu" {
 		t.Fatalf("base: got %q", info.Base)
 	}
 	if !info.EOL {
@@ -390,7 +410,7 @@ type Info struct {
 }
 
 var table = map[string]Info{
-	"20.04": {Suite: "focal", Base: "http://old-releases.ubuntu.com/ubuntu", Components: []string{"main", "universe"}, EOL: true},
+	"20.04": {Suite: "focal", Base: "http://archive.ubuntu.com/ubuntu", Components: []string{"main", "universe"}, EOL: true},
 	"22.04": {Suite: "jammy", Base: "http://archive.ubuntu.com/ubuntu", Components: []string{"main", "universe"}},
 	"24.04": {Suite: "noble", Base: "http://archive.ubuntu.com/ubuntu", Components: []string{"main", "universe"}},
 }
@@ -427,9 +447,10 @@ func (i Info) Sources(baseOverride string) []string {
 func KnownReleases() []string { return []string{"20.04", "22.04", "24.04"} }
 ```
 
-Note on 20.04: old-releases carries focal's `-updates` and `-security` pockets
-frozen at end of standard support, so the three-line shape is still correct
-there — it just cannot receive anything new. That is what `EOL` warns about.
+Note on 20.04: the spike found focal still on the archive (every pocket 404s on
+old-releases), so the three-line shape is unchanged. Standard support ended in
+May 2025 and fixes since go to Ubuntu Pro, not `focal-security`. That is what
+`EOL` warns about.
 
 - [ ] **Step 4: Run tests and make sure they pass**
 
@@ -1306,6 +1327,11 @@ func TestRenderWSLConf(t *testing.T) {
 	if !strings.Contains(body, "[user]") || !strings.Contains(body, "default=student") {
 		t.Fatalf("wsl.conf: %s", body)
 	}
+	// Spike 2026-09-16: without this WSL replaces the recipe's timezone with
+	// the Windows one at every start.
+	if !strings.Contains(body, "[time]") || !strings.Contains(body, "useWindowsTimezone=false") {
+		t.Fatalf("wsl.conf must pin the recipe timezone: %s", body)
+	}
 }
 
 func TestRenderWSLConfWithoutSystemd(t *testing.T) {
@@ -1501,6 +1527,8 @@ func RenderWSLConf(r recipe.Recipe) string {
 		b.WriteString("[boot]\nsystemd=true\n\n")
 	}
 	fmt.Fprintf(&b, "[user]\ndefault=%s\n", recipe.DefaultUser(r))
+	// WSL otherwise rewrites /etc/localtime to the Windows zone at every start.
+	b.WriteString("\n[time]\nuseWindowsTimezone=false\n")
 	return b.String()
 }
 
@@ -1831,7 +1859,7 @@ func TestBuildNotLinux(t *testing.T) {
 	}
 }
 
-func TestBuildFocalUsesOldReleases(t *testing.T) {
+func TestBuildFocalUsesArchivePockets(t *testing.T) {
 	dir := t.TempDir()
 	boot := &fakeBoot{}
 	b := Builder{Bootstrap: boot}
@@ -1843,9 +1871,10 @@ func TestBuildFocalUsesOldReleases(t *testing.T) {
 	if boot.spec.Suite != "focal" {
 		t.Fatalf("suite %q", boot.spec.Suite)
 	}
+	// Spike 2026-09-16: focal is not on old-releases; it 404s there.
 	for _, line := range boot.spec.Sources {
-		if !strings.Contains(line, "old-releases.ubuntu.com") {
-			t.Fatalf("focal must use old-releases: %q", line)
+		if !strings.Contains(line, "archive.ubuntu.com") {
+			t.Fatalf("focal must use the archive: %q", line)
 		}
 	}
 }
@@ -2393,7 +2422,7 @@ Three additions the previous plan lacked:
   removed, the work directory is kept — same as any other failure.
 - **The 20.04 warning.** `distro.Info.EOL` is true for focal. Print to stderr
   before building: the image will contain packages with known unfixed CVEs,
-  because old-releases is frozen at end of standard support and security fixes
+  because standard support ended in May 2025 and security fixes since then
   need Ubuntu Pro. Freezing an old distro is the point of the tool; shipping one
   to a classroom without saying so is not.
 - **A pasteable import line under WSL.** If `wslpath` is on PATH, print the
@@ -2951,8 +2980,8 @@ commands; a worked example from `init` to `wsl --import`; and these four notes:
 1. **The tarball is the golden image.** v1 does not rebuild from lock versions;
    a second `build` hits current mirrors and may drift.
 2. **Builds need network; consuming the tarball does not.**
-3. **20.04 images contain packages with known unfixed CVEs.** old-releases is
-   frozen at end of standard support; security fixes need Ubuntu Pro. Use 22.04
+3. **20.04 images contain packages with known unfixed CVEs.** Standard support
+   ended in May 2025; security fixes since then need Ubuntu Pro. Use 22.04
    or 24.04 unless you specifically need focal.
 4. **PEP 668 on 24.04**: `pip install` outside a virtualenv fails by design; use
    `python3 -m venv`.
@@ -2975,7 +3004,7 @@ git commit -m "test: add integration build and rewrite README"
 
 | Spec item | Task |
 |-----------|------|
-| Ubuntu 20.04 old-releases, 22.04/24.04 archive, amd64 | 1, 7 |
+| Ubuntu 20.04 (EOL), 22.04, 24.04 from the archive, amd64 | 1, 7 |
 | Update and security pockets | 1, 7, 11 |
 | `frostroot.toml` parse/validate | 2, 8 |
 | `frostroot.lock` all packages + requested + sources | 3, 5, 7 |

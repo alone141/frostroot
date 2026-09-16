@@ -149,9 +149,9 @@ Ubuntu archive currently holds. Guaranteeing byte-identical rebuilds means
 vendoring the package files, which is the planned next step, not this one. The
 file you hand out is reproducible; the act of building is not, yet.
 
-**20.04 images ship known unfixed CVEs.** Focal is past standard support, so
-`old-releases.ubuntu.com` is frozen at its end-of-life state and security fixes
-require Ubuntu Pro. Pinning an old release is the whole point of the tool, but
+**20.04 images ship known unfixed CVEs.** Focal's standard support ended in May
+2025. Its packages are still on the archive, but security fixes since then go
+to Ubuntu Pro, not to `focal-security`. Pinning an old release is the whole point of the tool, but
 `build` warns you, and you should prefer 22.04 or 24.04 unless you specifically
 need focal.
 

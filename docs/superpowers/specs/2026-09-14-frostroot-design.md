@@ -1,7 +1,7 @@
 # frostroot Design
 
-Date: 2026-09-14, revised 2026-09-15
-Status: approved; revised to match the corrected implementation plan
+Date: 2026-09-14, revised 2026-09-15 and 2026-09-16
+Status: approved; revised to match the corrected implementation plan and the Task 0 spike
 Repo: `frostroot/` (new project, Linux CLI)
 
 This spec is the source of truth for v1. Implement it via
@@ -9,6 +9,17 @@ This spec is the source of truth for v1. Implement it via
 invent extra product scope.
 
 ## Revision history
+
+**2026-09-16.** Revised after the Task 0 spike (results appended to
+[`reviews/2026-09-15-frostroot-feasibility.md`](../reviews/2026-09-15-frostroot-feasibility.md#spike-results-task-0-2026-09-16)).
+A real build was imported into WSL and logged into. The design held; two facts
+did not:
+
+| Was | Now | Why |
+|---|---|---|
+| 20.04 base URL `http://old-releases.ubuntu.com/ubuntu` | `http://archive.ubuntu.com/ubuntu` | Every focal pocket returns 404 on old-releases. LTS releases under ESM stay on the archive. The EOL warning stays: post-May-2025 security fixes go to Ubuntu Pro, not `focal-security` |
+| `wsl.conf` has `[boot]` and `[user]` | adds `[time] useWindowsTimezone=false` | WSL rewrites `/etc/localtime` to the Windows zone at every start unless told not to, so `[locale].timezone` was silently ignored |
+| Open question: does `systemd-resolved` fight WSL? | No masking hook | WSL generated `resolv.conf` and DNS worked with `systemd-resolved` active |
 
 **2026-09-15.** Revised after
 [`reviews/2026-09-14-frostroot-plan-review.md`](../reviews/2026-09-14-frostroot-plan-review.md)
@@ -66,7 +77,7 @@ Do not implement these in v1. The architecture must not block them.
 |---|---|---|
 | Name | `frostroot` | Freeze a root filesystem; not WSL-specific (bare metal later) |
 | Language | Go | Single Linux binary; fits a CLI that orchestrates apt/tar |
-| Engine | mmdebstrap → customize hooks → mmdebstrap writes the tarball | No Docker; works on any Linux; 20.04 via old-releases |
+| Engine | mmdebstrap → customize hooks → mmdebstrap writes the tarball | No Docker; works on any Linux |
 | Who tars | **mmdebstrap, inside the user namespace** | Ownership, symlinks, hardlinks and xattrs are only correct from inside; Go never walks or deletes a rootfs |
 | Distros v1 | Ubuntu 20.04, 22.04, 24.04 amd64 | 20.04 is off standard support; that is the pinning story |
 | Pockets | release, `-updates`, `-security` | A golden image must not ship release-day CVEs |
@@ -87,7 +98,7 @@ On a Linux host with `mmdebstrap` installed (user namespaces or root):
 4. The tarball contains `/etc/wsl.conf` with systemd on and the default user, plus that user's home and passwordless sudo — and systemd is actually installed.
 5. **The tarball is structurally sound**: every symlink carries a non-empty target, ownership is real (no subuid-range uids), and the host's `/etc/resolv.conf` and `/etc/hostname` are absent.
 6. `wsl --import` of that tarball on Windows boots and logs in as that user (manual check; not in default tests).
-7. Ubuntu 20.04 builds against old-releases (or `--mirror`), not archive.ubuntu.com, and `build` warns that its packages carry known unfixed CVEs.
+7. Ubuntu 20.04 builds (against archive.ubuntu.com, or `--mirror`), and `build` warns that its packages carry known unfixed CVEs.
 8. Package versions come from the `-updates`/`-security` pockets, not release day.
 9. `go test ./...` passes offline, without root, without mmdebstrap.
 
@@ -183,6 +194,11 @@ user exists with no sudo. No password field. WSL login uses
 `[wsl].default_user` (defaults to `[user].name`). This is a lab image, not a
 hardened server.
 
+The rendered `/etc/wsl.conf` also carries `[time] useWindowsTimezone=false`.
+WSL's default is to rewrite `/etc/localtime` to the Windows zone every time the
+distro starts, which would silently override `[locale].timezone`. The recipe
+is intent, so the recipe wins.
+
 ### `frostroot.lock` (fact — build written)
 
 ```toml
@@ -262,7 +278,7 @@ one implementation.
 
 | release | suite  | base URL | EOL |
 |---------|--------|----------|-----|
-| 20.04   | focal  | `http://old-releases.ubuntu.com/ubuntu` | yes |
+| 20.04   | focal  | `http://archive.ubuntu.com/ubuntu` | yes |
 | 22.04   | jammy  | `http://archive.ubuntu.com/ubuntu` | no |
 | 24.04   | noble  | `http://archive.ubuntu.com/ubuntu` | no |
 
@@ -270,9 +286,11 @@ Components: `main universe`.
 
 `Sources(baseOverride)` is the **only** place `deb` lines are constructed. It
 returns three per release: `<suite>`, `<suite>-updates`, `<suite>-security`.
-old-releases carries focal's pockets frozen at end of standard support, so the
-shape holds there too — it simply cannot receive anything new, which is what the
-`EOL` flag warns about.
+The shape holds for focal too. Its pockets are still on the archive, because an
+LTS release under ESM is not moved to old-releases. Since standard support ended
+in May 2025, though, security fixes for it go to Ubuntu Pro rather than
+`focal-security`, which is what the `EOL` flag warns about. When a release does
+move to old-releases, this table changes; until then `--mirror` covers it.
 
 Unknown release → validation error.
 
@@ -386,7 +404,7 @@ not a test target — the CLI is Linux and Windows users run it inside WSL.
 **Always-on unit tests**
 
 - Recipe parse/validate tables: good file, unknown release, bad user, bad package token, bad locale, bad timezone, unknown field, missing sections, empty name.
-- Distro table: 20.04 → focal + old-releases + EOL; 22.04/24.04 → archive; unknown → error; `Sources` yields three pockets and honours `--mirror`.
+- Distro table: 20.04 → focal + archive + EOL; 22.04/24.04 → archive, not EOL; unknown → error; `Sources` yields three pockets and honours `--mirror`.
 - Lock round-trip encode/decode; `requested` vs full `[[packages]]`; deterministic output.
 - dpkg status parsing: installed-only, sorted, epoch versions, continuation lines, trailing stanza, empty input is an error.
 - Tarball name and cross-device `Place`.
@@ -511,10 +529,16 @@ Module path: `frostroot` for v1 unless/until published
 
 ## Open questions
 
-One, and it is the reason the plan opens with a manual spike: **how a
-mmdebstrap-built rootfs with systemd behaves on first boot under WSL.**
-Specifically whether `systemd-resolved` conflicts with WSL's generated
-`/etc/resolv.conf`, and which units fail. Task 0 of the plan settles it by
-observation; if masking is needed, the hook is added then and not before.
+None. The one open question was **how a mmdebstrap-built rootfs with systemd
+behaves on first boot under WSL**, and the Task 0 spike settled it on
+2026-09-16:
+
+- `systemd-resolved` does not conflict with WSL's generated
+  `/etc/resolv.conf`. DNS works, so no masking hook is added.
+- `systemctl is-system-running` reports `degraded`, never `offline`. The only
+  failed unit on 24.04 is `getty@tty1` (WSL has no tty1); on 20.04 it is
+  `ua-auto-attach` (Ubuntu Pro auto-attach). Neither affects login, sudo, DNS or
+  apt, so neither is masked.
+- WSL overrides the timezone unless `wsl.conf` says otherwise; see `Files`.
 
 Anything else not in this spec is out of scope until a new spec says otherwise.
