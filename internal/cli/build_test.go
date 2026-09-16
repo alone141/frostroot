@@ -33,6 +33,10 @@ func (f *fakeBootstrapper) Run(_ context.Context, spec builder.BootstrapSpec) er
 	if f.runErr != nil {
 		return f.runErr
 	}
+	// Report one measured phase the way the real bootstrapper would.
+	spec.Progress.Report(builder.ProgressEvent{Phase: builder.PhaseDownload, Kind: builder.EventPhaseStarted})
+	spec.Progress.Report(builder.ProgressEvent{Phase: builder.PhaseDownload, Kind: builder.EventProgress, Done: 14_050_000, Total: 28_100_000, Unit: builder.UnitBytes})
+	spec.Progress.Report(builder.ProgressEvent{Phase: builder.PhaseDownload, Kind: builder.EventPhaseFinished})
 	if err := os.WriteFile(spec.TarballPath, []byte("tar"), 0o644); err != nil {
 		return err
 	}
@@ -117,6 +121,12 @@ func TestBuildSuccess(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "PowerShell") {
 		t.Errorf("no Windows path should be printed without wslpath:\n%s", stdout.String())
+	}
+	// Without a terminal, progress is plain lines: the phase, then tenths.
+	for _, wantLine := range []string{"frostroot: Download packages\n", "frostroot:    50%  14.1 MB / 28.1 MB\n", "frostroot: Write frostroot.lock\n", "frostroot: Place tarball\n"} {
+		if !strings.Contains(stderr.String(), wantLine) {
+			t.Errorf("stderr lacks progress line %q:\n%s", wantLine, stderr.String())
+		}
 	}
 }
 
