@@ -87,7 +87,7 @@ func TestBuildSuccess(t *testing.T) {
 	if !strings.Contains(out.String(), "wsl --import cpp-lab <install-dir> dist/cpp-lab-ubuntu-22.04-amd64.tar.gz") {
 		t.Fatalf("stdout %s", out.String())
 	}
-	if !strings.Contains(out.String(), "1 packages") {
+	if !strings.Contains(out.String(), "frostroot.lock (1 package)") {
 		t.Fatalf("stdout should summarise the lock: %s", out.String())
 	}
 	if strings.Contains(out.String(), "PowerShell") {
