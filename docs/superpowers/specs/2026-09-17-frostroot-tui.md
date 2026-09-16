@@ -4,6 +4,37 @@ Date: 2026-09-17
 Status: approved by the project owner in conversation; implementation on branch `feature/tui`
 Extends: [`2026-09-14-frostroot-design.md`](2026-09-14-frostroot-design.md), whose product model (recipe, lock, tarball) is unchanged
 
+## Verification (2026-09-17, build host)
+
+Everything below was run on the `frostroot-buildhost` WSL distribution after
+the implementation was complete.
+
+- `gofmt`, `go vet` with and without the `integration` tag, `go test -race
+  ./...`, `GOOS=windows go build ./...` and `golangci-lint`: clean.
+- `TestIntegrationNobleTiny` against the real archive (137 s): the image
+  checks of v0.1 pass, every phase was reported in order, the download
+  phase had a real byte total, the install phases counted steps.
+- `TestIntegrationCatalogExistsInEveryRelease`: all 32 catalog packages are
+  in the `main`/`universe` indexes of 20.04, 22.04 and 24.04.
+- The built binary under a `script(1)` pseudo-terminal, keys typed 300 ms
+  apart: `init` wrote `cpp-lab`, 22.04 (one arrow up from the default),
+  `Europe/Istanbul` (typed `ist`, Enter), `build-essential gdb git` (two
+  Space toggles plus free text); `edit` with Enter throughout wrote the file
+  back identical; `validate` accepted both.
+- `build` with output redirected printed the plain lines (phase names, one
+  line per tenth of the download); `build` under the pseudo-terminal drew
+  the screen for the whole 233 MB image, with percentages from 0 to 100 on
+  the measured phases, and printed the summary after the screen closed.
+- Two facts learned there, both recorded in the text below: only Ctrl-C
+  cancels the form (Esc belongs to the list filter), and a filtered select
+  takes one Enter. Also: lipgloss asks the terminal for its background color
+  at startup and waits up to five seconds on a terminal that never answers;
+  real terminals answer at once, but scripted pseudo-terminals must type
+  after that window.
+
+Still to be done by hand in Windows Terminal: resize during a build, Ctrl-C
+during a download, a narrow window.
+
 ## Why
 
 v0.1.0 talks to the user like a 1990s installer: six questions, one line each,
