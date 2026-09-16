@@ -17,7 +17,7 @@ func WorkRoot(getenv func(string) string) (string, error) {
 		root = filepath.Join(cache, "frostroot")
 	}
 	if strings.HasPrefix(root, "/mnt/") {
-		return "", fmt.Errorf("refusing to build under %s: /mnt is a 9p mount of a Windows drive under WSL; set XDG_CACHE_HOME to a directory on the Linux filesystem", root)
+		return "", fmt.Errorf("%w: refusing to build under %s, a 9p mount of a Windows drive under WSL; set XDG_CACHE_HOME to a directory on the Linux filesystem", ErrBadWorkRoot, root)
 	}
 	return root, nil
 }

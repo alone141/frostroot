@@ -22,10 +22,13 @@ const Version = "0.1.0"
 // UbuntuKeyring verifies the Ubuntu archive's Release files.
 const UbuntuKeyring = "/usr/share/keyrings/ubuntu-archive-keyring.gpg"
 
+// Host and configuration problems a user can fix. Every other build error is
+// a failure of the build itself.
 var (
 	ErrNotLinux     = errors.New("frostroot build requires Linux")
 	ErrNoMmdebstrap = errors.New("mmdebstrap not found on PATH")
 	ErrNoKeyring    = errors.New("Ubuntu archive keyring not found")
+	ErrBadWorkRoot  = errors.New("unusable work directory")
 )
 
 // BootstrapSpec is everything a bootstrapper needs for one image.
@@ -67,6 +70,7 @@ type Options struct {
 type Result struct {
 	LockPath    string
 	TarballPath string
+	Packages    int    // installed packages recorded in the lock
 	WorkDir     string // set when the work directory was kept: KeepWork, a failure, or a failed cleanup
 	CleanupErr  error  // the build succeeded but the work directory could not be removed
 }
@@ -189,6 +193,7 @@ func (b *Builder) Build(ctx context.Context, r recipe.Recipe, opts Options) (Res
 
 	res.LockPath = lockPath
 	res.TarballPath = dest
+	res.Packages = len(pkgs)
 	if opts.KeepWork {
 		return res, nil
 	}

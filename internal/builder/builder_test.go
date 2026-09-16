@@ -156,7 +156,7 @@ func TestBuildSuccessWritesLockAndTarball(t *testing.T) {
 	if body, err := os.ReadFile(tarball(opts)); err != nil || string(body) != "tar-bytes" {
 		t.Fatalf("tarball: %q %v", body, err)
 	}
-	if res.TarballPath != tarball(opts) || res.LockPath != filepath.Join(opts.Dir, "frostroot.lock") {
+	if res.TarballPath != tarball(opts) || res.LockPath != filepath.Join(opts.Dir, "frostroot.lock") || res.Packages != 2 {
 		t.Fatalf("result %+v", res)
 	}
 	if res.WorkDir != "" {
