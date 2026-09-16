@@ -3,10 +3,12 @@ package builder
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -27,7 +29,8 @@ type Mmdebstrap struct {
 // tailSize is how much of mmdebstrap's output is repeated in a build error.
 const tailSize = 4 << 10
 
-// Preflight checks the host before any work is done.
+// Preflight checks the host before any work is done. spec.WorkDir is the
+// work root the build directory will be created in; it may not exist yet.
 func (m *Mmdebstrap) Preflight(spec BootstrapSpec) error {
 	lookPath := m.LookPath
 	if lookPath == nil {
@@ -36,7 +39,13 @@ func (m *Mmdebstrap) Preflight(spec BootstrapSpec) error {
 	if _, err := lookPath("mmdebstrap"); err != nil {
 		return fmt.Errorf("%w; install it with: sudo apt install mmdebstrap", ErrNoMmdebstrap)
 	}
-	return checkKeyring(keyringOf(spec))
+	if err := checkKeyring(keyringOf(spec)); err != nil {
+		return err
+	}
+	if m.mode() == "unshare" && spec.WorkDir != "" {
+		return checkReachable(spec.WorkDir)
+	}
+	return nil
 }
 
 // Run bootstraps the image described by spec. Output is streamed to m.Stderr
@@ -46,6 +55,20 @@ func (m *Mmdebstrap) Preflight(spec BootstrapSpec) error {
 // error.
 func (m *Mmdebstrap) Run(ctx context.Context, spec BootstrapSpec) error {
 	if err := checkKeyring(keyringOf(spec)); err != nil {
+		return err
+	}
+	if m.mode() == "unshare" {
+		if err := checkReachable(spec.WorkDir); err != nil {
+			return err
+		}
+	}
+	// mmdebstrap(1): in unshare mode TMPDIR must be world-writable. Sticky,
+	// like /tmp, so other users cannot remove what the build puts there.
+	tmp := tmpDirOf(spec)
+	if err := os.Mkdir(tmp, 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	if err := os.Chmod(tmp, os.ModeSticky|0o777); err != nil {
 		return err
 	}
 	run := m.RunCmd
@@ -68,21 +91,25 @@ func (m *Mmdebstrap) Run(ctx context.Context, spec BootstrapSpec) error {
 	return nil
 }
 
+// mode is --mode: as configured, else root for uid 0 and unshare otherwise.
+func (m *Mmdebstrap) mode() string {
+	if m.Mode != "" {
+		return m.Mode
+	}
+	uid := os.Getuid
+	if m.Uid != nil {
+		uid = m.Uid
+	}
+	if uid() == 0 {
+		return "root"
+	}
+	return "unshare"
+}
+
 // command builds the mmdebstrap argument list and extra environment.
 func (m *Mmdebstrap) command(spec BootstrapSpec) (args, env []string) {
-	mode := m.Mode
-	if mode == "" {
-		uid := os.Getuid
-		if m.Uid != nil {
-			uid = m.Uid
-		}
-		mode = "unshare"
-		if uid() == 0 {
-			mode = "root"
-		}
-	}
 	args = []string{
-		"--mode=" + mode,
+		"--mode=" + m.mode(),
 		"--variant=important",
 		"--architectures=" + spec.Arch,
 		"--keyring=" + keyringOf(spec),
@@ -99,8 +126,33 @@ func (m *Mmdebstrap) command(spec BootstrapSpec) (args, env []string) {
 	// The source lines carry the components, so --components is not needed.
 	args = append(args, spec.Suite, spec.TarPath)
 	args = append(args, spec.Sources...)
-	// mmdebstrap stages the tarball in TMPDIR; /tmp may be small or tmpfs.
-	return args, []string{"TMPDIR=" + spec.WorkDir}
+	// mmdebstrap builds the rootfs in TMPDIR before packing it; /tmp may be
+	// small or tmpfs.
+	return args, []string{"TMPDIR=" + tmpDirOf(spec)}
+}
+
+func tmpDirOf(spec BootstrapSpec) string { return filepath.Join(spec.WorkDir, "tmp") }
+
+// checkReachable reports whether mmdebstrap's user namespace can reach dir.
+// In unshare mode the namespace's root is a subordinate uid, so it is "other"
+// to the user's own files: every existing ancestor must be world-executable.
+// Components that do not exist yet are created 0755 by the builder. Home
+// directories are 0750 on current Ubuntu, which is why the default work root
+// is /var/tmp/frostroot and not ~/.cache.
+func checkReachable(dir string) error {
+	for p := filepath.Clean(dir); ; p = filepath.Dir(p) {
+		fi, err := os.Stat(p)
+		switch {
+		case err == nil && fi.Mode().Perm()&0o001 == 0:
+			return fmt.Errorf("%w: mmdebstrap runs in a user namespace that cannot enter %s (mode %04o), so it cannot use %s; set XDG_CACHE_HOME to a directory whose parents are all world-executable, or unset it to use /var/tmp/frostroot",
+				ErrBadWorkRoot, p, fi.Mode().Perm(), dir)
+		case err != nil && !errors.Is(err, os.ErrNotExist):
+			return err
+		}
+		if p == filepath.Dir(p) {
+			return nil
+		}
+	}
 }
 
 func keyringOf(spec BootstrapSpec) string {

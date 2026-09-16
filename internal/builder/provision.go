@@ -162,14 +162,16 @@ type Stage struct {
 }
 
 // WriteStage renders every provisioning file into dir. This is the only code
-// path that produces them; the hooks only place and run them.
+// path that produces them; the hooks only place and run them. Modes are set
+// explicitly because the provision hook reads its script from inside
+// mmdebstrap's user namespace, where it is "other" to these files.
 func WriteStage(dir string, r recipe.Recipe) (Stage, error) {
 	st := Stage{
 		WSLConf:   filepath.Join(dir, "wsl.conf"),
 		Provision: filepath.Join(dir, "provision.sh"),
 		StatusOut: filepath.Join(dir, "dpkg-status"),
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := mkdirAllMode(dir, 0o755); err != nil {
 		return Stage{}, err
 	}
 	files := map[string]string{
@@ -182,6 +184,9 @@ func WriteStage(dir string, r recipe.Recipe) (Stage, error) {
 	}
 	for path, body := range files {
 		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			return Stage{}, err
+		}
+		if err := os.Chmod(path, 0o644); err != nil {
 			return Stage{}, err
 		}
 	}

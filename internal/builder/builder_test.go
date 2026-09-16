@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"frostroot/internal/recipe"
@@ -68,10 +69,14 @@ func statusPathFromHooks(hooks []string) string {
 
 type preflightBoot struct {
 	fakeBoot
-	preflight error
+	preflight     error
+	preflightSpec BootstrapSpec
 }
 
-func (p *preflightBoot) Preflight(spec BootstrapSpec) error { return p.preflight }
+func (p *preflightBoot) Preflight(spec BootstrapSpec) error {
+	p.preflightSpec = spec
+	return p.preflight
+}
 
 // testOptions keeps work directories inside the test's temp dir instead of
 // /var/tmp/frostroot.
@@ -330,6 +335,52 @@ func TestBuildPreflightRunsBeforeAnyWork(t *testing.T) {
 	}
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
 		t.Fatal("a failed preflight must not create a work directory")
+	}
+}
+
+func TestBuildPreflightSeesTheWorkRoot(t *testing.T) {
+	// The real preflight checks that mmdebstrap's user namespace can reach
+	// the work root, so it needs to know where that is.
+	opts, root := testOptions(t)
+	boot := &preflightBoot{}
+	if _, err := (&Builder{Bootstrap: boot}).Build(context.Background(), testRecipe(), opts); err != nil {
+		t.Fatal(err)
+	}
+	if boot.preflightSpec.WorkDir != root || boot.preflightSpec.Keyring != UbuntuKeyring || len(boot.preflightSpec.Sources) != 3 {
+		t.Fatalf("preflight spec %+v, root %q", boot.preflightSpec, root)
+	}
+	if boot.calls != 1 {
+		t.Fatal("bootstrap should run after a clean preflight")
+	}
+}
+
+func TestBuildWorkDirsReachableDespiteUmask(t *testing.T) {
+	// In unshare mode mmdebstrap's root is a subordinate uid, "other" to the
+	// user's files, and reads the provision script from the stage directory.
+	old := syscall.Umask(0o077)
+	defer syscall.Umask(old)
+
+	opts, root := testOptions(t)
+	opts.KeepWork = true
+	res, err := (&Builder{Bootstrap: &fakeBoot{}}).Build(context.Background(), testRecipe(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]os.FileMode{
+		root:                                0o755,
+		res.WorkDir:                         0o755,
+		filepath.Join(res.WorkDir, "stage"): 0o755,
+		filepath.Join(res.WorkDir, "stage", "provision.sh"): 0o644,
+		filepath.Join(res.WorkDir, "stage", "wsl.conf"):     0o644,
+		filepath.Join(res.WorkDir, "stage", "sudoers"):      0o644,
+	} {
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != want {
+			t.Fatalf("%s: mode %v, want %v", path, fi.Mode().Perm(), want)
+		}
 	}
 }
 
