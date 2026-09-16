@@ -4,13 +4,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"frostroot/internal/recipe"
 )
 
-func testRecipe() recipe.Recipe {
+// sampleRecipe returns a valid recipe with sudo, systemd and a non-default
+// timezone.
+func sampleRecipe() recipe.Recipe {
 	return recipe.Recipe{
 		Image:    recipe.Image{Name: "cpp-lab", Release: "22.04", Arch: "amd64"},
 		User:     recipe.User{Name: "student", Sudo: true},
@@ -20,210 +23,223 @@ func testRecipe() recipe.Recipe {
 	}
 }
 
-func TestMergeIncludeAddsEssentialsIncludingSystemd(t *testing.T) {
-	got := MergeInclude([]string{"git", "sudo"})
-	for _, need := range []string{"git", "sudo", "systemd", "systemd-sysv", "dbus", "locales", "tzdata", "passwd", "ca-certificates"} {
-		if !contains(got, need) {
-			t.Fatalf("missing %s in %v", need, got)
-		}
-	}
-	if count(got, "sudo") != 1 {
-		t.Fatalf("sudo duplicated: %v", got)
+// sampleStage returns a Stage whose files are all in stageDir.
+func sampleStage(stageDir string) Stage {
+	return Stage{
+		WSLConfPath:         filepath.Join(stageDir, "wsl.conf"),
+		SudoersPath:         filepath.Join(stageDir, "sudoers"),
+		ProvisionScriptPath: filepath.Join(stageDir, "provision.sh"),
+		DpkgStatusPath:      filepath.Join(stageDir, "dpkg-status"),
 	}
 }
 
-func TestMergeIncludeKeepsUserOrderFirst(t *testing.T) {
-	got := MergeInclude([]string{"cmake", "git", "cmake"})
-	if len(got) < 2 || got[0] != "cmake" || got[1] != "git" || count(got, "cmake") != 1 {
-		t.Fatalf("got %v", got)
+// renderProvisionScript renders the provision script for imageRecipe, failing
+// the test on error.
+func renderProvisionScript(t *testing.T, imageRecipe recipe.Recipe) string {
+	t.Helper()
+	script, err := RenderProvisionScript(imageRecipe)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(MergeInclude(nil)) != len(Essentials) {
-		t.Fatalf("empty include must still carry the essentials: %v", MergeInclude(nil))
+	return script
+}
+
+func TestPackagesToInstallAddsEssentialsOnce(t *testing.T) {
+	packages := PackagesToInstall([]string{"git", "sudo"})
+	for _, wantPackage := range []string{"git", "sudo", "systemd", "systemd-sysv", "dbus", "locales", "tzdata", "passwd", "ca-certificates"} {
+		if !slices.Contains(packages, wantPackage) {
+			t.Errorf("PackagesToInstall = %q, missing %s", packages, wantPackage)
+		}
+	}
+	sudoIndex := slices.Index(packages, "sudo")
+	if slices.Contains(packages[sudoIndex+1:], "sudo") {
+		t.Errorf("PackagesToInstall = %q, lists sudo twice", packages)
+	}
+}
+
+func TestPackagesToInstallKeepsRequestedOrderFirst(t *testing.T) {
+	packages := PackagesToInstall([]string{"cmake", "git", "cmake"})
+	if len(packages) < 2 || packages[0] != "cmake" || packages[1] != "git" || slices.Contains(packages[2:], "cmake") {
+		t.Errorf("PackagesToInstall = %q, want cmake, git, then the essentials", packages)
+	}
+	if got := PackagesToInstall(nil); !slices.Equal(got, EssentialPackages) {
+		t.Errorf("PackagesToInstall(nil) = %q, want exactly the essential packages", got)
 	}
 }
 
 func TestRenderWSLConf(t *testing.T) {
-	body := RenderWSLConf(testRecipe())
-	want := "[boot]\nsystemd=true\n\n[user]\ndefault=student\n\n[time]\nuseWindowsTimezone=false\n"
-	if body != want {
-		t.Fatalf("wsl.conf:\n%s\nwant:\n%s", body, want)
+	testCases := []struct {
+		name   string
+		adjust func(*recipe.Recipe)
+		want   string
+	}{
+		{
+			// The [time] section is from the Task 0 spike: without it WSL
+			// replaces the recipe's timezone with the Windows one every time
+			// the distribution starts.
+			name:   "systemd and sudo",
+			adjust: func(*recipe.Recipe) {},
+			want:   "[boot]\nsystemd=true\n\n[user]\ndefault=student\n\n[time]\nuseWindowsTimezone=false\n",
+		},
+		{
+			name:   "without systemd",
+			adjust: func(imageRecipe *recipe.Recipe) { imageRecipe.WSL.Systemd = false },
+			want:   "[user]\ndefault=student\n\n[time]\nuseWindowsTimezone=false\n",
+		},
+		{
+			name:   "default user falls back to the user name",
+			adjust: func(imageRecipe *recipe.Recipe) { imageRecipe.WSL.DefaultUser = "" },
+			want:   "[boot]\nsystemd=true\n\n[user]\ndefault=student\n\n[time]\nuseWindowsTimezone=false\n",
+		},
 	}
-}
-
-func TestRenderWSLConfPinsTimezone(t *testing.T) {
-	// Task 0 spike: without this WSL replaces the recipe's timezone with the
-	// Windows one every time the distro starts.
-	body := RenderWSLConf(testRecipe())
-	if !strings.Contains(body, "[time]\nuseWindowsTimezone=false\n") {
-		t.Fatalf("wsl.conf must pin the recipe timezone:\n%s", body)
-	}
-}
-
-func TestRenderWSLConfWithoutSystemd(t *testing.T) {
-	r := testRecipe()
-	r.WSL.Systemd = false
-	body := RenderWSLConf(r)
-	if strings.Contains(body, "systemd") || strings.Contains(body, "[boot]") {
-		t.Fatalf("wsl.conf: %s", body)
-	}
-	if !strings.Contains(body, "default=student") {
-		t.Fatalf("wsl.conf: %s", body)
-	}
-}
-
-func TestRenderWSLConfDefaultUserFallsBack(t *testing.T) {
-	r := testRecipe()
-	r.WSL.DefaultUser = ""
-	if body := RenderWSLConf(r); !strings.Contains(body, "default=student") {
-		t.Fatalf("wsl.conf: %s", body)
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			imageRecipe := sampleRecipe()
+			testCase.adjust(&imageRecipe)
+			if got := RenderWSLConf(imageRecipe); got != testCase.want {
+				t.Fatalf("RenderWSLConf =\n%s\nwant\n%s", got, testCase.want)
+			}
+		})
 	}
 }
 
 func TestRenderSudoers(t *testing.T) {
-	if got := RenderSudoers(testRecipe()); got != "student ALL=(ALL) NOPASSWD:ALL\n" {
-		t.Fatalf("sudoers: %q", got)
+	if got := RenderSudoers(sampleRecipe()); got != "student ALL=(ALL) NOPASSWD:ALL\n" {
+		t.Errorf("RenderSudoers = %q", got)
 	}
-	r := testRecipe()
-	r.User.Sudo = false
-	if got := RenderSudoers(r); got != "" {
-		t.Fatalf("no sudo means no sudoers file, got %q", got)
+	withoutSudo := sampleRecipe()
+	withoutSudo.User.Sudo = false
+	if got := RenderSudoers(withoutSudo); got != "" {
+		t.Errorf("RenderSudoers without sudo = %q, want no file", got)
 	}
 }
 
 func TestWriteStageWritesRenderedFiles(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "stage")
-	r := testRecipe()
-	st, err := WriteStage(dir, r)
+	stageDir := filepath.Join(t.TempDir(), "stage")
+	imageRecipe := sampleRecipe()
+	stage, err := WriteStage(stageDir, imageRecipe)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for path, want := range map[string]string{
-		st.WSLConf:   RenderWSLConf(r),
-		st.Sudoers:   RenderSudoers(r),
-		st.Provision: RenderProvision(r),
-	} {
-		body, err := os.ReadFile(path)
+	wantContentByPath := map[string]string{
+		stage.WSLConfPath:         RenderWSLConf(imageRecipe),
+		stage.SudoersPath:         RenderSudoers(imageRecipe),
+		stage.ProvisionScriptPath: renderProvisionScript(t, imageRecipe),
+	}
+	for path, wantContent := range wantContentByPath {
+		content, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(body) != want {
-			t.Fatalf("%s: got %q", path, body)
+		if string(content) != wantContent {
+			t.Errorf("%s holds %q, want %q", path, content, wantContent)
 		}
 	}
-	if st.StatusOut != filepath.Join(dir, "dpkg-status") {
-		t.Fatalf("status path %q", st.StatusOut)
+	if stage.DpkgStatusPath != filepath.Join(stageDir, "dpkg-status") {
+		t.Errorf("DpkgStatusPath = %q", stage.DpkgStatusPath)
 	}
 }
 
-func TestWriteStageNoSudo(t *testing.T) {
-	r := testRecipe()
-	r.User.Sudo = false
-	st, err := WriteStage(t.TempDir(), r)
+func TestWriteStageWithoutSudo(t *testing.T) {
+	imageRecipe := sampleRecipe()
+	imageRecipe.User.Sudo = false
+	stage, err := WriteStage(t.TempDir(), imageRecipe)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Sudoers != "" {
-		t.Fatalf("sudoers should not be staged: %q", st.Sudoers)
+	if stage.SudoersPath != "" {
+		t.Fatalf("SudoersPath = %q, want no sudoers file staged", stage.SudoersPath)
 	}
 }
 
-func TestSQSurvivesTheShell(t *testing.T) {
-	// sq is the second line of defence after validate. Prove it with a real
-	// shell rather than by eyeballing the escaping.
-	for _, v := range []string{
+func TestShellQuoteSurvivesTheShell(t *testing.T) {
+	// shellQuote is the second line of defense after recipe validation. Prove
+	// it with a real shell rather than by reading the escaping.
+	hostileValues := []string{
 		"student", "", "it's", `a"b`, "$(touch /tmp/pwned)", "`id`", "a b\tc", "x'; rm -rf / #", `back\slash`, "new\nline",
-	} {
-		out, err := exec.Command("sh", "-c", "printf %s "+sq(v)).Output()
-		if err != nil {
-			t.Fatalf("%q: %v", v, err)
-		}
-		if string(out) != v {
-			t.Fatalf("sq(%q) came back as %q", v, out)
-		}
 	}
-}
-
-func stageFor(dir string) Stage {
-	return Stage{
-		WSLConf:   filepath.Join(dir, "wsl.conf"),
-		Sudoers:   filepath.Join(dir, "sudoers"),
-		Provision: filepath.Join(dir, "provision.sh"),
-		StatusOut: filepath.Join(dir, "dpkg-status"),
+	for _, value := range hostileValues {
+		printed, err := exec.Command("sh", "-c", "printf %s "+shellQuote(value)).Output()
+		if err != nil {
+			t.Fatalf("shellQuote(%q): %v", value, err)
+		}
+		if string(printed) != value {
+			t.Errorf("shellQuote(%q) came back from the shell as %q", value, printed)
+		}
 	}
 }
 
 func TestCustomizeHooksOrderAndContent(t *testing.T) {
-	hooks := CustomizeHooks(stageFor("/w/stage"))
-	want := []string{
+	hooks := CustomizeHooks(sampleStage("/w/stage"))
+	wantHooks := []string{
 		"upload '/w/stage/wsl.conf' /etc/wsl.conf",
 		"upload '/w/stage/sudoers' /etc/sudoers.d/90-frostroot",
 		`chroot "$1" /bin/sh -c "$(cat '/w/stage/provision.sh')" frostroot-provision`,
-		// Last, so the status reflects everything installed.
+		// Last, so that the status reflects everything installed.
 		"download /var/lib/dpkg/status '/w/stage/dpkg-status'",
 	}
-	if strings.Join(hooks, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("hooks:\n%s\nwant:\n%s", strings.Join(hooks, "\n"), strings.Join(want, "\n"))
+	if !slices.Equal(hooks, wantHooks) {
+		t.Fatalf("CustomizeHooks =\n%s\nwant\n%s", strings.Join(hooks, "\n"), strings.Join(wantHooks, "\n"))
 	}
 }
 
-func TestCustomizeHooksNoSudoOmitsSudoers(t *testing.T) {
-	st := stageFor("/w/stage")
-	st.Sudoers = ""
-	all := strings.Join(CustomizeHooks(st), "\n")
-	if strings.Contains(all, "sudoers") {
-		t.Fatalf("no sudo means no sudoers hook:\n%s", all)
+func TestCustomizeHooksWithoutSudoOmitSudoers(t *testing.T) {
+	stage := sampleStage("/w/stage")
+	stage.SudoersPath = ""
+	if allHooks := strings.Join(CustomizeHooks(stage), "\n"); strings.Contains(allHooks, "sudoers") {
+		t.Fatalf("hooks mention sudoers for a user without sudo:\n%s", allHooks)
 	}
 }
 
-func TestCustomizeHooksNeverSwallowFailures(t *testing.T) {
-	all := strings.Join(CustomizeHooks(stageFor("/w/stage")), "\n") + "\n" + RenderProvision(testRecipe())
-	for _, bad := range []string{"|| true", "|| :", "set +e"} {
-		if strings.Contains(all, bad) {
-			t.Fatalf("hooks must fail closed, found %q:\n%s", bad, all)
+func TestHooksAndScriptNeverSwallowFailures(t *testing.T) {
+	everything := strings.Join(CustomizeHooks(sampleStage("/w/stage")), "\n") + "\n" + renderProvisionScript(t, sampleRecipe())
+	for _, failureSwallower := range []string{"|| true", "|| :", "set +e"} {
+		if strings.Contains(everything, failureSwallower) {
+			t.Errorf("hooks must fail closed, found %q", failureSwallower)
 		}
 	}
 }
 
 func TestProvisionHookRunsTheStagedScriptWithHostilePaths(t *testing.T) {
 	// The work directory comes from XDG_CACHE_HOME, so its path is not ours to
-	// choose. Execute the real hook text with a stand-in for chroot and make
-	// sure the staged script, and only it, runs.
-	dir := filepath.Join(t.TempDir(), `it's a "dir" $(touch pwned) `+"`id`")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// choose. Run the real hook text with a stand-in for chroot and check that
+	// the staged script, and only it, runs.
+	stageDir := filepath.Join(t.TempDir(), `it's a "dir" $(touch pwned) `+"`id`")
+	if err := os.MkdirAll(stageDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	st := stageFor(dir)
-	if err := os.WriteFile(st.Provision, []byte("echo \"provisioned as $0\"\n"), 0o644); err != nil {
+	stage := sampleStage(stageDir)
+	if err := os.WriteFile(stage.ProvisionScriptPath, []byte("echo \"provisioned as $0\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	var hook string
-	for _, h := range CustomizeHooks(st) {
-		if strings.HasPrefix(h, "chroot ") {
-			hook = h
+	var provisionHook string
+	for _, hook := range CustomizeHooks(stage) {
+		if strings.HasPrefix(hook, "chroot ") {
+			provisionHook = hook
 		}
 	}
-	if hook == "" {
-		t.Fatal("no chroot hook")
+	if provisionHook == "" {
+		t.Fatal("CustomizeHooks has no chroot hook")
 	}
 	// mmdebstrap runs shell hooks as: sh -c HOOK exec ROOTDIR
-	script := `chroot() { shift; "$@"; }` + "\n" + hook
-	cmd := exec.Command("sh", "-c", script, "exec", "/fake/root")
-	cmd.Dir = t.TempDir()
-	out, err := cmd.CombinedOutput()
+	scriptWithFakeChroot := `chroot() { shift; "$@"; }` + "\n" + provisionHook
+	command := exec.Command("sh", "-c", scriptWithFakeChroot, "exec", "/fake/root")
+	command.Dir = t.TempDir()
+	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf("%v: %s", err, out)
+		t.Fatalf("running the hook: %v: %s", err, output)
 	}
-	if string(out) != "provisioned as frostroot-provision\n" {
-		t.Fatalf("got %q", out)
+	if string(output) != "provisioned as frostroot-provision\n" {
+		t.Errorf("hook output = %q, want the staged script's output", output)
 	}
-	if _, err := os.Stat(filepath.Join(cmd.Dir, "pwned")); !os.IsNotExist(err) {
-		t.Fatal("a stage path was executed as shell")
+	if _, err := os.Stat(filepath.Join(command.Dir, "pwned")); err == nil {
+		t.Error("part of a stage path was executed as shell")
 	}
 }
 
-func TestRenderProvisionContent(t *testing.T) {
-	body := RenderProvision(testRecipe())
-	for _, need := range []string{
+func TestRenderProvisionScriptContent(t *testing.T) {
+	script := renderProvisionScript(t, sampleRecipe())
+	wantLines := []string{
 		"set -eu",
 		"user='student'",
 		"lang='en_US.UTF-8'",
@@ -240,87 +256,83 @@ func TestRenderProvisionContent(t *testing.T) {
 		"locale-gen",
 		`update-locale "LANG=$lang"`,
 		"rm -f /etc/resolv.conf /etc/hostname",
-	} {
-		if !strings.Contains(body, need) {
-			t.Fatalf("provision script missing %q:\n%s", need, body)
+	}
+	for _, wantLine := range wantLines {
+		if !strings.Contains(script, wantLine) {
+			t.Errorf("provision script lacks %q", wantLine)
 		}
 	}
 }
 
-func TestRenderProvisionChecksResultsNotExitCodes(t *testing.T) {
+func TestRenderProvisionScriptChecksResultsNotExitCodes(t *testing.T) {
 	// locale-gen exits 0 without generating anything when /etc/locale.gen is
-	// empty, and validate cannot see tzdata. Both must be verified in the image.
-	body := RenderProvision(testRecipe())
-	if strings.Count(body, "have_locale") < 3 {
-		t.Fatalf("expected the locale to be checked before and after locale-gen:\n%s", body)
+	// empty, and validation cannot see tzdata. Both must be verified in the
+	// image.
+	script := renderProvisionScript(t, sampleRecipe())
+	if strings.Count(script, "have_locale") < 3 {
+		t.Error("the locale should be checked before and after locale-gen")
 	}
-	if !strings.Contains(body, "does not exist in this image") || !strings.Contains(body, "was not generated") {
-		t.Fatalf("expected explicit failures:\n%s", body)
-	}
-}
-
-func TestRenderProvisionNoSudo(t *testing.T) {
-	r := testRecipe()
-	r.User.Sudo = false
-	if body := RenderProvision(r); strings.Contains(body, "sudoers") || strings.Contains(body, "visudo") {
-		t.Fatalf("no sudo means no sudoers handling:\n%s", body)
-	}
-}
-
-func TestRenderProvisionDefaults(t *testing.T) {
-	r := testRecipe()
-	r.Locale = recipe.Locale{}
-	body := RenderProvision(r)
-	for _, need := range []string{"lang='en_US.UTF-8'", "tz='UTC'", "want='en_us.utf8'"} {
-		if !strings.Contains(body, need) {
-			t.Fatalf("missing %q:\n%s", need, body)
+	for _, failureMessage := range []string{"does not exist in this image", "was not generated"} {
+		if !strings.Contains(script, failureMessage) {
+			t.Errorf("provision script lacks the explicit failure %q", failureMessage)
 		}
 	}
 }
 
-func TestRenderProvisionLocaleNames(t *testing.T) {
-	for _, tc := range []struct{ lang, charmap, want string }{
-		{"en_US.UTF-8", "UTF-8", "en_us.utf8"},
-		{"tr_TR.utf8", "UTF-8", "tr_tr.utf8"},
-		{"C.UTF-8", "UTF-8", "c.utf8"},
-		{"de_DE.ISO-8859-1", "ISO-8859-1", "de_de.iso88591"},
-	} {
-		r := testRecipe()
-		r.Locale.Lang = tc.lang
-		body := RenderProvision(r)
-		if !strings.Contains(body, "charmap='"+tc.charmap+"'") || !strings.Contains(body, "want='"+tc.want+"'") {
-			t.Fatalf("%s: wrong charmap or locale id:\n%s", tc.lang, body)
+func TestRenderProvisionScriptWithoutSudo(t *testing.T) {
+	imageRecipe := sampleRecipe()
+	imageRecipe.User.Sudo = false
+	script := renderProvisionScript(t, imageRecipe)
+	if strings.Contains(script, "sudoers") || strings.Contains(script, "visudo") {
+		t.Errorf("provision script handles sudoers for a user without sudo:\n%s", script)
+	}
+}
+
+func TestRenderProvisionScriptDefaults(t *testing.T) {
+	imageRecipe := sampleRecipe()
+	imageRecipe.Locale = recipe.Locale{}
+	script := renderProvisionScript(t, imageRecipe)
+	for _, wantLine := range []string{"lang='en_US.UTF-8'", "tz='UTC'", "want='en_us.utf8'"} {
+		if !strings.Contains(script, wantLine) {
+			t.Errorf("provision script lacks default %q", wantLine)
 		}
 	}
 }
 
-func TestRenderProvisionIsValidShell(t *testing.T) {
+func TestRenderProvisionScriptLocaleNames(t *testing.T) {
+	testCases := []struct {
+		locale       string
+		wantCharmap  string
+		wantLocaleID string
+	}{
+		{locale: "en_US.UTF-8", wantCharmap: "UTF-8", wantLocaleID: "en_us.utf8"},
+		{locale: "tr_TR.utf8", wantCharmap: "UTF-8", wantLocaleID: "tr_tr.utf8"},
+		{locale: "C.UTF-8", wantCharmap: "UTF-8", wantLocaleID: "c.utf8"},
+		{locale: "de_DE.ISO-8859-1", wantCharmap: "ISO-8859-1", wantLocaleID: "de_de.iso88591"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.locale, func(t *testing.T) {
+			imageRecipe := sampleRecipe()
+			imageRecipe.Locale.Lang = testCase.locale
+			script := renderProvisionScript(t, imageRecipe)
+			if !strings.Contains(script, "charmap='"+testCase.wantCharmap+"'") {
+				t.Errorf("script lacks charmap %q", testCase.wantCharmap)
+			}
+			if !strings.Contains(script, "want='"+testCase.wantLocaleID+"'") {
+				t.Errorf("script lacks locale id %q", testCase.wantLocaleID)
+			}
+		})
+	}
+}
+
+func TestRenderProvisionScriptIsValidShell(t *testing.T) {
 	for _, sudo := range []bool{true, false} {
-		r := testRecipe()
-		r.User.Sudo = sudo
-		cmd := exec.Command("sh", "-n")
-		cmd.Stdin = strings.NewReader(RenderProvision(r))
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("sudo=%v: %v: %s", sudo, err, out)
+		imageRecipe := sampleRecipe()
+		imageRecipe.User.Sudo = sudo
+		syntaxCheck := exec.Command("sh", "-n")
+		syntaxCheck.Stdin = strings.NewReader(renderProvisionScript(t, imageRecipe))
+		if output, err := syntaxCheck.CombinedOutput(); err != nil {
+			t.Errorf("sh -n with sudo=%v: %v: %s", sudo, err, output)
 		}
 	}
-}
-
-func contains(xs []string, w string) bool {
-	for _, x := range xs {
-		if x == w {
-			return true
-		}
-	}
-	return false
-}
-
-func count(xs []string, w string) int {
-	n := 0
-	for _, x := range xs {
-		if x == w {
-			n++
-		}
-	}
-	return n
 }

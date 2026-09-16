@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -12,194 +14,198 @@ func TestTarballRelPath(t *testing.T) {
 	got := TarballRelPath("cpp-lab", "22.04", "amd64")
 	want := filepath.Join("dist", "cpp-lab-ubuntu-22.04-amd64.tar.gz")
 	if got != want {
-		t.Fatalf("got %q want %q", got, want)
+		t.Fatalf("TarballRelPath = %q, want %q", got, want)
 	}
 }
 
-func writeSrc(t *testing.T, body string) string {
+// writeSourceFile creates a file with content in a new temporary directory.
+func writeSourceFile(t *testing.T, content string) string {
 	t.Helper()
-	src := filepath.Join(t.TempDir(), "image.tar.gz")
-	if err := os.WriteFile(src, []byte(body), 0o644); err != nil {
+	path := filepath.Join(t.TempDir(), "image.tar.gz")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return src
+	return path
 }
 
-func assertOnly(t *testing.T, dir string, names ...string) {
+// writeExistingFile creates path, and its directory, with content.
+func writeExistingFile(t *testing.T, path, content string) {
 	t.Helper()
-	entries, err := os.ReadDir(dir)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// assertFileContent fails unless the file at path holds want.
+func assertFileContent(t *testing.T, path, want string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != len(names) {
-		t.Fatalf("want %v in %s, got %v", names, dir, entries)
+	if string(got) != want {
+		t.Fatalf("%s holds %q, want %q", path, got, want)
 	}
-	for i, e := range entries {
-		if e.Name() != names[i] {
-			t.Fatalf("want %v in %s, got %v", names, dir, entries)
-		}
+}
+
+// assertDirectoryHolds fails unless directory contains exactly the named
+// entries.
+func assertDirectoryHolds(t *testing.T, directory string, wantNames ...string) {
+	t.Helper()
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
 	}
+	var gotNames []string
+	for _, entry := range entries {
+		gotNames = append(gotNames, entry.Name())
+	}
+	if !slices.Equal(gotNames, wantNames) {
+		t.Fatalf("%s holds %q, want %q", directory, gotNames, wantNames)
+	}
+}
+
+// setUmask sets the process umask for the rest of the test.
+func setUmask(t *testing.T, mask int) {
+	t.Helper()
+	previous := syscall.Umask(mask)
+	t.Cleanup(func() { syscall.Umask(previous) })
+}
+
+// renameAcrossFilesystems fails the way os.Rename does when the work directory
+// and dist/ are on different filesystems, the normal case under WSL.
+func renameAcrossFilesystems(oldPath, newPath string) error {
+	return &os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: syscall.EXDEV}
 }
 
 func TestPlaceCreatesParentAndMoves(t *testing.T) {
-	src := writeSrc(t, "payload")
-	dest := filepath.Join(t.TempDir(), "dist", "cpp-lab-ubuntu-22.04-amd64.tar.gz")
-	if err := Place(src, dest); err != nil {
+	sourcePath := writeSourceFile(t, "payload")
+	destinationPath := filepath.Join(t.TempDir(), "dist", "cpp-lab-ubuntu-22.04-amd64.tar.gz")
+	if err := Place(sourcePath, destinationPath); err != nil {
 		t.Fatal(err)
 	}
-	got, err := os.ReadFile(dest)
-	if err != nil {
-		t.Fatal(err)
+	assertFileContent(t, destinationPath, "payload")
+	if _, err := os.Stat(sourcePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the source should be gone, Stat error = %v", err)
 	}
-	if string(got) != "payload" {
-		t.Fatalf("content %q", got)
-	}
-	if _, err := os.Stat(src); !os.IsNotExist(err) {
-		t.Fatalf("source should be gone: %v", err)
-	}
+	assertDirectoryHolds(t, filepath.Dir(destinationPath), "cpp-lab-ubuntu-22.04-amd64.tar.gz")
 }
 
 func TestPlaceOverwritesExisting(t *testing.T) {
 	// build overwrites a matching tarball without asking.
-	dest := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
+	writeExistingFile(t, destinationPath, "stale")
+	if err := Place(writeSourceFile(t, "fresh"), destinationPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(dest, []byte("stale"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := Place(writeSrc(t, "fresh"), dest); err != nil {
-		t.Fatal(err)
-	}
-	got, _ := os.ReadFile(dest)
-	if string(got) != "fresh" {
-		t.Fatalf("content %q", got)
-	}
+	assertFileContent(t, destinationPath, "fresh")
 }
 
-func TestPlaceLeavesNoTmpOnSuccess(t *testing.T) {
-	dest := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
-	if err := Place(writeSrc(t, "x"), dest); err != nil {
-		t.Fatal(err)
-	}
-	assertOnly(t, filepath.Dir(dest), "out.tar.gz")
-}
+func TestPlaceCopiesAcrossFilesystems(t *testing.T) {
+	setUmask(t, 0o022)
+	sourcePath := writeSourceFile(t, "payload")
+	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
+	writeExistingFile(t, destinationPath, "stale")
 
-// crossDevice makes the first rename fail the way it does when the work
-// directory and dist/ are on different filesystems (the normal case under
-// WSL, where dist/ often sits on a 9p mount of a Windows drive).
-func crossDevice(t *testing.T) {
-	t.Helper()
-	orig := rename
-	rename = func(oldpath, newpath string) error {
-		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
-	}
-	t.Cleanup(func() { rename = orig })
-}
-
-func TestPlaceCopiesAcrossDevices(t *testing.T) {
-	crossDevice(t)
-	old := syscall.Umask(0o022)
-	defer syscall.Umask(old)
-	src := writeSrc(t, "payload")
-	dest := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+	if err := place(sourcePath, destinationPath, renameAcrossFilesystems); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(dest, []byte("stale"), 0o644); err != nil {
-		t.Fatal(err)
+	assertFileContent(t, destinationPath, "payload")
+	if _, err := os.Stat(sourcePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the source should be gone after a cross-filesystem move, Stat error = %v", err)
 	}
-	if err := Place(src, dest); err != nil {
-		t.Fatal(err)
-	}
-	got, err := os.ReadFile(dest)
+	destinationInfo, err := os.Stat(destinationPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != "payload" {
-		t.Fatalf("content %q", got)
+	if mode := destinationInfo.Mode().Perm(); mode != 0o644 {
+		t.Fatalf("mode = %v, want 0644 so the tarball is readable for wsl --import", mode)
 	}
-	if _, err := os.Stat(src); !os.IsNotExist(err) {
-		t.Fatalf("source should be gone after a cross-device move: %v", err)
-	}
-	info, err := os.Stat(dest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o644 {
-		t.Fatalf("mode %v, want 0644 so the tarball is readable for wsl --import", info.Mode().Perm())
-	}
-	assertOnly(t, filepath.Dir(dest), "out.tar.gz")
+	assertDirectoryHolds(t, filepath.Dir(destinationPath), "out.tar.gz")
 }
 
-func TestPlaceAcrossDevicesRespectsUmaskWithoutChmod(t *testing.T) {
+func TestPlaceAcrossFilesystemsRespectsUmaskWithoutChmod(t *testing.T) {
 	// dist/ is routinely on a drvfs mount of a Windows drive, where chmod
-	// fails with EPERM. The copy must not depend on chmod: create the
-	// temporary file with the final mode and let the umask apply, as for any
-	// file a user creates.
-	crossDevice(t)
-	old := syscall.Umask(0o027)
-	defer syscall.Umask(old)
-	dest := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
-	if err := Place(writeSrc(t, "payload"), dest); err != nil {
+	// fails with EPERM. The copy must not depend on chmod: the temporary file
+	// is created with its final mode and the umask applies, as for any file a
+	// user creates.
+	setUmask(t, 0o027)
+	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
+	if err := place(writeSourceFile(t, "payload"), destinationPath, renameAcrossFilesystems); err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Stat(dest)
+	destinationInfo, err := os.Stat(destinationPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o640 {
-		t.Fatalf("mode %v, want 0644 minus umask 027", info.Mode().Perm())
+	if mode := destinationInfo.Mode().Perm(); mode != 0o640 {
+		t.Fatalf("mode = %v, want 0644 minus umask 027", mode)
 	}
 }
 
-func TestPlaceAcrossDevicesDoesNotClobberConcurrentTemps(t *testing.T) {
-	crossDevice(t)
-	dir := filepath.Join(t.TempDir(), "dist")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+func TestPlaceAcrossFilesystemsLeavesOtherTemporaryFilesAlone(t *testing.T) {
+	distDir := filepath.Join(t.TempDir(), "dist")
 	// Another build's temporary file for the same destination.
-	other := filepath.Join(dir, ".out.tar.gz.12345.tmp")
-	if err := os.WriteFile(other, []byte("theirs"), 0o644); err != nil {
+	otherBuildsTemporary := filepath.Join(distDir, ".out.tar.gz.12345.tmp")
+	writeExistingFile(t, otherBuildsTemporary, "theirs")
+
+	if err := place(writeSourceFile(t, "ours"), filepath.Join(distDir, "out.tar.gz"), renameAcrossFilesystems); err != nil {
 		t.Fatal(err)
 	}
-	if err := Place(writeSrc(t, "ours"), filepath.Join(dir, "out.tar.gz")); err != nil {
-		t.Fatal(err)
-	}
-	if body, _ := os.ReadFile(other); string(body) != "theirs" {
-		t.Fatal("another build's temporary file was touched")
-	}
+	assertFileContent(t, otherBuildsTemporary, "theirs")
 }
 
-func TestPlaceMissingSourceAcrossDevices(t *testing.T) {
-	crossDevice(t)
-	dest := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
-	if err := Place(filepath.Join(t.TempDir(), "absent.tar.gz"), dest); err == nil {
-		t.Fatal("expected error")
+func TestPlaceAcrossFilesystemsWithMissingSource(t *testing.T) {
+	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
+	missingSource := filepath.Join(t.TempDir(), "absent.tar.gz")
+	if err := place(missingSource, destinationPath, renameAcrossFilesystems); err == nil {
+		t.Fatal("place succeeded, want an error for the missing source")
 	}
-	assertOnly(t, filepath.Dir(dest))
+	assertDirectoryHolds(t, filepath.Dir(destinationPath))
 }
 
-func TestPlaceDoesNotCopyOnOtherErrors(t *testing.T) {
-	// Only EXDEV means "try copying". Anything else is a real failure and the
-	// source must be left where it is.
-	orig := rename
-	rename = func(oldpath, newpath string) error {
-		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EACCES}
+func TestPlaceDoesNotCopyOnOtherRenameErrors(t *testing.T) {
+	// Only EXDEV means "try copying". Anything else is a real failure, and the
+	// source must stay where it is.
+	renameDenied := func(oldPath, newPath string) error {
+		return &os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: syscall.EACCES}
 	}
-	t.Cleanup(func() { rename = orig })
+	sourcePath := writeSourceFile(t, "payload")
+	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
 
-	src := writeSrc(t, "payload")
-	dest := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
-	err := Place(src, dest)
+	err := place(sourcePath, destinationPath, renameDenied)
 	if !errors.Is(err, syscall.EACCES) {
-		t.Fatalf("got %v", err)
+		t.Fatalf("place error = %v, want EACCES", err)
 	}
-	if _, err := os.Stat(dest); !os.IsNotExist(err) {
-		t.Fatalf("dest must not exist: %v", err)
+	if _, err := os.Stat(destinationPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the destination must not exist, Stat error = %v", err)
 	}
-	if _, err := os.Stat(src); err != nil {
-		t.Fatalf("source must be kept: %v", err)
+	assertFileContent(t, sourcePath, "payload")
+}
+
+func TestCreateTemp(t *testing.T) {
+	directory := t.TempDir()
+	first, err := CreateTemp(directory, ".frostroot.lock.*.tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = first.Close() })
+	second, err := CreateTemp(directory, ".frostroot.lock.*.tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+
+	if first.Name() == second.Name() {
+		t.Fatalf("two temporary files share the name %s", first.Name())
+	}
+	for _, file := range []*os.File{first, second} {
+		name := filepath.Base(file.Name())
+		if !strings.HasPrefix(name, ".frostroot.lock.") || !strings.HasSuffix(name, ".tmp") {
+			t.Errorf("name %q does not follow the pattern", name)
+		}
 	}
 }

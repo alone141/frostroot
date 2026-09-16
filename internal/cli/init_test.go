@@ -6,76 +6,80 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"frostroot/internal/recipe"
 )
 
+// scriptedPrompt answers questions from a list, recording each question. An
+// empty or missing answer accepts the default, like pressing Enter.
 type scriptedPrompt struct {
-	answers   []string
-	i         int
-	questions []string
+	answers        []string
+	questionsAsked []string
 }
 
-func (s *scriptedPrompt) Ask(question, defaultValue string) (string, error) {
-	s.questions = append(s.questions, question)
-	if s.i >= len(s.answers) {
-		return defaultValue, nil
+func (p *scriptedPrompt) Ask(question, defaultAnswer string) (string, error) {
+	answerIndex := len(p.questionsAsked)
+	p.questionsAsked = append(p.questionsAsked, question)
+	if answerIndex >= len(p.answers) || p.answers[answerIndex] == "" {
+		return defaultAnswer, nil
 	}
-	a := s.answers[s.i]
-	s.i++
-	if a == "" {
-		return defaultValue, nil
-	}
-	return a, nil
+	return p.answers[answerIndex], nil
 }
 
-func runInit(t *testing.T, dir string, answers []string, args ...string) (int, string, string) {
+// runInitWithAnswers runs `frostroot init` in recipeDir, answering its
+// questions from answers, and returns the exit code, standard output and
+// standard error.
+func runInitWithAnswers(recipeDir string, answers []string, args ...string) (exitCode int, stdout, stderr string) {
+	var stdoutBuffer, stderrBuffer bytes.Buffer
+	app := App{Stdout: &stdoutBuffer, Stderr: &stderrBuffer, RecipeDir: recipeDir, Prompt: &scriptedPrompt{answers: answers}}
+	exitCode = app.Run(append([]string{"init"}, args...))
+	return exitCode, stdoutBuffer.String(), stderrBuffer.String()
+}
+
+// loadWrittenRecipe loads the frostroot.toml init wrote in recipeDir.
+func loadWrittenRecipe(t *testing.T, recipeDir string) recipe.Recipe {
 	t.Helper()
-	var out, errb bytes.Buffer
-	app := App{Stdout: &out, Stderr: &errb, Dir: dir, Prompt: &scriptedPrompt{answers: answers}}
-	code := app.Run(append([]string{"init"}, args...))
-	return code, out.String(), errb.String()
-}
-
-func TestInitWritesValidRecipe(t *testing.T) {
-	dir := t.TempDir()
-	code, _, errs := runInit(t, dir, []string{"cpp-lab", "22.04", "student", "Europe/Istanbul", "build-essential", "cmake"})
-	if code != 0 {
-		t.Fatalf("code %d: %s", code, errs)
-	}
-	r, err := recipe.Load(filepath.Join(dir, "frostroot.toml"))
+	imageRecipe, err := recipe.Load(filepath.Join(recipeDir, "frostroot.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Image.Name != "cpp-lab" || r.Image.Release != "22.04" || r.Image.Arch != "amd64" {
-		t.Fatalf("image %+v", r.Image)
+	return imageRecipe
+}
+
+func TestInitWritesValidRecipe(t *testing.T) {
+	recipeDir := t.TempDir()
+	answers := []string{"cpp-lab", "22.04", "student", "Europe/Istanbul", "build-essential", "cmake"}
+	if exitCode, _, stderr := runInitWithAnswers(recipeDir, answers); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr)
 	}
-	if r.Locale.Timezone != "Europe/Istanbul" || r.Locale.Lang != "en_US.UTF-8" {
-		t.Fatalf("locale %+v", r.Locale)
+	imageRecipe := loadWrittenRecipe(t, recipeDir)
+	if wantImage := (recipe.Image{Name: "cpp-lab", Release: "22.04", Arch: "amd64"}); imageRecipe.Image != wantImage {
+		t.Errorf("image = %+v, want %+v", imageRecipe.Image, wantImage)
 	}
-	if !contains(r.Packages.Include, "build-essential") || !contains(r.Packages.Include, "cmake") {
-		t.Fatalf("include %#v", r.Packages.Include)
+	if wantLocale := (recipe.Locale{Lang: "en_US.UTF-8", Timezone: "Europe/Istanbul"}); imageRecipe.Locale != wantLocale {
+		t.Errorf("locale = %+v, want %+v", imageRecipe.Locale, wantLocale)
 	}
-	if probs := recipe.Validate(r); len(probs) != 0 {
-		t.Fatalf("init wrote a recipe that does not validate: %v", probs)
+	for _, wantPackage := range []string{"build-essential", "cmake"} {
+		if !slices.Contains(imageRecipe.Packages.Include, wantPackage) {
+			t.Errorf("packages %#v lack %q", imageRecipe.Packages.Include, wantPackage)
+		}
+	}
+	if problems := recipe.Validate(imageRecipe); len(problems) != 0 {
+		t.Errorf("init wrote a recipe that does not validate: %v", problems)
 	}
 	// And the validate command agrees.
-	var errb bytes.Buffer
-	if code := (&App{Stdout: io.Discard, Stderr: &errb, Dir: dir}).Run([]string{"validate"}); code != 0 {
-		t.Fatalf("validate: %s", errb.String())
+	if exitCode, _, stderr := runValidateIn(recipeDir); exitCode != exitSuccess {
+		t.Errorf("validate: exit code = %d, stderr %s", exitCode, stderr)
 	}
 }
 
 func TestInitDefaults(t *testing.T) {
-	dir := t.TempDir()
-	if code, _, errs := runInit(t, dir, nil); code != 0 {
-		t.Fatalf("code %d: %s", code, errs)
-	}
-	r, err := recipe.Load(filepath.Join(dir, "frostroot.toml"))
-	if err != nil {
-		t.Fatal(err)
+	recipeDir := t.TempDir()
+	if exitCode, _, stderr := runInitWithAnswers(recipeDir, nil); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr)
 	}
 	want := recipe.Recipe{
 		Image:    recipe.Image{Name: "lab", Release: "24.04", Arch: "amd64"},
@@ -84,24 +88,24 @@ func TestInitDefaults(t *testing.T) {
 		Locale:   recipe.Locale{Lang: "en_US.UTF-8", Timezone: "UTC"},
 		Packages: recipe.Packages{Include: []string{}},
 	}
-	if !reflect.DeepEqual(r, want) {
-		t.Fatalf("defaults:\n got %+v\nwant %+v", r, want)
+	if got := loadWrittenRecipe(t, recipeDir); !reflect.DeepEqual(got, want) {
+		t.Errorf("defaults:\n got %+v\nwant %+v", got, want)
 	}
 }
 
 func TestInitAsksInOrder(t *testing.T) {
-	p := &scriptedPrompt{}
-	app := App{Stdout: io.Discard, Stderr: io.Discard, Dir: t.TempDir(), Prompt: p}
-	if code := app.Run([]string{"init"}); code != 0 {
-		t.Fatalf("code %d", code)
+	prompt := &scriptedPrompt{}
+	app := App{Stdout: io.Discard, Stderr: io.Discard, RecipeDir: t.TempDir(), Prompt: prompt}
+	if exitCode := app.Run([]string{"init"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d", exitCode)
 	}
-	want := []string{"image name", "release", "user", "timezone", "preset", "packages"}
-	if len(p.questions) != len(want) {
-		t.Fatalf("questions %q", p.questions)
+	wantTopics := []string{"image name", "release", "user", "timezone", "preset", "packages"}
+	if len(prompt.questionsAsked) != len(wantTopics) {
+		t.Fatalf("questions asked = %q, want one about each of %q", prompt.questionsAsked, wantTopics)
 	}
-	for i, w := range want {
-		if !strings.Contains(strings.ToLower(p.questions[i]), w) {
-			t.Fatalf("question %d %q should be about %s", i, p.questions[i], w)
+	for i, wantTopic := range wantTopics {
+		if !strings.Contains(strings.ToLower(prompt.questionsAsked[i]), wantTopic) {
+			t.Errorf("question %d %q should be about %s", i, prompt.questionsAsked[i], wantTopic)
 		}
 	}
 }
@@ -109,140 +113,151 @@ func TestInitAsksInOrder(t *testing.T) {
 func TestInitPresetsExpandAndExtrasAppend(t *testing.T) {
 	// Extras may be separated by commas, spaces or both: people type them the
 	// way they would for apt install.
-	for _, extra := range []string{" numpy-dev , ,git,python3 ", "numpy-dev git python3", "numpy-dev, git  python3"} {
-		dir := t.TempDir()
-		code, _, errs := runInit(t, dir, []string{"py", "22.04", "", "", "python-lab", extra})
-		if code != 0 {
-			t.Fatalf("%q: code %d: %s", extra, code, errs)
-		}
-		r, err := recipe.Load(filepath.Join(dir, "frostroot.toml"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		want := []string{"python3", "python3-pip", "python3-venv", "git", "numpy-dev"}
-		if !reflect.DeepEqual(r.Packages.Include, want) {
-			t.Fatalf("%q: include %#v want %#v", extra, r.Packages.Include, want)
-		}
+	extraPackageAnswers := []string{" numpy-dev , ,git,python3 ", "numpy-dev git python3", "numpy-dev, git  python3"}
+	for _, extraPackages := range extraPackageAnswers {
+		t.Run(extraPackages, func(t *testing.T) {
+			recipeDir := t.TempDir()
+			answers := []string{"py", "22.04", "", "", "python-lab", extraPackages}
+			if exitCode, _, stderr := runInitWithAnswers(recipeDir, answers); exitCode != exitSuccess {
+				t.Fatalf("exit code = %d, stderr %s", exitCode, stderr)
+			}
+			want := []string{"python3", "python3-pip", "python3-venv", "git", "numpy-dev"}
+			if got := loadWrittenRecipe(t, recipeDir).Packages.Include; !reflect.DeepEqual(got, want) {
+				t.Errorf("packages = %#v, want %#v", got, want)
+			}
+		})
 	}
 }
 
 func TestInitPythonLabNoteOnlyOnNoble(t *testing.T) {
-	_, out, _ := runInit(t, t.TempDir(), []string{"py", "24.04", "", "", "python-lab", ""})
-	if !strings.Contains(out, "venv") || !strings.Contains(out, "PEP 668") {
-		t.Fatalf("24.04 python-lab should warn about PEP 668: %s", out)
+	_, stdout, _ := runInitWithAnswers(t.TempDir(), []string{"py", "24.04", "", "", "python-lab", ""})
+	if !strings.Contains(stdout, "venv") || !strings.Contains(stdout, "PEP 668") {
+		t.Errorf("24.04 python-lab should warn about PEP 668:\n%s", stdout)
 	}
-	_, out, _ = runInit(t, t.TempDir(), []string{"py", "22.04", "", "", "python-lab", ""})
-	if strings.Contains(out, "PEP 668") {
-		t.Fatalf("22.04 has no PEP 668 restriction: %s", out)
+	_, stdout, _ = runInitWithAnswers(t.TempDir(), []string{"py", "22.04", "", "", "python-lab", ""})
+	if strings.Contains(stdout, "PEP 668") {
+		t.Errorf("22.04 has no PEP 668 restriction:\n%s", stdout)
 	}
 }
 
-func TestInitRefusesToClobber(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "frostroot.toml")
-	if err := os.WriteFile(path, []byte("original"), 0o644); err != nil {
+func TestInitRefusesToOverwrite(t *testing.T) {
+	recipeDir := t.TempDir()
+	recipePath := filepath.Join(recipeDir, "frostroot.toml")
+	if err := os.WriteFile(recipePath, []byte("original"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	p := &scriptedPrompt{}
-	var errb bytes.Buffer
-	app := App{Stdout: io.Discard, Stderr: &errb, Dir: dir, Prompt: p}
-	if code := app.Run([]string{"init"}); code != 1 {
-		t.Fatalf("code %d", code)
+	prompt := &scriptedPrompt{}
+	var stderr bytes.Buffer
+	app := App{Stdout: io.Discard, Stderr: &stderr, RecipeDir: recipeDir, Prompt: prompt}
+	if exitCode := app.Run([]string{"init"}); exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d", exitCode, exitUserError)
 	}
-	if !strings.Contains(errb.String(), "--force") {
-		t.Fatalf("stderr should mention --force: %s", errb.String())
+	if !strings.Contains(stderr.String(), "--force") {
+		t.Errorf("stderr should mention --force:\n%s", stderr.String())
 	}
-	if len(p.questions) != 0 {
-		t.Fatal("must refuse before asking anything")
+	if len(prompt.questionsAsked) != 0 {
+		t.Error("init must refuse before asking anything")
 	}
-	if body, _ := os.ReadFile(path); string(body) != "original" {
-		t.Fatal("existing recipe must not be touched")
+	recipeText, err := os.ReadFile(recipePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(recipeText) != "original" {
+		t.Error("the existing recipe must not be touched")
 	}
 }
 
 func TestInitForceOverwrites(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "frostroot.toml")
-	if err := os.WriteFile(path, []byte("original"), 0o644); err != nil {
+	recipeDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(recipeDir, "frostroot.toml"), []byte("original"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if code, _, errs := runInit(t, dir, nil, "--force"); code != 0 {
-		t.Fatalf("code %d: %s", code, errs)
+	if exitCode, _, stderr := runInitWithAnswers(recipeDir, nil, "--force"); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr)
 	}
-	if _, err := recipe.Load(path); err != nil {
-		t.Fatal(err)
-	}
+	loadWrittenRecipe(t, recipeDir)
 }
 
-func TestInitRejectsBadAnswers(t *testing.T) {
-	for name, answers := range map[string][]string{
+func TestInitRejectsInvalidAnswers(t *testing.T) {
+	answersByInvalidField := map[string][]string{
 		"release":  {"cpp-lab", "18.04", "student", "UTC", "none", ""},
 		"user":     {"cpp-lab", "24.04", "root", "UTC", "none", ""},
 		"timezone": {"cpp-lab", "24.04", "student", "../etc/passwd", "none", ""},
 		"package":  {"cpp-lab", "24.04", "student", "UTC", "none", "git; rm -rf /"},
 		"preset":   {"cpp-lab", "24.04", "student", "UTC", "gaming", ""},
-	} {
-		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
-			code, _, errs := runInit(t, dir, answers)
-			if code != 1 {
-				t.Fatalf("code %d", code)
+	}
+	for invalidField, answers := range answersByInvalidField {
+		t.Run(invalidField, func(t *testing.T) {
+			recipeDir := t.TempDir()
+			exitCode, _, stderr := runInitWithAnswers(recipeDir, answers)
+			if exitCode != exitUserError {
+				t.Fatalf("exit code = %d, want %d", exitCode, exitUserError)
 			}
-			if errs == "" {
-				t.Fatal("expected an explanation on stderr")
+			if stderr == "" {
+				t.Error("expected an explanation on stderr")
 			}
-			entries, _ := os.ReadDir(dir)
+			entries, err := os.ReadDir(recipeDir)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if len(entries) != 0 {
-				t.Fatalf("must not write anything, found %v", entries)
+				t.Errorf("init must not write anything, found %v", entries)
 			}
 		})
 	}
 }
 
 func TestInitWritesComments(t *testing.T) {
-	dir := t.TempDir()
-	if code, _, errs := runInit(t, dir, nil); code != 0 {
-		t.Fatalf("code %d: %s", code, errs)
+	recipeDir := t.TempDir()
+	if exitCode, _, stderr := runInitWithAnswers(recipeDir, nil); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr)
 	}
-	body, err := os.ReadFile(filepath.Join(dir, "frostroot.toml"))
+	recipeText, err := os.ReadFile(filepath.Join(recipeDir, "frostroot.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(body)
-	for _, want := range []string{"#", "frostroot.lock", "20.04 | 22.04 | 24.04"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("recipe is hand-edited; missing %q in:\n%s", want, text)
+	// The recipe is edited by hand, so it explains itself.
+	for _, wantText := range []string{"#", "frostroot.lock", "20.04 | 22.04 | 24.04"} {
+		if !strings.Contains(string(recipeText), wantText) {
+			t.Errorf("recipe lacks %q:\n%s", wantText, recipeText)
 		}
 	}
 }
 
 func TestInitWithLinePrompt(t *testing.T) {
-	dir := t.TempDir()
-	var out bytes.Buffer
+	recipeDir := t.TempDir()
+	var stdout bytes.Buffer
 	app := App{
-		Stdin:  strings.NewReader("cpp-lab\n22.04\n\n\nbuild-essential\n"), // then EOF: accept the rest
-		Stdout: &out, Stderr: io.Discard, Dir: dir,
+		Stdin:     strings.NewReader("cpp-lab\n22.04\n\n\nbuild-essential\n"), // then end of input: accept the rest
+		Stdout:    &stdout,
+		Stderr:    io.Discard,
+		RecipeDir: recipeDir,
 	}
-	if code := app.Run([]string{"init"}); code != 0 {
-		t.Fatalf("code %d: %s", code, out.String())
+	if exitCode := app.Run([]string{"init"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stdout %s", exitCode, stdout.String())
 	}
-	r, err := recipe.Load(filepath.Join(dir, "frostroot.toml"))
-	if err != nil {
-		t.Fatal(err)
+	imageRecipe := loadWrittenRecipe(t, recipeDir)
+	if imageRecipe.Image.Name != "cpp-lab" || imageRecipe.Image.Release != "22.04" ||
+		imageRecipe.User.Name != "student" || len(imageRecipe.Packages.Include) != 4 {
+		t.Errorf("recipe = %+v", imageRecipe)
 	}
-	if r.Image.Name != "cpp-lab" || r.Image.Release != "22.04" || r.User.Name != "student" || len(r.Packages.Include) != 4 {
-		t.Fatalf("got %+v", r)
-	}
-	if !strings.Contains(out.String(), "[24.04]") {
-		t.Fatalf("prompts should show defaults: %s", out.String())
+	if !strings.Contains(stdout.String(), "[24.04]") {
+		t.Errorf("prompts should show defaults:\n%s", stdout.String())
 	}
 }
 
-func contains(xs []string, w string) bool {
-	for _, x := range xs {
-		if x == w {
-			return true
+func TestTOMLQuote(t *testing.T) {
+	testCases := []struct {
+		value string
+		want  string
+	}{
+		{value: "plain", want: `"plain"`},
+		{value: `say "hi"\now`, want: `"say \"hi\"\\now"`},
+		{value: "tab\there", want: `"tab\u0009here"`},
+	}
+	for _, testCase := range testCases {
+		if got := tomlQuote(testCase.value); got != testCase.want {
+			t.Errorf("tomlQuote(%q) = %s, want %s", testCase.value, got, testCase.want)
 		}
 	}
-	return false
 }

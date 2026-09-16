@@ -13,323 +13,379 @@ import (
 	"frostroot/internal/builder"
 )
 
-const stubStatus = "Package: git\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1:1\n"
+// fakeDpkgStatus is the dpkg status file fakeBootstrapper "downloads".
+const fakeDpkgStatus = "Package: git\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1:1\n"
 
-// stubBoot writes the two artifacts a real bootstrap produces.
-type stubBoot struct {
-	err       error
-	preflight error
-	spec      builder.BootstrapSpec
+// fakeBootstrapper writes the two files a real bootstrap produces, without
+// running mmdebstrap.
+type fakeBootstrapper struct {
+	runErr       error
+	preflightErr error
+	lastSpec     builder.BootstrapSpec // zero until Run is called
 }
 
-func (s *stubBoot) Preflight(spec builder.BootstrapSpec) error { return s.preflight }
+func (f *fakeBootstrapper) Preflight(builder.BootstrapSpec) error {
+	return f.preflightErr
+}
 
-func (s *stubBoot) Run(ctx context.Context, spec builder.BootstrapSpec) error {
-	s.spec = spec
-	if s.err != nil {
-		return s.err
+func (f *fakeBootstrapper) Run(_ context.Context, spec builder.BootstrapSpec) error {
+	f.lastSpec = spec
+	if f.runErr != nil {
+		return f.runErr
 	}
-	if err := os.WriteFile(spec.TarPath, []byte("tar"), 0o644); err != nil {
+	if err := os.WriteFile(spec.TarballPath, []byte("tar"), 0o644); err != nil {
 		return err
 	}
-	for _, h := range spec.Hooks {
-		if p, ok := strings.CutPrefix(h, "download /var/lib/dpkg/status "); ok {
-			return os.WriteFile(strings.Trim(p, "'"), []byte(stubStatus), 0o644)
+	for _, hook := range spec.CustomizeHooks {
+		if statusDestination, isDownload := strings.CutPrefix(hook, "download /var/lib/dpkg/status "); isDownload {
+			return os.WriteFile(strings.Trim(statusDestination, "'"), []byte(fakeDpkgStatus), 0o644)
 		}
 	}
-	return errors.New("no download hook")
+	return errors.New("no download hook for the dpkg status file")
 }
 
-func newApp(t *testing.T, dir string, boot *stubBoot, out, errb *bytes.Buffer) *App {
+// bootstrapRan reports whether the build reached the bootstrapper's Run.
+func (f *fakeBootstrapper) bootstrapRan() bool {
+	return f.lastSpec.Suite != ""
+}
+
+// newBuildApp returns an App that builds the recipe in recipeDir with
+// bootstrapper, on Linux, outside WSL, with its work root in a temporary
+// directory.
+func newBuildApp(t *testing.T, recipeDir string, bootstrapper *fakeBootstrapper, stdout, stderr *bytes.Buffer) *App {
 	t.Helper()
-	cache := t.TempDir()
+	cacheDir := t.TempDir()
 	return &App{
-		Stdout: out, Stderr: errb, Dir: dir, GOOS: "linux",
-		Getenv: func(k string) string {
-			if k == "XDG_CACHE_HOME" {
-				return cache
+		Stdout:    stdout,
+		Stderr:    stderr,
+		RecipeDir: recipeDir,
+		GOOS:      "linux",
+		Getenv: func(name string) string {
+			if name == "XDG_CACHE_HOME" {
+				return cacheDir
 			}
 			return ""
 		},
-		WSLPath: func(string) (string, error) { return "", errors.New("not WSL") },
-		Builder: &builder.Builder{Bootstrap: boot},
+		WSLPath: func(string) (string, error) { return "", errors.New("not running under WSL") },
+		Builder: &builder.Builder{Bootstrapper: bootstrapper},
 	}
 }
 
-func setRelease(t *testing.T, path, release string) {
+// setRelease replaces the release in a copy of valid.toml.
+func setRelease(t *testing.T, recipePath, release string) {
 	t.Helper()
-	body, err := os.ReadFile(path)
+	recipeText, err := os.ReadFile(recipePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	updated := strings.Replace(string(body), `release = "22.04"`, fmt.Sprintf("release = %q", release), 1)
-	if updated == string(body) {
+	updatedText := strings.Replace(string(recipeText), `release = "22.04"`, fmt.Sprintf("release = %q", release), 1)
+	if updatedText == string(recipeText) {
 		t.Fatal("fixture has no release line to replace")
 	}
-	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+	if err := os.WriteFile(recipePath, []byte(updatedText), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// assertNoLock fails the test if a build left frostroot.lock in recipeDir.
+func assertNoLock(t *testing.T, recipeDir string) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(recipeDir, "frostroot.lock")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a failed build must not leave frostroot.lock (stat error: %v)", err)
 	}
 }
 
 func TestBuildSuccess(t *testing.T) {
-	dir := recipeDir(t, "valid.toml")
-	var out, errb bytes.Buffer
-	app := newApp(t, dir, &stubBoot{}, &out, &errb)
-	if code := app.Run([]string{"build"}); code != 0 {
-		t.Fatalf("code %d stderr %s", code, errb.String())
+	recipeDir := newRecipeDir(t, "valid.toml")
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, recipeDir, &fakeBootstrapper{}, &stdout, &stderr)
+	if exitCode := app.Run([]string{"build"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr.String())
 	}
-	if _, err := os.Stat(filepath.Join(dir, "frostroot.lock")); err != nil {
-		t.Fatal(err)
+	for _, wantFile := range []string{"frostroot.lock", filepath.Join("dist", "cpp-lab-ubuntu-22.04-amd64.tar.gz")} {
+		if _, err := os.Stat(filepath.Join(recipeDir, wantFile)); err != nil {
+			t.Error(err)
+		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, "dist", "cpp-lab-ubuntu-22.04-amd64.tar.gz")); err != nil {
-		t.Fatal(err)
+	for _, wantText := range []string{
+		"wsl --import cpp-lab <install-dir> dist/cpp-lab-ubuntu-22.04-amd64.tar.gz",
+		"frostroot.lock (1 package)",
+	} {
+		if !strings.Contains(stdout.String(), wantText) {
+			t.Errorf("stdout lacks %q:\n%s", wantText, stdout.String())
+		}
 	}
-	if !strings.Contains(out.String(), "wsl --import cpp-lab <install-dir> dist/cpp-lab-ubuntu-22.04-amd64.tar.gz") {
-		t.Fatalf("stdout %s", out.String())
-	}
-	if !strings.Contains(out.String(), "frostroot.lock (1 package)") {
-		t.Fatalf("stdout should summarise the lock: %s", out.String())
-	}
-	if strings.Contains(out.String(), "PowerShell") {
-		t.Fatalf("no Windows path without wslpath: %s", out.String())
+	if strings.Contains(stdout.String(), "PowerShell") {
+		t.Errorf("no Windows path should be printed without wslpath:\n%s", stdout.String())
 	}
 }
 
 func TestBuildPrintsWindowsPathUnderWSL(t *testing.T) {
-	dir := recipeDir(t, "valid.toml")
-	var out, errb bytes.Buffer
-	app := newApp(t, dir, &stubBoot{}, &out, &errb)
-	var asked string
-	app.WSLPath = func(p string) (string, error) {
-		asked = p
+	recipeDir := newRecipeDir(t, "valid.toml")
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, recipeDir, &fakeBootstrapper{}, &stdout, &stderr)
+	var convertedPath string
+	app.WSLPath = func(linuxPath string) (string, error) {
+		convertedPath = linuxPath
 		return `\\wsl.localhost\Ubuntu\home\o'neil\lab\dist\cpp-lab-ubuntu-22.04-amd64.tar.gz`, nil
 	}
-	if code := app.Run([]string{"build"}); code != 0 {
-		t.Fatalf("code %d stderr %s", code, errb.String())
+	if exitCode := app.Run([]string{"build"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr.String())
 	}
-	if asked != filepath.Join(dir, "dist", "cpp-lab-ubuntu-22.04-amd64.tar.gz") {
-		t.Fatalf("wslpath asked about %q", asked)
+	if wantPath := filepath.Join(recipeDir, "dist", "cpp-lab-ubuntu-22.04-amd64.tar.gz"); convertedPath != wantPath {
+		t.Errorf("WSLPath converted %q, want %q", convertedPath, wantPath)
 	}
 	// Single-quoted for PowerShell, with the embedded quote doubled.
-	want := `wsl --import cpp-lab <install-dir> '\\wsl.localhost\Ubuntu\home\o''neil\lab\dist\cpp-lab-ubuntu-22.04-amd64.tar.gz'`
-	if !strings.Contains(out.String(), want) {
-		t.Fatalf("stdout %s", out.String())
+	wantCommand := `wsl --import cpp-lab <install-dir> '\\wsl.localhost\Ubuntu\home\o''neil\lab\dist\cpp-lab-ubuntu-22.04-amd64.tar.gz'`
+	if !strings.Contains(stdout.String(), wantCommand) {
+		t.Errorf("stdout lacks %q:\n%s", wantCommand, stdout.String())
 	}
 }
 
-func TestBuildWarnsOnEOLRelease(t *testing.T) {
-	dir := recipeDir(t, "valid.toml")
-	setRelease(t, filepath.Join(dir, "frostroot.toml"), "20.04")
-	var out, errb bytes.Buffer
-	app := newApp(t, dir, &stubBoot{}, &out, &errb)
-	if code := app.Run([]string{"build"}); code != 0 {
-		t.Fatalf("code %d stderr %s", code, errb.String())
+func TestBuildWarnsOnEndOfLifeRelease(t *testing.T) {
+	recipeDir := newRecipeDir(t, "valid.toml")
+	setRelease(t, filepath.Join(recipeDir, "frostroot.toml"), "20.04")
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, recipeDir, &fakeBootstrapper{}, &stdout, &stderr)
+	if exitCode := app.Run([]string{"build"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr.String())
 	}
-	low := strings.ToLower(errb.String())
-	for _, want := range []string{"20.04", "security", "ubuntu pro"} {
-		if !strings.Contains(low, want) {
-			t.Fatalf("EOL warning should mention %q: %s", want, errb.String())
+	lowercaseStderr := strings.ToLower(stderr.String())
+	for _, wantText := range []string{"20.04", "security", "ubuntu pro"} {
+		if !strings.Contains(lowercaseStderr, wantText) {
+			t.Errorf("end-of-life warning should mention %q:\n%s", wantText, stderr.String())
 		}
 	}
 }
 
 func TestBuildDoesNotWarnOnSupportedRelease(t *testing.T) {
-	var out, errb bytes.Buffer
-	app := newApp(t, recipeDir(t, "valid.toml"), &stubBoot{}, &out, &errb)
-	if code := app.Run([]string{"build"}); code != 0 {
-		t.Fatalf("code %d", code)
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, newRecipeDir(t, "valid.toml"), &fakeBootstrapper{}, &stdout, &stderr)
+	if exitCode := app.Run([]string{"build"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr.String())
 	}
-	if strings.Contains(strings.ToLower(errb.String()), "warning") {
-		t.Fatalf("no warning expected for 22.04: %s", errb.String())
+	if strings.Contains(strings.ToLower(stderr.String()), "warning") {
+		t.Errorf("no warning expected for 22.04:\n%s", stderr.String())
 	}
 }
 
-func TestBuildNotLinuxExit1(t *testing.T) {
-	var out, errb bytes.Buffer
-	boot := &stubBoot{}
-	app := newApp(t, recipeDir(t, "valid.toml"), boot, &out, &errb)
+func TestBuildOutsideLinuxPointsAtWSL(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	bootstrapper := &fakeBootstrapper{}
+	app := newBuildApp(t, newRecipeDir(t, "valid.toml"), bootstrapper, &stdout, &stderr)
 	app.GOOS = "windows"
-	if code := app.Run([]string{"build"}); code != 1 {
-		t.Fatalf("code %d", code)
+	if exitCode := app.Run([]string{"build"}); exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d", exitCode, exitUserError)
 	}
-	if !strings.Contains(errb.String(), "WSL") {
-		t.Fatalf("message should point Windows users at WSL: %s", errb.String())
+	if !strings.Contains(stderr.String(), "WSL") {
+		t.Errorf("message should point Windows users at WSL:\n%s", stderr.String())
 	}
-	if boot.spec.Suite != "" {
-		t.Fatal("bootstrap must not run")
+	if bootstrapper.bootstrapRan() {
+		t.Error("the bootstrap must not run")
 	}
 }
 
-func TestBuildUnwritableOutputExit1(t *testing.T) {
+func TestBuildUnwritableOutputIsUserError(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root can write anywhere")
 	}
-	dir := recipeDir(t, "valid.toml")
-	dist := filepath.Join(dir, "dist")
-	if err := os.Mkdir(dist, 0o555); err != nil {
+	recipeDir := newRecipeDir(t, "valid.toml")
+	distDir := filepath.Join(recipeDir, "dist")
+	if err := os.Mkdir(distDir, 0o555); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.Chmod(dist, 0o755) })
-	var out, errb bytes.Buffer
-	boot := &stubBoot{}
-	app := newApp(t, dir, boot, &out, &errb)
-	if code := app.Run([]string{"build"}); code != 1 {
-		t.Fatalf("code %d: %s", code, errb.String())
+	t.Cleanup(func() {
+		if err := os.Chmod(distDir, 0o755); err != nil {
+			t.Error(err)
+		}
+	})
+	var stdout, stderr bytes.Buffer
+	bootstrapper := &fakeBootstrapper{}
+	app := newBuildApp(t, recipeDir, bootstrapper, &stdout, &stderr)
+	if exitCode := app.Run([]string{"build"}); exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d; stderr %s", exitCode, exitUserError, stderr.String())
 	}
-	if !strings.Contains(errb.String(), "sudo") || boot.spec.Suite != "" {
-		t.Fatalf("should explain before bootstrapping: %s", errb.String())
+	if !strings.Contains(stderr.String(), "sudo") {
+		t.Errorf("stderr should explain the ownership problem:\n%s", stderr.String())
+	}
+	if bootstrapper.bootstrapRan() {
+		t.Error("the problem must be reported before bootstrapping")
 	}
 }
 
-func TestBuildPreflightFailuresExit1(t *testing.T) {
-	for _, err := range []error{
+func TestBuildPreflightFailuresAreUserErrors(t *testing.T) {
+	preflightErrors := []error{
 		fmt.Errorf("%w; install it with: sudo apt install mmdebstrap", builder.ErrNoMmdebstrap),
 		fmt.Errorf("%w at /usr/share/keyrings/ubuntu-archive-keyring.gpg", builder.ErrNoKeyring),
-	} {
-		dir := recipeDir(t, "valid.toml")
-		var out, errb bytes.Buffer
-		app := newApp(t, dir, &stubBoot{preflight: err}, &out, &errb)
-		if code := app.Run([]string{"build"}); code != 1 {
-			t.Fatalf("%v: code %d", err, code)
-		}
-		if !strings.Contains(errb.String(), err.Error()) {
-			t.Fatalf("stderr should carry the explanation: %s", errb.String())
-		}
+	}
+	for _, preflightErr := range preflightErrors {
+		t.Run(preflightErr.Error(), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			app := newBuildApp(t, newRecipeDir(t, "valid.toml"), &fakeBootstrapper{preflightErr: preflightErr}, &stdout, &stderr)
+			if exitCode := app.Run([]string{"build"}); exitCode != exitUserError {
+				t.Fatalf("exit code = %d, want %d", exitCode, exitUserError)
+			}
+			if !strings.Contains(stderr.String(), preflightErr.Error()) {
+				t.Errorf("stderr should carry the explanation:\n%s", stderr.String())
+			}
+		})
 	}
 }
 
-func TestBuildWorkRootOnMntExit1(t *testing.T) {
-	var out, errb bytes.Buffer
-	app := newApp(t, recipeDir(t, "valid.toml"), &stubBoot{}, &out, &errb)
-	app.Getenv = func(k string) string {
-		if k == "XDG_CACHE_HOME" {
+func TestBuildWorkRootUnderMntIsUserError(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, newRecipeDir(t, "valid.toml"), &fakeBootstrapper{}, &stdout, &stderr)
+	app.Getenv = func(name string) string {
+		if name == "XDG_CACHE_HOME" {
 			return "/mnt/c/cache"
 		}
 		return ""
 	}
-	if code := app.Run([]string{"build"}); code != 1 {
-		t.Fatalf("code %d: %s", code, errb.String())
+	if exitCode := app.Run([]string{"build"}); exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d; stderr %s", exitCode, exitUserError, stderr.String())
 	}
 }
 
-func TestBuildBootstrapFailureExit2(t *testing.T) {
-	dir := recipeDir(t, "valid.toml")
-	var out, errb bytes.Buffer
-	app := newApp(t, dir, &stubBoot{err: errors.New("mmdebstrap exploded")}, &out, &errb)
-	if code := app.Run([]string{"build"}); code != 2 {
-		t.Fatalf("code %d stderr %s", code, errb.String())
+func TestBuildBootstrapFailure(t *testing.T) {
+	recipeDir := newRecipeDir(t, "valid.toml")
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, recipeDir, &fakeBootstrapper{runErr: errors.New("mmdebstrap exploded")}, &stdout, &stderr)
+	if exitCode := app.Run([]string{"build"}); exitCode != exitBuildFailed {
+		t.Fatalf("exit code = %d, want %d; stderr %s", exitCode, exitBuildFailed, stderr.String())
 	}
-	if !strings.Contains(errb.String(), "mmdebstrap exploded") {
-		t.Fatalf("stderr %s", errb.String())
+	for _, wantText := range []string{"mmdebstrap exploded", "work directory kept"} {
+		if !strings.Contains(stderr.String(), wantText) {
+			t.Errorf("stderr lacks %q:\n%s", wantText, stderr.String())
+		}
 	}
-	if !strings.Contains(errb.String(), "work directory kept") {
-		t.Fatalf("failure must print the kept work directory: %s", errb.String())
+	assertNoLock(t, recipeDir)
+}
+
+func TestBuildArchiveTroubleSuggestsMirrorFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	bootstrapper := &fakeBootstrapper{runErr: errors.New("mmdebstrap failed: exit status 1\n" +
+		"E: Failed to fetch http://archive.ubuntu.com/ubuntu/dists/jammy/InRelease  Temporary failure resolving 'archive.ubuntu.com'")}
+	app := newBuildApp(t, newRecipeDir(t, "valid.toml"), bootstrapper, &stdout, &stderr)
+	if exitCode := app.Run([]string{"build"}); exitCode != exitBuildFailed {
+		t.Fatalf("exit code = %d, want %d", exitCode, exitBuildFailed)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "frostroot.lock")); !os.IsNotExist(err) {
-		t.Fatal("failure must not leave a lock")
+	for _, wantText := range []string{"--mirror", "http://archive.ubuntu.com/ubuntu"} {
+		if !strings.Contains(stderr.String(), wantText) {
+			t.Errorf("stderr should name the archive and suggest --mirror, lacks %q:\n%s", wantText, stderr.String())
+		}
 	}
 }
 
-func TestBuildMirrorTroubleSuggestsMirrorFlag(t *testing.T) {
-	var out, errb bytes.Buffer
-	boot := &stubBoot{err: errors.New("mmdebstrap failed: exit status 1\nE: Failed to fetch http://archive.ubuntu.com/ubuntu/dists/jammy/InRelease  Temporary failure resolving 'archive.ubuntu.com'")}
-	app := newApp(t, recipeDir(t, "valid.toml"), boot, &out, &errb)
-	if code := app.Run([]string{"build"}); code != 2 {
-		t.Fatalf("code %d", code)
+func TestBuildInterrupted(t *testing.T) {
+	recipeDir := newRecipeDir(t, "valid.toml")
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, recipeDir, &fakeBootstrapper{runErr: fmt.Errorf("mmdebstrap: %w", context.Canceled)}, &stdout, &stderr)
+	if exitCode := app.Run([]string{"build"}); exitCode != exitInterrupted {
+		t.Fatalf("exit code = %d, want %d", exitCode, exitInterrupted)
 	}
-	if !strings.Contains(errb.String(), "--mirror") || !strings.Contains(errb.String(), "http://archive.ubuntu.com/ubuntu") {
-		t.Fatalf("should name the mirror and suggest --mirror: %s", errb.String())
-	}
-}
-
-func TestBuildInterruptedExit130(t *testing.T) {
-	dir := recipeDir(t, "valid.toml")
-	var out, errb bytes.Buffer
-	app := newApp(t, dir, &stubBoot{err: fmt.Errorf("mmdebstrap: %w", context.Canceled)}, &out, &errb)
-	if code := app.Run([]string{"build"}); code != 130 {
-		t.Fatalf("code %d", code)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "frostroot.lock")); !os.IsNotExist(err) {
-		t.Fatal("interrupt must not leave a lock")
-	}
-	if !strings.Contains(errb.String(), "work directory kept") {
-		t.Fatalf("interrupt keeps the work directory like any failure: %s", errb.String())
+	assertNoLock(t, recipeDir)
+	if !strings.Contains(stderr.String(), "work directory kept") {
+		t.Errorf("an interrupt keeps the work directory like any failure:\n%s", stderr.String())
 	}
 }
 
-func TestBuildInvalidRecipeExit1(t *testing.T) {
-	var out, errb bytes.Buffer
-	boot := &stubBoot{}
-	app := newApp(t, recipeDir(t, "bad-user.toml"), boot, &out, &errb)
-	if code := app.Run([]string{"build"}); code != 1 {
-		t.Fatalf("code %d", code)
+func TestBuildInvalidRecipeNeverBootstraps(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	bootstrapper := &fakeBootstrapper{}
+	app := newBuildApp(t, newRecipeDir(t, "bad-user.toml"), bootstrapper, &stdout, &stderr)
+	if exitCode := app.Run([]string{"build"}); exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d", exitCode, exitUserError)
 	}
-	if boot.spec.Suite != "" {
-		t.Fatal("an invalid recipe must never reach the bootstrapper")
+	if bootstrapper.bootstrapRan() {
+		t.Error("an invalid recipe must never reach the bootstrapper")
 	}
 }
 
-func TestBuildMissingRecipeExit1(t *testing.T) {
-	var out, errb bytes.Buffer
-	app := newApp(t, t.TempDir(), &stubBoot{}, &out, &errb)
-	if code := app.Run([]string{"build"}); code != 1 {
-		t.Fatalf("code %d", code)
+func TestBuildWithoutRecipe(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, t.TempDir(), &fakeBootstrapper{}, &stdout, &stderr)
+	if exitCode := app.Run([]string{"build"}); exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d", exitCode, exitUserError)
 	}
 }
 
 func TestBuildMirrorFlagReachesBuilder(t *testing.T) {
-	for _, args := range [][]string{
+	argumentLists := [][]string{
 		{"build", "--mirror", "http://mirror.example/ubuntu"},
 		{"build", "--mirror=https://mirror.example/ubuntu"},
-	} {
-		boot := &stubBoot{}
-		var out, errb bytes.Buffer
-		app := newApp(t, recipeDir(t, "valid.toml"), boot, &out, &errb)
-		if code := app.Run(args); code != 0 {
-			t.Fatalf("%v: code %d stderr %s", args, code, errb.String())
-		}
-		if len(boot.spec.Sources) != 3 {
-			t.Fatalf("sources %#v", boot.spec.Sources)
-		}
-		for _, line := range boot.spec.Sources {
-			if !strings.Contains(line, "mirror.example") {
-				t.Fatalf("%v: mirror not applied: %#v", args, boot.spec.Sources)
+	}
+	for _, args := range argumentLists {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			bootstrapper := &fakeBootstrapper{}
+			var stdout, stderr bytes.Buffer
+			app := newBuildApp(t, newRecipeDir(t, "valid.toml"), bootstrapper, &stdout, &stderr)
+			if exitCode := app.Run(args); exitCode != exitSuccess {
+				t.Fatalf("exit code = %d, stderr %s", exitCode, stderr.String())
 			}
-		}
+			sourceLines := bootstrapper.lastSpec.SourceLines
+			if len(sourceLines) != 3 {
+				t.Fatalf("source lines = %#v, want 3", sourceLines)
+			}
+			for _, sourceLine := range sourceLines {
+				if !strings.Contains(sourceLine, "mirror.example") {
+					t.Errorf("mirror not applied to %q", sourceLine)
+				}
+			}
+		})
 	}
 }
 
-func TestBuildRejectsBadMirror(t *testing.T) {
-	for _, m := range []string{"ftp://mirror.example/ubuntu", "mirror.example/ubuntu", "http://", "http://mirror.example/ubu ntu"} {
-		boot := &stubBoot{}
-		var out, errb bytes.Buffer
-		app := newApp(t, recipeDir(t, "valid.toml"), boot, &out, &errb)
-		if code := app.Run([]string{"build", "--mirror", m}); code != 1 {
-			t.Fatalf("%q: code %d", m, code)
-		}
-		if boot.spec.Suite != "" {
-			t.Fatalf("%q: bootstrap must not run", m)
-		}
+func TestBuildRejectsInvalidMirror(t *testing.T) {
+	invalidMirrorURLs := []string{"ftp://mirror.example/ubuntu", "mirror.example/ubuntu", "http://", "http://mirror.example/ubu ntu"}
+	for _, mirrorURL := range invalidMirrorURLs {
+		t.Run(mirrorURL, func(t *testing.T) {
+			bootstrapper := &fakeBootstrapper{}
+			var stdout, stderr bytes.Buffer
+			app := newBuildApp(t, newRecipeDir(t, "valid.toml"), bootstrapper, &stdout, &stderr)
+			if exitCode := app.Run([]string{"build", "--mirror", mirrorURL}); exitCode != exitUserError {
+				t.Fatalf("exit code = %d, want %d", exitCode, exitUserError)
+			}
+			if bootstrapper.bootstrapRan() {
+				t.Error("the bootstrap must not run")
+			}
+		})
 	}
 }
 
 func TestBuildKeepWorkPrintsWorkDir(t *testing.T) {
-	var out, errb bytes.Buffer
-	app := newApp(t, recipeDir(t, "valid.toml"), &stubBoot{}, &out, &errb)
-	if code := app.Run([]string{"build", "--keep-work"}); code != 0 {
-		t.Fatalf("code %d", code)
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, newRecipeDir(t, "valid.toml"), &fakeBootstrapper{}, &stdout, &stderr)
+	if exitCode := app.Run([]string{"build", "--keep-work"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr.String())
 	}
-	if !strings.Contains(out.String()+errb.String(), "work directory kept") {
-		t.Fatalf("--keep-work should say where: %s %s", out.String(), errb.String())
+	if !strings.Contains(stdout.String()+stderr.String(), "work directory kept") {
+		t.Errorf("--keep-work should say where the work directory is:\n%s%s", stdout.String(), stderr.String())
 	}
 }
 
-func TestBuildBadFlagsExit1(t *testing.T) {
+func TestBuildRejectsInvalidArguments(t *testing.T) {
 	for _, args := range [][]string{{"build", "--bogus"}, {"build", "extra"}} {
-		var out, errb bytes.Buffer
-		app := newApp(t, recipeDir(t, "valid.toml"), &stubBoot{}, &out, &errb)
-		if code := app.Run(args); code != 1 {
-			t.Fatalf("%v: code %d", args, code)
+		var stdout, stderr bytes.Buffer
+		app := newBuildApp(t, newRecipeDir(t, "valid.toml"), &fakeBootstrapper{}, &stdout, &stderr)
+		if exitCode := app.Run(args); exitCode != exitUserError {
+			t.Errorf("Run(%q) = %d, want %d", args, exitCode, exitUserError)
+		}
+	}
+}
+
+func TestFormatMegabytes(t *testing.T) {
+	testCases := []struct {
+		sizeInBytes int64
+		want        string
+	}{
+		{sizeInBytes: 0, want: "0 MB"},
+		{sizeInBytes: megabyte/2 - 1, want: "0 MB"},
+		{sizeInBytes: megabyte / 2, want: "1 MB"},
+		{sizeInBytes: 368 * megabyte, want: "368 MB"},
+	}
+	for _, testCase := range testCases {
+		if got := formatMegabytes(testCase.sizeInBytes); got != testCase.want {
+			t.Errorf("formatMegabytes(%d) = %q, want %q", testCase.sizeInBytes, got, testCase.want)
 		}
 	}
 }

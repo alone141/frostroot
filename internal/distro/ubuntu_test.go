@@ -2,154 +2,160 @@ package distro
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
 
-func TestLookupFocalIsEOLOnArchive(t *testing.T) {
-	info, err := Lookup("20.04", "amd64")
-	if err != nil {
-		t.Fatal(err)
+func TestLookupSupportedReleases(t *testing.T) {
+	testCases := []struct {
+		version       string
+		wantSuite     string
+		wantEndOfLife bool
+	}{
+		// The Task 0 spike found every focal pocket returning 404 on
+		// old-releases: an LTS release under ESM stays on the archive.
+		{version: "20.04", wantSuite: "focal", wantEndOfLife: true},
+		{version: "22.04", wantSuite: "jammy", wantEndOfLife: false},
+		{version: "24.04", wantSuite: "noble", wantEndOfLife: false},
 	}
-	if info.Suite != "focal" {
-		t.Fatalf("suite: got %q", info.Suite)
-	}
-	// The Task 0 spike found every focal pocket 404ing on old-releases: an LTS
-	// release under ESM stays on the archive.
-	if info.Base != "http://archive.ubuntu.com/ubuntu" {
-		t.Fatalf("base: got %q", info.Base)
-	}
-	if !info.EOL {
-		t.Fatal("20.04 must be flagged EOL so build can warn")
-	}
-	if len(info.Components) != 2 || info.Components[0] != "main" || info.Components[1] != "universe" {
-		t.Fatalf("components: got %#v", info.Components)
-	}
-}
-
-func TestLookupJammyAndNobleArchive(t *testing.T) {
-	for _, tc := range []struct{ release, suite string }{{"22.04", "jammy"}, {"24.04", "noble"}} {
-		info, err := Lookup(tc.release, "amd64")
-		if err != nil {
-			t.Fatalf("%s: %v", tc.release, err)
-		}
-		if info.Suite != tc.suite {
-			t.Fatalf("%s suite: got %q", tc.release, info.Suite)
-		}
-		if info.Base != "http://archive.ubuntu.com/ubuntu" {
-			t.Fatalf("%s base: got %q", tc.release, info.Base)
-		}
-		if info.EOL {
-			t.Fatalf("%s must not be flagged EOL", tc.release)
-		}
+	for _, testCase := range testCases {
+		t.Run(testCase.version, func(t *testing.T) {
+			release, err := Lookup(testCase.version, "amd64")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if release.Suite != testCase.wantSuite {
+				t.Errorf("Suite = %q, want %q", release.Suite, testCase.wantSuite)
+			}
+			if release.ArchiveURL != "http://archive.ubuntu.com/ubuntu" {
+				t.Errorf("ArchiveURL = %q, want the Ubuntu archive", release.ArchiveURL)
+			}
+			if release.EndOfLife != testCase.wantEndOfLife {
+				t.Errorf("EndOfLife = %v, want %v", release.EndOfLife, testCase.wantEndOfLife)
+			}
+			if !slices.Equal(release.Components, []string{"main", "universe"}) {
+				t.Errorf("Components = %q, want main and universe", release.Components)
+			}
+		})
 	}
 }
 
-func TestSourcesHasThreePockets(t *testing.T) {
-	info, err := Lookup("22.04", "amd64")
+func TestSourceLinesHasThreePockets(t *testing.T) {
+	release, err := Lookup("22.04", "amd64")
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := info.Sources("")
+	got := release.SourceLines("")
 	want := []string{
 		"deb http://archive.ubuntu.com/ubuntu jammy main universe",
 		"deb http://archive.ubuntu.com/ubuntu jammy-updates main universe",
 		"deb http://archive.ubuntu.com/ubuntu jammy-security main universe",
 	}
-	if len(got) != 3 {
-		t.Fatalf("want 3 pockets, got %#v", got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("line %d:\n got %q\nwant %q", i, got[i], want[i])
-		}
+	if !slices.Equal(got, want) {
+		t.Fatalf("SourceLines(\"\") =\n%q\nwant\n%q", got, want)
 	}
 }
 
-func TestSourcesMirrorOverrideReplacesAllThree(t *testing.T) {
-	info, err := Lookup("24.04", "amd64")
+func TestSourceLinesMirrorReplacesArchiveInAllPockets(t *testing.T) {
+	release, err := Lookup("24.04", "amd64")
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := info.Sources("http://mirror.example/ubuntu")
-	if len(got) != 3 {
-		t.Fatalf("got %#v", got)
+	got := release.SourceLines("http://mirror.example/ubuntu")
+	want := []string{
+		"deb http://mirror.example/ubuntu noble main universe",
+		"deb http://mirror.example/ubuntu noble-updates main universe",
+		"deb http://mirror.example/ubuntu noble-security main universe",
 	}
-	for _, line := range got {
-		if !strings.Contains(line, "http://mirror.example/ubuntu") {
-			t.Fatalf("override missed: %q", line)
-		}
-		if strings.Contains(line, "archive.ubuntu.com") {
-			t.Fatalf("default leaked: %q", line)
-		}
-	}
-	if !strings.Contains(got[1], "noble-updates") || !strings.Contains(got[2], "noble-security") {
-		t.Fatalf("pockets wrong: %#v", got)
+	if !slices.Equal(got, want) {
+		t.Fatalf("SourceLines(mirror) =\n%q\nwant\n%q", got, want)
 	}
 }
 
 func TestLookupReturnsACopyOfComponents(t *testing.T) {
-	a, err := Lookup("24.04", "amd64")
+	first, err := Lookup("24.04", "amd64")
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.Components[0] = "restricted"
-	b, err := Lookup("24.04", "amd64")
+	first.Components[0] = "restricted"
+	second, err := Lookup("24.04", "amd64")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.Components[0] != "main" {
-		t.Fatalf("caller mutated the shared table: %#v", b.Components)
+	if second.Components[0] != "main" {
+		t.Fatalf("a caller modified the shared release table: %q", second.Components)
 	}
 }
 
-func TestLookupUnknownRelease(t *testing.T) {
-	if _, err := Lookup("18.04", "amd64"); !errors.Is(err, ErrUnknownRelease) {
-		t.Fatalf("got %v", err)
+func TestLookupRejects(t *testing.T) {
+	testCases := []struct {
+		name         string
+		version      string
+		arch         string
+		wantErrors   []error
+		wantInOutput []string
+	}{
+		{
+			name:       "unknown release",
+			version:    "18.04",
+			arch:       "amd64",
+			wantErrors: []error{ErrUnknownRelease},
+		},
+		{
+			name:       "unsupported arch",
+			version:    "24.04",
+			arch:       "arm64",
+			wantErrors: []error{ErrUnsupportedArch},
+		},
+		{
+			name:         "empty arch names the supported one",
+			version:      "24.04",
+			arch:         "",
+			wantErrors:   []error{ErrUnsupportedArch},
+			wantInOutput: []string{"amd64"},
+		},
+		{
+			// A validator prints every problem, so one Lookup call must not
+			// hide the release problem behind the arch problem.
+			name:         "release and arch reported together",
+			version:      "18.04",
+			arch:         "arm64",
+			wantErrors:   []error{ErrUnknownRelease, ErrUnsupportedArch},
+			wantInOutput: []string{`"18.04"`, `"arm64"`},
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := Lookup(testCase.version, testCase.arch)
+			for _, wantError := range testCase.wantErrors {
+				if !errors.Is(err, wantError) {
+					t.Errorf("Lookup(%q, %q) error = %v, want it to wrap %v", testCase.version, testCase.arch, err, wantError)
+				}
+			}
+			for _, wantText := range testCase.wantInOutput {
+				if err == nil || !strings.Contains(err.Error(), wantText) {
+					t.Errorf("error %v should mention %s", err, wantText)
+				}
+			}
+		})
 	}
 }
 
-func TestLookupUnsupportedArch(t *testing.T) {
-	if _, err := Lookup("24.04", "arm64"); !errors.Is(err, ErrUnsupportedArch) {
-		t.Fatalf("got %v", err)
-	}
-}
-
-func TestLookupEmptyArch(t *testing.T) {
-	_, err := Lookup("24.04", "")
-	if !errors.Is(err, ErrUnsupportedArch) {
-		t.Fatalf("got %v", err)
-	}
-	if !strings.Contains(err.Error(), "amd64") {
-		t.Fatalf("message should name the supported arch: %v", err)
-	}
-}
-
-func TestLookupReportsReleaseAndArchTogether(t *testing.T) {
-	// validate prints every problem; one Lookup call must not hide the
-	// release problem behind the arch problem.
+func TestLookupReportsReleaseBeforeArch(t *testing.T) {
 	_, err := Lookup("18.04", "arm64")
-	if !errors.Is(err, ErrUnknownRelease) || !errors.Is(err, ErrUnsupportedArch) {
-		t.Fatalf("want both errors, got %v", err)
+	if err == nil {
+		t.Fatal("want an error")
 	}
-	msg := err.Error()
-	if !strings.Contains(msg, `"18.04"`) || !strings.Contains(msg, `"arm64"`) {
-		t.Fatalf("message should name both values: %q", msg)
-	}
-	if strings.Index(msg, "release") > strings.Index(msg, "arch") {
-		t.Fatalf("release should be reported first, in recipe order: %q", msg)
+	message := err.Error()
+	if strings.Index(message, "release") > strings.Index(message, "arch") {
+		t.Fatalf("the release problem should come first, in recipe order: %q", message)
 	}
 }
 
-func TestKnownReleases(t *testing.T) {
-	got := KnownReleases()
+func TestSupportedVersions(t *testing.T) {
 	want := []string{"20.04", "22.04", "24.04"}
-	if len(got) != 3 {
-		t.Fatalf("got %#v", got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("got %#v", got)
-		}
+	if got := SupportedVersions(); !slices.Equal(got, want) {
+		t.Fatalf("SupportedVersions() = %q, want %q", got, want)
 	}
 }

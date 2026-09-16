@@ -8,32 +8,40 @@ import (
 	"strings"
 )
 
-// linePrompt asks on out and reads one line per answer from in. End of input
-// counts as accepting the default, so init also works with stdin closed.
+// linePrompt asks questions on output and reads one line per answer from
+// input. End of input counts as accepting the default, so init also works with
+// standard input closed.
 type linePrompt struct {
-	in  *bufio.Reader
-	out io.Writer
+	input  *bufio.Reader
+	output io.Writer
 }
 
-func newLinePrompt(in io.Reader, out io.Writer) *linePrompt {
-	return &linePrompt{in: bufio.NewReader(in), out: out}
+func newLinePrompt(input io.Reader, output io.Writer) *linePrompt {
+	return &linePrompt{input: bufio.NewReader(input), output: output}
 }
 
-func (p *linePrompt) Ask(question, defaultValue string) (string, error) {
-	if defaultValue != "" {
-		fmt.Fprintf(p.out, "%s [%s]: ", question, defaultValue)
-	} else {
-		fmt.Fprintf(p.out, "%s: ", question)
+// Ask implements Prompt.
+func (p *linePrompt) Ask(question, defaultAnswer string) (string, error) {
+	questionText := question + ": "
+	if defaultAnswer != "" {
+		questionText = fmt.Sprintf("%s [%s]: ", question, defaultAnswer)
 	}
-	line, err := p.in.ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
+	if _, err := io.WriteString(p.output, questionText); err != nil {
 		return "", err
 	}
-	if errors.Is(err, io.EOF) && line == "" {
-		fmt.Fprintln(p.out)
+	line, err := p.input.ReadString('\n')
+	atEndOfInput := errors.Is(err, io.EOF)
+	if err != nil && !atEndOfInput {
+		return "", err
+	}
+	if atEndOfInput && line == "" {
+		// Nothing was typed, so end the question's line ourselves.
+		if _, err := io.WriteString(p.output, "\n"); err != nil {
+			return "", err
+		}
 	}
 	if answer := strings.TrimSpace(line); answer != "" {
 		return answer, nil
 	}
-	return defaultValue, nil
+	return defaultAnswer, nil
 }

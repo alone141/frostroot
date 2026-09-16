@@ -10,68 +10,104 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-// keyringFile gives Run a keyring that exists, so these tests need no
-// ubuntu-keyring on the host.
-func keyringFile(t *testing.T) string {
+// createKeyringFile creates a stand-in keyring so that these tests need no
+// ubuntu-keyring package on the host.
+func createKeyringFile(t *testing.T) string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "keyring.gpg")
-	if err := os.WriteFile(p, []byte("keys"), 0o644); err != nil {
+	path := filepath.Join(t.TempDir(), "keyring.gpg")
+	if err := os.WriteFile(path, []byte("keys"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return p
+	return path
 }
 
-// reachableDir returns a temp directory that mmdebstrap's user namespace
-// could reach: t.TempDir creates its parents 0700, so open them up.
-func reachableDir(t *testing.T) string {
+// createReachableDir returns a temporary directory that mmdebstrap's user
+// namespace could enter. t.TempDir makes its parent 0700, so the parents under
+// the system temporary directory are opened up.
+func createReachableDir(t *testing.T) string {
 	t.Helper()
-	d := t.TempDir()
-	base := filepath.Clean(os.TempDir())
-	for p := d; strings.HasPrefix(p, base+string(filepath.Separator)); p = filepath.Dir(p) {
-		if err := os.Chmod(p, 0o755); err != nil {
+	directory := t.TempDir()
+	systemTempDir := filepath.Clean(os.TempDir())
+	for ancestor := directory; strings.HasPrefix(ancestor, systemTempDir+string(filepath.Separator)); ancestor = filepath.Dir(ancestor) {
+		if err := os.Chmod(ancestor, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	return d
+	return directory
 }
 
-type recorded struct {
-	calls int
-	name  string
-	args  []string
-	env   []string
+// createUnreachableDir returns a directory that mmdebstrap's user namespace
+// cannot enter, like a 0750 home directory.
+func createUnreachableDir(t *testing.T) string {
+	t.Helper()
+	directory := filepath.Join(createReachableDir(t), "closed")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	return directory
 }
 
-func recorder(rec *recorded) Runner {
-	return func(ctx context.Context, name string, args, env []string, stdout, stderr io.Writer) error {
-		rec.calls++
-		rec.name, rec.args, rec.env = name, append([]string{}, args...), append([]string{}, env...)
+// runnableSpec returns a spec that Mmdebstrap.Run accepts: a reachable work
+// directory and an existing keyring.
+func runnableSpec(t *testing.T) BootstrapSpec {
+	t.Helper()
+	workDir := createReachableDir(t)
+	return BootstrapSpec{
+		Suite:       "noble",
+		TarballPath: filepath.Join(workDir, "image.tar.gz"),
+		WorkDir:     workDir,
+		Arch:        "amd64",
+		KeyringPath: createKeyringFile(t),
+	}
+}
+
+// commandRecord captures what a recordingRunner was asked to run.
+type commandRecord struct {
+	runCount    int
+	program     string
+	args        []string
+	environment []string
+}
+
+// recordingRunner returns a CommandRunner that records its arguments into
+// record instead of running anything.
+func recordingRunner(record *commandRecord) CommandRunner {
+	return func(_ context.Context, program string, args, environment []string, _, _ io.Writer) error {
+		record.runCount++
+		record.program = program
+		record.args = slices.Clone(args)
+		record.environment = slices.Clone(environment)
 		return nil
 	}
 }
 
-func unprivileged() func() int { return func() int { return 1000 } }
+// uidFunc returns a CurrentUID function that always reports uid.
+func uidFunc(uid int) func() int { return func() int { return uid } }
 
-func TestMmdebstrapCommand(t *testing.T) {
-	m := Mmdebstrap{Uid: unprivileged()}
-	args, env := m.command(BootstrapSpec{
-		Suite:      "jammy",
-		Sources:    []string{"deb http://a jammy main universe", "deb http://a jammy-updates main universe", "deb http://a jammy-security main universe"},
-		Include:    []string{"git", "systemd"},
-		Hooks:      []string{"upload '/w/wsl.conf' /etc/wsl.conf", "download /var/lib/dpkg/status '/w/dpkg-status'"},
-		TarPath:    "/w/image.tar.gz",
-		WorkDir:    "/w",
-		Arch:       "amd64",
-		Recommends: true,
-		Keyring:    "/k.gpg",
+func TestMmdebstrapCommandLine(t *testing.T) {
+	bootstrapper := Mmdebstrap{CurrentUID: uidFunc(1000)}
+	args, environment := bootstrapper.commandLine(BootstrapSpec{
+		Suite:             "jammy",
+		SourceLines:       []string{"deb http://a jammy main universe", "deb http://a jammy-updates main universe", "deb http://a jammy-security main universe"},
+		Include:           []string{"git", "systemd"},
+		CustomizeHooks:    []string{"upload '/w/wsl.conf' /etc/wsl.conf", "download /var/lib/dpkg/status '/w/dpkg-status'"},
+		TarballPath:       "/w/image.tar.gz",
+		WorkDir:           "/w",
+		Arch:              "amd64",
+		InstallRecommends: true,
+		KeyringPath:       "/k.gpg",
 	})
-	want := []string{
+	wantArgs := []string{
 		"--mode=unshare",
 		"--variant=important",
 		"--architectures=amd64",
@@ -87,11 +123,60 @@ func TestMmdebstrapCommand(t *testing.T) {
 		"deb http://a jammy-updates main universe",
 		"deb http://a jammy-security main universe",
 	}
-	if strings.Join(args, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("args:\n%s\nwant:\n%s", strings.Join(args, "\n"), strings.Join(want, "\n"))
+	if !slices.Equal(args, wantArgs) {
+		t.Errorf("args =\n%s\nwant\n%s", strings.Join(args, "\n"), strings.Join(wantArgs, "\n"))
 	}
-	if len(env) != 1 || env[0] != "TMPDIR=/w/tmp" {
-		t.Fatalf("TMPDIR must point into the work dir: %v", env)
+	if wantEnvironment := []string{"TMPDIR=/w/tmp"}; !slices.Equal(environment, wantEnvironment) {
+		t.Errorf("environment = %q, want TMPDIR inside the work directory", environment)
+	}
+}
+
+func TestMmdebstrapCommandLineDefaultsAndOptionalFlags(t *testing.T) {
+	minimalSpec := BootstrapSpec{Suite: "noble", TarballPath: "/t", WorkDir: "/w", Arch: "amd64"}
+	args, _ := (&Mmdebstrap{CurrentUID: uidFunc(1000)}).commandLine(minimalSpec)
+	if !slices.Contains(args, "--keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg") {
+		t.Errorf("args = %q, want the Ubuntu archive keyring by default", args)
+	}
+	joinedArgs := strings.Join(args, " ")
+	if strings.Contains(joinedArgs, "Install-Recommends") {
+		t.Errorf("args = %q, want no Recommends option when it is off", joinedArgs)
+	}
+	if strings.Contains(joinedArgs, "--include") {
+		t.Errorf("args = %q, want no --include when there is nothing to include", joinedArgs)
+	}
+}
+
+func TestMmdebstrapPassesHooksInOrder(t *testing.T) {
+	spec := BootstrapSpec{Suite: "noble", TarballPath: "/t", WorkDir: "/w", Arch: "amd64", CustomizeHooks: []string{"first", "second", "third"}}
+	args, _ := (&Mmdebstrap{CurrentUID: uidFunc(1000)}).commandLine(spec)
+	var passedHooks []string
+	for _, arg := range args {
+		if hook, isHook := strings.CutPrefix(arg, "--customize-hook="); isHook {
+			passedHooks = append(passedHooks, hook)
+		}
+	}
+	if !slices.Equal(passedHooks, spec.CustomizeHooks) {
+		t.Fatalf("hooks passed = %q, want %q", passedHooks, spec.CustomizeHooks)
+	}
+}
+
+func TestMmdebstrapMode(t *testing.T) {
+	testCases := []struct {
+		configuredMode string
+		currentUID     int
+		wantModeArg    string
+	}{
+		{configuredMode: "", currentUID: 1000, wantModeArg: "--mode=unshare"},
+		{configuredMode: "", currentUID: 0, wantModeArg: "--mode=root"},
+		{configuredMode: "unshare", currentUID: 0, wantModeArg: "--mode=unshare"},
+		{configuredMode: "root", currentUID: 1000, wantModeArg: "--mode=root"},
+	}
+	for _, testCase := range testCases {
+		bootstrapper := Mmdebstrap{Mode: testCase.configuredMode, CurrentUID: uidFunc(testCase.currentUID)}
+		args, _ := bootstrapper.commandLine(BootstrapSpec{Suite: "noble", TarballPath: "/t", WorkDir: "/w", Arch: "amd64"})
+		if args[0] != testCase.wantModeArg {
+			t.Errorf("Mode %q, uid %d: first argument = %q, want %q", testCase.configuredMode, testCase.currentUID, args[0], testCase.wantModeArg)
+		}
 	}
 }
 
@@ -99,332 +184,311 @@ func TestMmdebstrapRunPreparesTMPDIR(t *testing.T) {
 	// mmdebstrap(1): in unshare mode TMPDIR must be world-writable and all its
 	// ancestors world-executable, because the namespace's root is a
 	// subordinate uid and "other" to the user's files.
-	var rec recorded
-	work := reachableDir(t)
-	m := Mmdebstrap{Uid: unprivileged(), RunCmd: recorder(&rec)}
-	if err := m.Run(context.Background(), BootstrapSpec{Suite: "noble", TarPath: filepath.Join(work, "image.tar.gz"), WorkDir: work, Arch: "amd64", Keyring: keyringFile(t)}); err != nil {
+	var record commandRecord
+	spec := runnableSpec(t)
+	bootstrapper := Mmdebstrap{CurrentUID: uidFunc(1000), RunCommand: recordingRunner(&record)}
+	if err := bootstrapper.Run(context.Background(), spec); err != nil {
 		t.Fatal(err)
 	}
-	if rec.name != "mmdebstrap" || rec.calls != 1 {
-		t.Fatalf("recorded %+v", rec)
+	if record.program != "mmdebstrap" || record.runCount != 1 {
+		t.Fatalf("recorded %+v, want mmdebstrap to run once", record)
 	}
-	tmp := filepath.Join(work, "tmp")
-	fi, err := os.Stat(tmp)
+	temporaryDir := filepath.Join(spec.WorkDir, "tmp")
+	temporaryDirInfo, err := os.Stat(temporaryDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fi.Mode().Perm() != 0o777 || fi.Mode()&os.ModeSticky == 0 {
-		t.Fatalf("TMPDIR mode %v, want sticky and world-writable", fi.Mode())
+	if mode := temporaryDirInfo.Mode(); mode.Perm() != 0o777 || mode&os.ModeSticky == 0 {
+		t.Errorf("TMPDIR mode = %v, want sticky and world-writable", mode)
 	}
-	if !contains(rec.env, "TMPDIR="+tmp) {
-		t.Fatalf("env %v", rec.env)
+	if !slices.Contains(record.environment, "TMPDIR="+temporaryDir) {
+		t.Errorf("environment = %q, want TMPDIR=%s", record.environment, temporaryDir)
 	}
 }
 
-// closedDir returns a directory that mmdebstrap's user namespace cannot enter,
-// like a 0750 home directory.
-func closedDir(t *testing.T) string {
-	t.Helper()
-	d := filepath.Join(reachableDir(t), "closed")
-	if err := os.Mkdir(d, 0o750); err != nil {
+func TestMmdebstrapRunRefusesUnreachableWorkDir(t *testing.T) {
+	spec := runnableSpec(t)
+	spec.WorkDir = filepath.Join(createUnreachableDir(t), "work")
+	if err := os.Mkdir(spec.WorkDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(d, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	return d
-}
 
-func TestMmdebstrapUnreachableWorkDir(t *testing.T) {
-	work := filepath.Join(closedDir(t), "work")
-	if err := os.Mkdir(work, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	spec := BootstrapSpec{Suite: "noble", TarPath: filepath.Join(work, "image.tar.gz"), WorkDir: work, Arch: "amd64", Keyring: keyringFile(t)}
-
-	var rec recorded
-	m := Mmdebstrap{Uid: unprivileged(), RunCmd: recorder(&rec)}
-	err := m.Run(context.Background(), spec)
+	var record commandRecord
+	unprivileged := Mmdebstrap{CurrentUID: uidFunc(1000), RunCommand: recordingRunner(&record)}
+	err := unprivileged.Run(context.Background(), spec)
 	if !errors.Is(err, ErrBadWorkRoot) || !strings.Contains(err.Error(), "XDG_CACHE_HOME") {
-		t.Fatalf("want an actionable ErrBadWorkRoot, got %v", err)
+		t.Fatalf("Run error = %v, want ErrBadWorkRoot saying how to fix it", err)
 	}
-	if rec.calls != 0 {
+	if record.runCount != 0 {
 		t.Fatal("mmdebstrap must not run")
 	}
 
 	// Root mode has no user namespace, so there is nothing to reach.
-	m = Mmdebstrap{Uid: func() int { return 0 }, RunCmd: recorder(&rec)}
-	if err := m.Run(context.Background(), spec); err != nil {
-		t.Fatalf("root mode: %v", err)
+	asRoot := Mmdebstrap{CurrentUID: uidFunc(0), RunCommand: recordingRunner(&record)}
+	if err := asRoot.Run(context.Background(), spec); err != nil {
+		t.Fatalf("Run in root mode: %v", err)
 	}
 }
 
-func TestCheckReachable(t *testing.T) {
-	if err := checkReachable(filepath.Join(reachableDir(t), "not", "created", "yet")); err != nil {
-		t.Fatalf("missing components are created 0755 later: %v", err)
+func TestCheckReachableFromUserNamespace(t *testing.T) {
+	notCreatedYet := filepath.Join(createReachableDir(t), "not", "created", "yet")
+	if err := checkReachableFromUserNamespace(notCreatedYet); err != nil {
+		t.Errorf("missing components are created 0755 later, so they are fine: %v", err)
 	}
-	closed := closedDir(t)
-	err := checkReachable(filepath.Join(closed, "frostroot"))
-	if !errors.Is(err, ErrBadWorkRoot) || !strings.Contains(err.Error(), closed) {
-		t.Fatalf("want the blocking directory named, got %v", err)
-	}
-}
-
-func TestMmdebstrapDefaultKeyring(t *testing.T) {
-	args, _ := (&Mmdebstrap{Uid: unprivileged()}).command(BootstrapSpec{Suite: "noble", TarPath: "/t", WorkDir: "/w", Arch: "amd64"})
-	if !contains(args, "--keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg") {
-		t.Fatalf("args %v", args)
+	unreachableDir := createUnreachableDir(t)
+	err := checkReachableFromUserNamespace(filepath.Join(unreachableDir, "frostroot"))
+	if !errors.Is(err, ErrBadWorkRoot) || !strings.Contains(err.Error(), unreachableDir) {
+		t.Errorf("error = %v, want ErrBadWorkRoot naming %s", err, unreachableDir)
 	}
 }
 
-func TestMmdebstrapHooksPassedInOrder(t *testing.T) {
-	args, _ := (&Mmdebstrap{Uid: unprivileged()}).command(BootstrapSpec{Suite: "noble", TarPath: "/t", WorkDir: "/w", Arch: "amd64", Hooks: []string{"first", "second", "third"}})
-	var seen []string
-	for _, a := range args {
-		if h, ok := strings.CutPrefix(a, "--customize-hook="); ok {
-			seen = append(seen, h)
-		}
-	}
-	if strings.Join(seen, ",") != "first,second,third" {
-		t.Fatalf("hook order: %v", seen)
-	}
-}
-
-func TestMmdebstrapModes(t *testing.T) {
-	for _, tc := range []struct {
-		mode string
-		uid  int
-		want string
-	}{
-		{"", 1000, "--mode=unshare"},
-		{"", 0, "--mode=root"},
-		{"unshare", 0, "--mode=unshare"},
-		{"root", 1000, "--mode=root"},
-	} {
-		args, _ := (&Mmdebstrap{Mode: tc.mode, Uid: func() int { return tc.uid }}).command(BootstrapSpec{Suite: "noble", TarPath: "/t", WorkDir: "/w", Arch: "amd64"})
-		if args[0] != tc.want {
-			t.Fatalf("mode %q uid %d: got %v", tc.mode, tc.uid, args)
-		}
-	}
-}
-
-func TestMmdebstrapOptionalFlags(t *testing.T) {
-	args, _ := (&Mmdebstrap{Uid: unprivileged()}).command(BootstrapSpec{Suite: "noble", TarPath: "/t", WorkDir: "/w", Arch: "amd64"})
-	joined := strings.Join(args, " ")
-	if strings.Contains(joined, "Install-Recommends") {
-		t.Fatalf("no Recommends flag when off: %q", joined)
-	}
-	if strings.Contains(joined, "--include") {
-		t.Fatalf("no --include when there is nothing to include: %q", joined)
-	}
-}
-
-func runSpec(t *testing.T) BootstrapSpec {
-	t.Helper()
-	work := reachableDir(t)
-	return BootstrapSpec{Suite: "noble", TarPath: filepath.Join(work, "image.tar.gz"), WorkDir: work, Arch: "amd64", Keyring: keyringFile(t)}
-}
-
-func TestMmdebstrapStreamsProgressAndKeepsTail(t *testing.T) {
-	var progress bytes.Buffer
-	m := Mmdebstrap{
-		Uid:    unprivileged(),
-		Stderr: &progress,
-		RunCmd: func(ctx context.Context, name string, args, env []string, stdout, stderr io.Writer) error {
-			for i := 0; i < 400; i++ {
-				fmt.Fprintf(stderr, "I: line %03d of chatter that fills the buffer\n", i)
+func TestMmdebstrapRunStreamsProgressAndKeepsTail(t *testing.T) {
+	var progressOutput bytes.Buffer
+	bootstrapper := Mmdebstrap{
+		CurrentUID:     uidFunc(1000),
+		ProgressOutput: &progressOutput,
+		RunCommand: func(_ context.Context, _ string, _, _ []string, _, stderr io.Writer) error {
+			for lineNumber := range 400 {
+				_, _ = fmt.Fprintf(stderr, "I: line %03d of chatter that fills the buffer\n", lineNumber)
 			}
-			fmt.Fprintln(stderr, "E: Unable to locate package nosuchpkg")
+			_, _ = fmt.Fprintln(stderr, "E: Unable to locate package nosuchpkg")
 			return errors.New("exit status 1")
 		},
 	}
-	err := m.Run(context.Background(), runSpec(t))
+	err := bootstrapper.Run(context.Background(), runnableSpec(t))
 	if err == nil {
-		t.Fatal("expected error")
+		t.Fatal("Run succeeded, want the command's failure")
 	}
-	if !strings.Contains(err.Error(), "nosuchpkg") || !strings.Contains(err.Error(), "exit status 1") {
-		t.Fatalf("error must carry the exit status and the stderr tail: %v", err)
+	message := err.Error()
+	if !strings.Contains(message, "nosuchpkg") || !strings.Contains(message, "exit status 1") {
+		t.Errorf("error must carry the exit status and the end of the output: %v", err)
 	}
-	if len(err.Error()) > 4096+200 {
-		t.Fatalf("tail should be bounded to about 4 KiB, got %d bytes", len(err.Error()))
+	if len(message) > errorTailBytes+200 {
+		t.Errorf("error is %d bytes, want the tail bounded to about %d", len(message), errorTailBytes)
 	}
-	if strings.Contains(err.Error(), "line 000") {
-		t.Fatal("tail should drop the oldest output")
+	if strings.Contains(message, "line 000") {
+		t.Error("the tail should drop the oldest output")
 	}
-	if !strings.Contains(progress.String(), "line 000") || !strings.Contains(progress.String(), "nosuchpkg") {
-		t.Fatal("everything must be streamed to the terminal as it happens")
+	if !strings.Contains(progressOutput.String(), "line 000") || !strings.Contains(progressOutput.String(), "nosuchpkg") {
+		t.Error("all output must be streamed as it happens")
 	}
 }
 
-func TestMmdebstrapInterruptedIsCanceled(t *testing.T) {
+func TestMmdebstrapRunInterruptedReportsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	m := Mmdebstrap{
-		Uid: unprivileged(),
-		RunCmd: func(ctx context.Context, name string, args, env []string, stdout, stderr io.Writer) error {
+	bootstrapper := Mmdebstrap{
+		CurrentUID: uidFunc(1000),
+		RunCommand: func(context.Context, string, []string, []string, io.Writer, io.Writer) error {
 			cancel()
 			return errors.New("signal: interrupt")
 		},
 	}
-	if err := m.Run(ctx, runSpec(t)); !errors.Is(err, context.Canceled) {
-		t.Fatalf("an interrupted run must report context.Canceled, got %v", err)
+	if err := bootstrapper.Run(ctx, runnableSpec(t)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context.Canceled", err)
 	}
 }
 
-func TestMmdebstrapMissingKeyringIsClear(t *testing.T) {
-	var rec recorded
-	m := Mmdebstrap{Uid: unprivileged(), RunCmd: recorder(&rec)}
-	spec := runSpec(t)
-	spec.Keyring = filepath.Join(t.TempDir(), "absent.gpg")
-	err := m.Run(context.Background(), spec)
+func TestMmdebstrapRunWithoutKeyring(t *testing.T) {
+	var record commandRecord
+	bootstrapper := Mmdebstrap{CurrentUID: uidFunc(1000), RunCommand: recordingRunner(&record)}
+	spec := runnableSpec(t)
+	spec.KeyringPath = filepath.Join(t.TempDir(), "absent.gpg")
+	err := bootstrapper.Run(context.Background(), spec)
 	if !errors.Is(err, ErrNoKeyring) || !strings.Contains(err.Error(), "ubuntu-keyring") {
-		t.Fatalf("want a keyring error with an install hint, got %v", err)
+		t.Fatalf("Run error = %v, want ErrNoKeyring with an install hint", err)
 	}
-	if rec.calls != 0 {
+	if record.runCount != 0 {
 		t.Fatal("mmdebstrap must not run without a keyring")
 	}
 }
 
 func TestMmdebstrapPreflight(t *testing.T) {
-	found := func(string) (string, error) { return "/usr/bin/mmdebstrap", nil }
-	missing := func(string) (string, error) { return "", errors.New("not found") }
-	root := filepath.Join(reachableDir(t), "frostroot") // does not exist yet
+	mmdebstrapFound := func(string) (string, error) { return "/usr/bin/mmdebstrap", nil }
+	mmdebstrapMissing := func(string) (string, error) { return "", errors.New("not found") }
+	reachableWorkRoot := filepath.Join(createReachableDir(t), "frostroot") // not created yet
 
-	m := Mmdebstrap{LookPath: missing, Uid: unprivileged()}
-	if err := m.Preflight(BootstrapSpec{Keyring: keyringFile(t), WorkDir: root}); !errors.Is(err, ErrNoMmdebstrap) || !strings.Contains(err.Error(), "sudo apt install mmdebstrap") {
-		t.Fatalf("got %v", err)
+	testCases := []struct {
+		name        string
+		lookPath    func(string) (string, error)
+		spec        BootstrapSpec
+		wantError   error
+		wantInError string
+	}{
+		{
+			name:        "mmdebstrap missing",
+			lookPath:    mmdebstrapMissing,
+			spec:        BootstrapSpec{KeyringPath: createKeyringFile(t), WorkDir: reachableWorkRoot},
+			wantError:   ErrNoMmdebstrap,
+			wantInError: "sudo apt install mmdebstrap",
+		},
+		{
+			name:      "keyring missing",
+			lookPath:  mmdebstrapFound,
+			spec:      BootstrapSpec{KeyringPath: filepath.Join(t.TempDir(), "absent.gpg"), WorkDir: reachableWorkRoot},
+			wantError: ErrNoKeyring,
+		},
+		{
+			name:      "work root unreachable",
+			lookPath:  mmdebstrapFound,
+			spec:      BootstrapSpec{KeyringPath: createKeyringFile(t), WorkDir: filepath.Join(createUnreachableDir(t), "frostroot")},
+			wantError: ErrBadWorkRoot,
+		},
+		{
+			name:     "all fine",
+			lookPath: mmdebstrapFound,
+			spec:     BootstrapSpec{KeyringPath: createKeyringFile(t), WorkDir: reachableWorkRoot},
+		},
 	}
-	m = Mmdebstrap{LookPath: found, Uid: unprivileged()}
-	if err := m.Preflight(BootstrapSpec{Keyring: filepath.Join(t.TempDir(), "absent.gpg"), WorkDir: root}); !errors.Is(err, ErrNoKeyring) {
-		t.Fatalf("got %v", err)
-	}
-	if err := m.Preflight(BootstrapSpec{Keyring: keyringFile(t), WorkDir: filepath.Join(closedDir(t), "frostroot")}); !errors.Is(err, ErrBadWorkRoot) {
-		t.Fatalf("an unreachable work root must fail before any work: %v", err)
-	}
-	if err := m.Preflight(BootstrapSpec{Keyring: keyringFile(t), WorkDir: root}); err != nil {
-		t.Fatalf("got %v", err)
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			bootstrapper := Mmdebstrap{LookPath: testCase.lookPath, CurrentUID: uidFunc(1000)}
+			err := bootstrapper.Preflight(testCase.spec)
+			if testCase.wantError == nil {
+				if err != nil {
+					t.Fatalf("Preflight error = %v, want none", err)
+				}
+				return
+			}
+			if !errors.Is(err, testCase.wantError) {
+				t.Fatalf("Preflight error = %v, want %v", err, testCase.wantError)
+			}
+			if !strings.Contains(err.Error(), testCase.wantInError) {
+				t.Errorf("Preflight error = %v, want it to mention %q", err, testCase.wantInError)
+			}
+		})
 	}
 }
 
-// syncBuffer lets the test read output while the child is still writing it.
-type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
+// synchronizedBuffer lets a test read output while a child process is still
+// writing it.
+type synchronizedBuffer struct {
+	mutex  sync.Mutex
+	buffer bytes.Buffer
 }
 
-func (s *syncBuffer) Write(p []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.buf.Write(p)
+func (b *synchronizedBuffer) Write(data []byte) (int, error) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	return b.buffer.Write(data)
 }
 
-func (s *syncBuffer) String() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.buf.String()
+func (b *synchronizedBuffer) String() string {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	return b.buffer.String()
 }
 
-func TestExecRunInterruptsTheWholeProcessGroup(t *testing.T) {
+func TestRunInterruptiblySignalsTheWholeProcessGroup(t *testing.T) {
 	// mmdebstrap's main process reacts to SIGINT by waiting for its worker,
-	// counting on a terminal to deliver Ctrl-C to the whole process group. So
-	// cancelling must signal the group, or a build interrupted with kill,
-	// timeout or a service stop runs to the end regardless. And never SIGKILL:
-	// in root mode mmdebstrap has proc, sys and dev mounted inside the chroot.
-	// TestHelperProcess has the same shape: a main that notes the signal and
-	// waits, and a worker that cleans up. (Not a shell script: sh starts
-	// background jobs with SIGINT ignored, which no trap can undo.)
+	// relying on a terminal to deliver Ctrl-C to the whole process group. So
+	// canceling must signal the group, or a build stopped with kill, timeout
+	// or a service manager runs to the end anyway. And never SIGKILL: in root
+	// mode mmdebstrap has proc, sys and dev mounted inside the chroot.
+	// TestHelperProcess has the same shape: a main process that notes the
+	// signal and waits, and a worker that cleans up. (It is not a shell
+	// script: sh starts background jobs with SIGINT ignored, which no trap can
+	// undo.)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var out syncBuffer
-	done := make(chan error, 1)
+	var output synchronizedBuffer
+	runFinished := make(chan error, 1)
 	go func() {
-		done <- execRun(ctx, os.Args[0], []string{"-test.run=^TestHelperProcess$"}, []string{"FROSTROOT_HELPER=main"}, &out, &out)
+		runFinished <- runInterruptibly(ctx, os.Args[0], []string{"-test.run=^TestHelperProcess$"}, []string{"FROSTROOT_HELPER=main"}, &output, &output)
 	}()
 
-	deadline := time.Now().Add(10 * time.Second)
-	for !strings.Contains(out.String(), "ready") {
-		if time.Now().After(deadline) {
-			t.Fatal("worker never started")
+	startDeadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(output.String(), "ready") {
+		if time.Now().After(startDeadline) {
+			t.Fatal("the worker never started")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	cancel()
 	select {
-	case err := <-done:
+	case err := <-runFinished:
 		if err == nil {
-			t.Fatal("expected a non-zero exit")
+			t.Fatal("the helper exited 0, want a non-zero exit")
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatalf("still running 10s after cancel; only the main process was signalled: %q", out.String())
+		t.Fatalf("still running 10s after cancel, so only the main process was signaled: %q", output.String())
 	}
-	for _, want := range []string{"main got INT", "worker cleaned up", "main done"} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("missing %q; every process must get a catchable SIGINT: %q", want, out.String())
+	for _, wantLine := range []string{"main got INT", "worker cleaned up", "main done"} {
+		if !strings.Contains(output.String(), wantLine) {
+			t.Errorf("output lacks %q; every process must get a catchable SIGINT: %q", wantLine, output.String())
 		}
 	}
 }
 
-// TestHelperProcess is not a test: TestExecRunInterruptsTheWholeProcessGroup
-// runs the test binary as these two processes.
-func TestHelperProcess(t *testing.T) {
-	sigs := make(chan os.Signal, 1)
+// TestHelperProcess is not a real test. TestRunInterruptiblySignalsTheWholeProcessGroup
+// runs the test binary as these two processes, selected by FROSTROOT_HELPER.
+func TestHelperProcess(*testing.T) {
+	interrupts := make(chan os.Signal, 1)
 	switch os.Getenv("FROSTROOT_HELPER") {
 	case "main":
-		signal.Notify(sigs, os.Interrupt)
+		signal.Notify(interrupts, os.Interrupt)
 		worker := exec.Command(os.Args[0], "-test.run=^TestHelperProcess$")
 		worker.Env = append(os.Environ(), "FROSTROOT_HELPER=worker")
 		worker.Stdout, worker.Stderr = os.Stdout, os.Stderr
 		if err := worker.Start(); err != nil {
 			os.Exit(10)
 		}
-		exited := make(chan struct{})
-		go func() { worker.Wait(); close(exited) }()
+		workerExited := make(chan struct{})
+		go func() {
+			_ = worker.Wait() // its exit status is not what the parent test checks
+			close(workerExited)
+		}()
 		for {
 			select {
-			case <-sigs:
+			case <-interrupts:
 				fmt.Println("main got INT, waiting for worker")
-			case <-exited:
+			case <-workerExited:
 				fmt.Println("main done")
 				os.Exit(1)
 			}
 		}
 	case "worker":
-		signal.Notify(sigs, os.Interrupt)
+		signal.Notify(interrupts, os.Interrupt)
 		fmt.Println("ready")
-		<-sigs
+		<-interrupts
 		time.Sleep(200 * time.Millisecond)
 		fmt.Println("worker cleaned up")
 		os.Exit(3)
 	}
 }
 
-func TestExecRunPassesEnvironment(t *testing.T) {
-	var out bytes.Buffer
-	if err := execRun(context.Background(), "sh", []string{"-c", `printf %s "$TMPDIR"`}, []string{"TMPDIR=/work/dir"}, &out, &out); err != nil {
+func TestRunInterruptiblyPassesEnvironment(t *testing.T) {
+	var output bytes.Buffer
+	err := runInterruptibly(context.Background(), "sh", []string{"-c", `printf %s "$TMPDIR"`}, []string{"TMPDIR=/work/dir"}, &output, &output)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if out.String() != "/work/dir" {
-		t.Fatalf("got %q", out.String())
+	if output.String() != "/work/dir" {
+		t.Fatalf("the child saw TMPDIR=%q, want /work/dir", output.String())
 	}
 }
 
 func TestTailBuffer(t *testing.T) {
-	tb := newTailBuffer(10)
-	for _, s := range []string{"abc", "defgh", "ijklmnop", "q"} {
-		tb.Write([]byte(s))
+	testCases := []struct {
+		name     string
+		capacity int
+		writes   []string
+		want     string
+	}{
+		{name: "keeps the last bytes", capacity: 10, writes: []string{"abc", "defgh", "ijklmnop", "q"}, want: "hijklmnopq"},
+		{name: "truncated output starts at a line boundary", capacity: 8, writes: []string{"one\ntwo\nthree\n"}, want: "three\n"},
+		{name: "short output is kept whole", capacity: 100, writes: []string{"a\nb\n"}, want: "a\nb\n"},
 	}
-	if got := string(tb.buf); got != "hijklmnopq" {
-		t.Fatalf("want the last 10 bytes, got %q", got)
-	}
-
-	lines := newTailBuffer(8)
-	lines.Write([]byte("one\ntwo\nthree\n"))
-	if got := lines.String(); got != "three\n" {
-		t.Fatalf("a truncated tail should start at a line boundary, got %q", got)
-	}
-
-	whole := newTailBuffer(100)
-	whole.Write([]byte("a\nb\n"))
-	if got := whole.String(); got != "a\nb\n" {
-		t.Fatalf("got %q", got)
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			tail := newTailBuffer(testCase.capacity)
+			for _, data := range testCase.writes {
+				if _, err := tail.Write([]byte(data)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := tail.String(); got != testCase.want {
+				t.Fatalf("String() = %q, want %q", got, testCase.want)
+			}
+		})
 	}
 }
