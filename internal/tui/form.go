@@ -145,8 +145,10 @@ func newSummaryForm(summary string, write *bool) *huh.Form {
 	))
 }
 
-// formTheme is the look of every form.
-func formTheme() *huh.Theme { return huh.ThemeCharm() }
+// formTheme is the look of every form. Base16 uses the terminal's own
+// sixteen colors, so it follows the user's palette on light and dark
+// terminals alike, and it degrades to plain text where colors are off.
+func formTheme() *huh.Theme { return huh.ThemeBase16() }
 
 // formBinding holds the variables huh writes answers into, one per field, and
 // the initial values everything else is copied from.
