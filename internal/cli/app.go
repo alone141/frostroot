@@ -102,10 +102,11 @@ const usageText = `usage: frostroot <command> [flags]
 Commands:
   init       answer a few questions and write frostroot.toml
   edit       change an existing frostroot.toml with the same questions
+  capture    describe this installed Ubuntu system as a recipe, with a report of the gaps
   validate   check frostroot.toml (no network, no root)
   build      build frostroot.lock and dist/<name>-ubuntu-<release>-amd64.tar.gz
 
-init, edit and build show a full-screen interface in a terminal and plain
+init, edit, capture and build show a full-screen interface in a terminal and plain
 lines otherwise; --plain asks for the lines. Run "frostroot <command> -h" for
 a command's flags.
 `
@@ -124,6 +125,8 @@ func (a *App) Run(args []string) int {
 		return a.runInit(commandArgs)
 	case "edit":
 		return a.runEdit(commandArgs)
+	case "capture":
+		return a.runCapture(commandArgs)
 	case "validate":
 		return a.runValidate(commandArgs)
 	case "build":

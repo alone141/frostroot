@@ -2,9 +2,9 @@
 
 **Freeze an Ubuntu root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
 
-> **Status: v0.2.0.** `init`, `edit`, `validate` and `build` work. In a
-> terminal, `init` and `edit` are a full-screen form driven with the arrow
-> keys, and `build` is a progress screen with bars. Every path in this README
+> **Status: v0.3.0.** `init`, `edit`, `capture`, `validate` and `build` work.
+> In a terminal, `init`, `edit` and `capture` are a full-screen form driven
+> with the arrow keys, and `build` is a progress screen with bars. Every path in this README
 > was run for real: images for Ubuntu 20.04, 22.04 and 24.04 were built with
 > `frostroot build`, imported with `wsl --import` on Windows 11, and logged
 > into. See [Verification](#verification).
@@ -178,10 +178,11 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 |---|---|
 | `frostroot init [--force] [--plain]` | Opens the form and writes a commented `frostroot.toml`. Refuses to overwrite one without `--force`. Writes nothing unless the answers validate and you confirm. |
 | `frostroot edit [--plain]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back. The file is regenerated from the template, so your own comments in it do not survive. |
+| `frostroot capture [--root DIR] [--force] [--plain]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt and the configuration files say, writes `frostroot.toml`, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing; needs no root. |
 | `frostroot validate` | Checks `frostroot.toml` and prints every problem. No network, no root. |
 | `frostroot build [--mirror URL] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-ubuntu-<release>-amd64.tar.gz`. Never prompts. Overwrites the previous lock and tarball. |
 
-All four work on the recipe in the current directory. `--plain` asks for the
+All five work on the recipe in the current directory. `--plain` asks for the
 line interface even in a terminal. `--mirror` replaces
 `http://archive.ubuntu.com/ubuntu` in all three pockets, for a local or faster
 mirror. `--keep-work` keeps the work directory after a successful build (it is
@@ -221,6 +222,38 @@ recipe holds plain apt names, whether they came from the catalog or were
 typed. The catalog lives in `internal/form/catalog.go`; adding a package is
 adding a line, and an integration test checks that every entry exists in all
 three releases.
+
+## Capturing a machine you already have
+
+Most labs start from a machine that works, not from a blank recipe. Run
+`frostroot capture` on it (inside the WSL distribution, or on the server)
+and it reads what apt installed and how the machine is set up, opens the
+form with those values, and writes the recipe.
+
+It recovers what you asked for, not the dependency closure: apt remembers
+which packages were installed automatically, and `capture` drops those, the
+base system and frostroot's own essentials. The user comes from
+`/etc/wsl.conf` or the first ordinary account, sudo from the `sudo` group,
+timezone and locale from `/etc/timezone` and `/etc/default/locale`, the
+image name from the hostname.
+
+Two rules, both deliberate:
+
+- **It reports what it could not see.** apt is the only thing a recipe
+  understands. Software from pip, npm, cargo, `curl | sh` or `make install`,
+  anything in `/opt` or `/usr/local`, edits to `/etc`, hand-written systemd
+  units, cron jobs, other users, dotfiles: none of that fits in a recipe, so
+  `frostroot-capture.md` lists each area with what was found and what to do
+  about it. A capture that stayed quiet about these would leave you believing
+  the machine was captured when it was not.
+- **It never copies files.** A live machine holds SSH keys, tokens, `.env`
+  files and shell history; an image built from a tarball of it would hand
+  all of that to every student. `capture` reads package metadata and a few
+  configuration files, lists the names of the entries in your home directory
+  and nothing more, and needs no root. The report marks `.ssh`, `.gnupg`,
+  `.aws`, `.kube` and `.docker` as secrets that must never be copied.
+
+`--root DIR` captures another root filesystem, such as a mounted disk.
 
 ## What is in the image
 
@@ -385,7 +418,8 @@ failure paths; the results are recorded in the
 
 ```
 cmd/frostroot/      main
-internal/cli/       init, edit, validate, build; flags, exit codes, the plain line interface
+internal/cli/       init, edit, capture, validate, build; flags, exit codes, the plain line interface
+internal/capture/   reading an installed system: packages asked for, user, locale, and the report of the gaps
 internal/form/      the questions as data: fields, package catalog, timezones, locales, recipe mapping
 internal/tui/       the full-screen form and build screen (the only package using the Charm libraries)
 internal/recipe/    frostroot.toml and frostroot.lock: types, strict parsing, validation
