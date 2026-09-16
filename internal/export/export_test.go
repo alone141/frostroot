@@ -84,7 +84,7 @@ func renameAcrossFilesystems(oldPath, newPath string) error {
 func TestPlaceCreatesParentAndMoves(t *testing.T) {
 	sourcePath := writeSourceFile(t, "payload")
 	destinationPath := filepath.Join(t.TempDir(), "dist", "cpp-lab-ubuntu-22.04-amd64.tar.gz")
-	if err := Place(sourcePath, destinationPath); err != nil {
+	if err := Place(sourcePath, destinationPath, nil); err != nil {
 		t.Fatal(err)
 	}
 	assertFileContent(t, destinationPath, "payload")
@@ -98,7 +98,7 @@ func TestPlaceOverwritesExisting(t *testing.T) {
 	// build overwrites a matching tarball without asking.
 	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
 	writeExistingFile(t, destinationPath, "stale")
-	if err := Place(writeSourceFile(t, "fresh"), destinationPath); err != nil {
+	if err := Place(writeSourceFile(t, "fresh"), destinationPath, nil); err != nil {
 		t.Fatal(err)
 	}
 	assertFileContent(t, destinationPath, "fresh")
@@ -110,7 +110,7 @@ func TestPlaceCopiesAcrossFilesystems(t *testing.T) {
 	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
 	writeExistingFile(t, destinationPath, "stale")
 
-	if err := place(sourcePath, destinationPath, renameAcrossFilesystems); err != nil {
+	if err := place(sourcePath, destinationPath, renameAcrossFilesystems, nil); err != nil {
 		t.Fatal(err)
 	}
 	assertFileContent(t, destinationPath, "payload")
@@ -127,6 +127,29 @@ func TestPlaceCopiesAcrossFilesystems(t *testing.T) {
 	assertDirectoryHolds(t, filepath.Dir(destinationPath), "out.tar.gz")
 }
 
+func TestPlaceReportsCopyProgress(t *testing.T) {
+	sourcePath := writeSourceFile(t, "payload")
+	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
+	var reports [][2]int64
+	onProgress := func(copiedBytes, totalBytes int64) { reports = append(reports, [2]int64{copiedBytes, totalBytes}) }
+	if err := place(sourcePath, destinationPath, renameAcrossFilesystems, onProgress); err != nil {
+		t.Fatal(err)
+	}
+	if len(reports) == 0 {
+		t.Fatal("a copy across filesystems must report its progress")
+	}
+	if last := reports[len(reports)-1]; last != [2]int64{int64(len("payload")), int64(len("payload"))} {
+		t.Errorf("last report = %v, want the whole file copied out of its size", last)
+	}
+	reports = nil
+	if err := place(writeSourceFile(t, "payload"), filepath.Join(t.TempDir(), "renamed"), os.Rename, onProgress); err != nil {
+		t.Fatal(err)
+	}
+	if len(reports) != 0 {
+		t.Errorf("a rename is instant and reports nothing, got %v", reports)
+	}
+}
+
 func TestPlaceAcrossFilesystemsRespectsUmaskWithoutChmod(t *testing.T) {
 	// dist/ is routinely on a drvfs mount of a Windows drive, where chmod
 	// fails with EPERM. The copy must not depend on chmod: the temporary file
@@ -134,7 +157,7 @@ func TestPlaceAcrossFilesystemsRespectsUmaskWithoutChmod(t *testing.T) {
 	// user creates.
 	setUmask(t, 0o027)
 	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
-	if err := place(writeSourceFile(t, "payload"), destinationPath, renameAcrossFilesystems); err != nil {
+	if err := place(writeSourceFile(t, "payload"), destinationPath, renameAcrossFilesystems, nil); err != nil {
 		t.Fatal(err)
 	}
 	destinationInfo, err := os.Stat(destinationPath)
@@ -152,7 +175,7 @@ func TestPlaceAcrossFilesystemsLeavesOtherTemporaryFilesAlone(t *testing.T) {
 	otherBuildsTemporary := filepath.Join(distDir, ".out.tar.gz.12345.tmp")
 	writeExistingFile(t, otherBuildsTemporary, "theirs")
 
-	if err := place(writeSourceFile(t, "ours"), filepath.Join(distDir, "out.tar.gz"), renameAcrossFilesystems); err != nil {
+	if err := place(writeSourceFile(t, "ours"), filepath.Join(distDir, "out.tar.gz"), renameAcrossFilesystems, nil); err != nil {
 		t.Fatal(err)
 	}
 	assertFileContent(t, otherBuildsTemporary, "theirs")
@@ -161,7 +184,7 @@ func TestPlaceAcrossFilesystemsLeavesOtherTemporaryFilesAlone(t *testing.T) {
 func TestPlaceAcrossFilesystemsWithMissingSource(t *testing.T) {
 	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
 	missingSource := filepath.Join(t.TempDir(), "absent.tar.gz")
-	if err := place(missingSource, destinationPath, renameAcrossFilesystems); err == nil {
+	if err := place(missingSource, destinationPath, renameAcrossFilesystems, nil); err == nil {
 		t.Fatal("place succeeded, want an error for the missing source")
 	}
 	assertDirectoryHolds(t, filepath.Dir(destinationPath))
@@ -176,7 +199,7 @@ func TestPlaceDoesNotCopyOnOtherRenameErrors(t *testing.T) {
 	sourcePath := writeSourceFile(t, "payload")
 	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
 
-	err := place(sourcePath, destinationPath, renameDenied)
+	err := place(sourcePath, destinationPath, renameDenied, nil)
 	if !errors.Is(err, syscall.EACCES) {
 		t.Fatalf("place error = %v, want EACCES", err)
 	}
