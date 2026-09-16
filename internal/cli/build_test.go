@@ -33,6 +33,10 @@ func (f *fakeBootstrapper) Run(_ context.Context, spec builder.BootstrapSpec) er
 	if f.runErr != nil {
 		return f.runErr
 	}
+	// Report one measured phase the way the real bootstrapper would.
+	spec.Progress.Report(builder.ProgressEvent{Phase: builder.PhaseDownload, Kind: builder.EventPhaseStarted})
+	spec.Progress.Report(builder.ProgressEvent{Phase: builder.PhaseDownload, Kind: builder.EventProgress, Done: 14_050_000, Total: 28_100_000, Unit: builder.UnitBytes})
+	spec.Progress.Report(builder.ProgressEvent{Phase: builder.PhaseDownload, Kind: builder.EventPhaseFinished})
 	if err := os.WriteFile(spec.TarballPath, []byte("tar"), 0o644); err != nil {
 		return err
 	}
@@ -117,6 +121,12 @@ func TestBuildSuccess(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "PowerShell") {
 		t.Errorf("no Windows path should be printed without wslpath:\n%s", stdout.String())
+	}
+	// Without a terminal, progress is plain lines: the phase, then tenths.
+	for _, wantLine := range []string{"frostroot: building cpp-lab from Ubuntu 22.04 (jammy, amd64) using http://archive.ubuntu.com/ubuntu\n", "frostroot: Download packages\n", "frostroot:    50%  14.1 MB / 28.1 MB\n", "frostroot: Write frostroot.lock\n", "frostroot: Place tarball\n"} {
+		if !strings.Contains(stderr.String(), wantLine) {
+			t.Errorf("stderr lacks progress line %q:\n%s", wantLine, stderr.String())
+		}
 	}
 }
 
@@ -370,6 +380,42 @@ func TestBuildRejectsInvalidArguments(t *testing.T) {
 		if exitCode := app.Run(args); exitCode != exitUserError {
 			t.Errorf("Run(%q) = %d, want %d", args, exitCode, exitUserError)
 		}
+	}
+}
+
+// blockedReader never delivers input, like a terminal nobody types on.
+type blockedReader struct{}
+
+func (blockedReader) Read([]byte) (int, error) { select {} }
+
+func TestBuildFullScreenThenPlainSummary(t *testing.T) {
+	recipeDir := newRecipeDir(t, "valid.toml")
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, recipeDir, &fakeBootstrapper{}, &stdout, &stderr)
+	app.Stdin = blockedReader{}
+	app.IsTerminal = terminalChecker(true)
+	app.Getenv = func(name string) string {
+		switch name {
+		case "XDG_CACHE_HOME":
+			return t.TempDir()
+		case "TERM":
+			return "xterm-256color"
+		}
+		return ""
+	}
+	if exitCode := app.Run([]string{"build"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr.String())
+	}
+	output := stdout.String()
+	// The screen ran (alternate screen on, phases drawn) and the plain
+	// summary followed it.
+	for _, wantText := range []string{"\x1b[?1049h", "Download packages", "Wrote frostroot.lock (1 package)", "wsl --import cpp-lab"} {
+		if !strings.Contains(output, wantText) {
+			t.Errorf("stdout lacks %q", wantText)
+		}
+	}
+	if strings.Contains(stderr.String(), "frostroot: Download packages") {
+		t.Error("the full-screen build must not also print plain progress lines")
 	}
 }
 

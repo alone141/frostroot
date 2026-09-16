@@ -2,9 +2,11 @@
 
 **Freeze an Ubuntu root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
 
-> **Status: v0.1.0.** `init`, `validate` and `build` work. Every path in this
-> README was run for real: images for Ubuntu 20.04, 22.04 and 24.04 were built
-> with `frostroot build`, imported with `wsl --import` on Windows 11, and logged
+> **Status: v0.2.0.** `init`, `edit`, `validate` and `build` work. In a
+> terminal, `init` and `edit` are a full-screen form driven with the arrow
+> keys, and `build` is a progress screen with bars. Every path in this README
+> was run for real: images for Ubuntu 20.04, 22.04 and 24.04 were built with
+> `frostroot build`, imported with `wsl --import` on Windows 11, and logged
 > into. See [Verification](#verification).
 
 ---
@@ -111,35 +113,37 @@ frostroot build`). It needs network access; consuming the tarball does not.
 
 ## Quick start
 
+```sh
+mkdir cpp-lab && cd cpp-lab
+frostroot init
+```
+
+`init` opens a form. Four pages, each a few questions: the image name and
+release; the user name and whether it gets passwordless sudo; the timezone
+(type `ist` to filter the list down to `Europe/Istanbul`), locale and whether
+the image boots with systemd; then the packages, picked with Space from a
+catalog grouped by category (C/C++, Python, editors, tools...), plus a line
+for any other apt package names. Enter moves on, Shift-Tab goes back, Ctrl-C
+leaves without writing. A summary page shows the recipe before it is
+written. You type an image name, a user name and, if you want, extra
+package names; everything else is a choice.
+
 ```console
-$ mkdir cpp-lab && cd cpp-lab
-$ frostroot init
-Answer a few questions to create frostroot.toml. Press Enter to accept the default in [brackets].
-Image name [lab]: cpp-lab
-Ubuntu release (20.04, 22.04, 24.04) [24.04]: 22.04
-User name [student]:
-Timezone, e.g. UTC or Europe/Istanbul [UTC]: Europe/Istanbul
-Package preset (none, build-essential, python-lab) [none]: none
-Extra packages, separated by spaces or commas: git build-essential cmake
-
-Wrote frostroot.toml. Next: frostroot validate, then frostroot build.
-
 $ frostroot validate
 frostroot.toml: ok (cpp-lab, Ubuntu 22.04 amd64, 3 packages requested)
 
 $ frostroot build
-frostroot: building cpp-lab from Ubuntu 22.04 (jammy, amd64) using http://archive.ubuntu.com/ubuntu
-I: chroot architecture amd64 is equal to the host's architecture
-I: automatically chosen format: tar
-I: running apt-get update...
-I: downloading packages with apt...
-I: installing essential packages...
-I: installing remaining packages inside the chroot...
-I: running special hook: upload '/var/tmp/frostroot/build-195175832/stage/wsl.conf' /etc/wsl.conf
-...
-I: creating tarball...
-I: success in 274.2017 seconds
+```
 
+`build` shows its phases as a checklist: a spinner and elapsed time while a
+phase runs, a percentage bar where the work can be measured (the downloads,
+in bytes; the installs, in dpkg steps), a check when it is done. The last
+lines of mmdebstrap's own output scroll in a pane below (`l` grows it), and
+the complete output is written to `mmdebstrap.log` in the work directory.
+When the build finishes the screen closes and the summary stays in the
+terminal:
+
+```console
 Wrote dist/cpp-lab-ubuntu-22.04-amd64.tar.gz (222 MB)
 Wrote frostroot.lock (341 packages)
 
@@ -153,6 +157,10 @@ A build takes a few minutes and downloads a few hundred megabytes: about two
 minutes for a minimal 24.04 image, and four and a half for this one on a
 2 MB/s connection. On WSL, `build` also prints the tarball's Windows path, so
 the import line can be pasted into PowerShell from any directory.
+
+Without a terminal (a pipe, CI, a redirected log) or with `--plain`, `init`
+and `edit` ask the same questions one line at a time, and `build` prints one
+line per phase and one at every tenth of a measured phase.
 
 Then, in PowerShell:
 
@@ -168,11 +176,13 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 
 | Command | What it does |
 |---|---|
-| `frostroot init [--force]` | Asks six questions and writes a commented `frostroot.toml`. Refuses to overwrite one without `--force`. Writes nothing unless the answers validate. |
+| `frostroot init [--force] [--plain]` | Opens the form and writes a commented `frostroot.toml`. Refuses to overwrite one without `--force`. Writes nothing unless the answers validate and you confirm. |
+| `frostroot edit [--plain]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back. The file is regenerated from the template, so your own comments in it do not survive. |
 | `frostroot validate` | Checks `frostroot.toml` and prints every problem. No network, no root. |
-| `frostroot build [--mirror URL] [--keep-work]` | Recipe to `frostroot.lock` plus `dist/<name>-ubuntu-<release>-amd64.tar.gz`. Never prompts. Overwrites the previous lock and tarball. |
+| `frostroot build [--mirror URL] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-ubuntu-<release>-amd64.tar.gz`. Never prompts. Overwrites the previous lock and tarball. |
 
-All three work on the recipe in the current directory. `--mirror` replaces
+All four work on the recipe in the current directory. `--plain` asks for the
+line interface even in a terminal. `--mirror` replaces
 `http://archive.ubuntu.com/ubuntu` in all three pockets, for a local or faster
 mirror. `--keep-work` keeps the work directory after a successful build (it is
 always kept after a failure).
@@ -206,9 +216,11 @@ actually exist can only be checked inside the image, so `build` fails if they
 do not. Files saved by Windows editors are fine: CRLF line endings and a UTF-8
 byte order mark are both accepted.
 
-`init` presets are shortcuts for package lists, not a recipe feature:
-`build-essential` is `build-essential git cmake pkg-config`, `python-lab` is
-`python3 python3-pip python3-venv git`.
+The package catalog `init` offers is a convenience, not a recipe feature: the
+recipe holds plain apt names, whether they came from the catalog or were
+typed. The catalog lives in `internal/form/catalog.go`; adding a package is
+adding a line, and an integration test checks that every entry exists in all
+three releases.
 
 ## What is in the image
 
@@ -327,20 +339,26 @@ Each exclusion has a door left open in the design. Adding Fedora means a new
 go test ./...
 ```
 
-runs offline, without root and without mmdebstrap. It covers recipe and lock
-parsing, the distro table, dpkg status parsing, the rendered files and hooks
-(including running the hook text through a real shell with hostile paths), the
-build orchestration against a fake bootstrapper, and every exit code.
+runs offline, without root, without mmdebstrap and without a terminal. It
+covers recipe and lock parsing, the distro table, dpkg status parsing, the
+rendered files and hooks (including running the hook text through a real
+shell with hostile paths), the build orchestration against a fake
+bootstrapper, every exit code, the progress parser against a recording of a
+real mmdebstrap run, the form's field table and its recipe round trip, and
+the two screens, driven key by key.
 
 ```sh
-go test -tags=integration -run TestIntegration -v -timeout 30m ./internal/builder/
+go test -tags=integration -run TestIntegration -v -timeout 30m ./...
 ```
 
 builds a real 24.04 image with mmdebstrap and inspects the tarball: thousands
 of symlinks all with targets, hardlinks and file capabilities intact, no
 subordinate-uid owners, the user, sudoers, `wsl.conf`, timezone and locale in
-place, and no leaked host files. It needs Linux, mmdebstrap, ubuntu-keyring,
-network, and user namespaces or root, and takes about two minutes.
+place, and no leaked host files; it also checks that the build reported every
+phase in order with a real download total, and that every package in the
+`init` catalog exists in all three releases. It needs Linux, mmdebstrap,
+ubuntu-keyring, network, and user namespaces or root, and takes about two
+minutes.
 
 **The WSL boot check is manual**, because no CI runner can run `wsl --import`.
 For every release you ship, import the tarball and check: `whoami` is your
@@ -355,8 +373,10 @@ failure paths; the results are recorded in the
 
 | Document | What it is |
 |---|---|
-| [Design spec](docs/superpowers/specs/2026-09-14-frostroot-design.md) | Source of truth for v1. |
+| [Design spec](docs/superpowers/specs/2026-09-14-frostroot-design.md) | Source of truth for v1: recipe, lock, tarball, build pipeline. |
+| [TUI spec](docs/superpowers/specs/2026-09-17-frostroot-tui.md) | v0.2: the form, the build screen, the progress parser, the plain fallback. |
 | [Implementation plan](docs/superpowers/plans/2026-09-15-frostroot-v1.md) | The 13 tasks v1 was built from, with the spike's amendments. |
+| [TUI plan](docs/superpowers/plans/2026-09-17-frostroot-tui.md) | The seven tasks v0.2 was built from. |
 | [Plan review](docs/superpowers/reviews/2026-09-14-frostroot-plan-review.md) | Found four defects that would have shipped a non-booting image |
 | [Feasibility analysis](docs/superpowers/reviews/2026-09-15-frostroot-feasibility.md) | Independent assessment, plus the recorded spike and WSL boot results |
 | [Original plan](docs/superpowers/plans/2026-09-14-frostroot.md) | **Superseded.** Kept for history. |
@@ -365,10 +385,12 @@ failure paths; the results are recorded in the
 
 ```
 cmd/frostroot/      main
-internal/cli/       init, validate, build; prompts, flags, exit codes
+internal/cli/       init, edit, validate, build; flags, exit codes, the plain line interface
+internal/form/      the questions as data: fields, package catalog, timezones, locales, recipe mapping
+internal/tui/       the full-screen form and build screen (the only package using the Charm libraries)
 internal/recipe/    frostroot.toml and frostroot.lock: types, strict parsing, validation
 internal/distro/    Ubuntu releases, archive URL, the three pocket lines
-internal/builder/   orchestration, mmdebstrap runner, provisioning, dpkg status, work directory
+internal/builder/   orchestration, mmdebstrap runner and progress parser, provisioning, dpkg status, work directory
 internal/export/    tarball naming and atomic placement
 testdata/           recipe fixtures
 ```

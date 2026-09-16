@@ -504,7 +504,9 @@ gains `distro = "fedora"`. CLI verbs stay the same.
 New exporter: image in → disk/ISO out. Builder unchanged.
 
 **TUI**
-Writes `frostroot.toml` only. `build` stays non-interactive.
+Done in v0.2: see [`2026-09-17-frostroot-tui.md`](2026-09-17-frostroot-tui.md).
+The form writes `frostroot.toml` (`init` and `edit`); `build` shows progress
+but still never asks anything.
 
 **Capturing an existing machine (`frostroot capture`)**
 Point frostroot at a running Ubuntu system and have it write a

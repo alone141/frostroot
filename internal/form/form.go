@@ -1,0 +1,187 @@
+// Package form describes the questions init and edit ask, independent of how
+// they are shown. The full-screen interface and the line-by-line one both
+// render Fields; the answers travel as Values and become a recipe through
+// ToRecipe. Adding a question is adding a Field here and mapping its key in
+// FromRecipe and ToRecipe.
+package form
+
+import (
+	"fmt"
+	"strings"
+
+	"frostroot/internal/distro"
+	"frostroot/internal/recipe"
+)
+
+// Kind says how a field is answered.
+type Kind int
+
+// The kinds of field.
+const (
+	KindInput       Kind = iota // free text
+	KindSelect                  // exactly one option
+	KindMultiSelect             // any number of options
+	KindConfirm                 // yes or no
+)
+
+// Option is one choice of a Select or MultiSelect field.
+type Option struct {
+	Value       string // what the answer is, and what the recipe stores
+	Label       string // how the choice is shown; Value when empty
+	Description string // one line of explanation, or empty
+}
+
+// Field is one question.
+type Field struct {
+	Key         string // the Values key; stable, lowercase
+	Page        string // fields with the same page are shown together
+	Title       string
+	Description string // one line under the title, or empty
+	Kind        Kind
+	Options     []Option           // Select and MultiSelect
+	Filterable  bool               // long lists: typing narrows the options
+	Validate    func(string) error // Input: nil when the text is acceptable
+	Placeholder string             // Input: hint shown while empty
+}
+
+// DisplayLabel returns the option's display text: Label, or Value when there
+// is none.
+func (o Option) DisplayLabel() string {
+	if o.Label != "" {
+		return o.Label
+	}
+	return o.Value
+}
+
+// The keys of the fields, which are also the keys of Values.
+const (
+	KeyImageName     = "image_name"
+	KeyRelease       = "release"
+	KeyUserName      = "user_name"
+	KeySudo          = "sudo"
+	KeyTimezone      = "timezone"
+	KeyLocale        = "locale"
+	KeySystemd       = "systemd"
+	KeyPackages      = "packages"
+	KeyOtherPackages = "other_packages"
+	// keyOriginalInclude is not a field: edit keeps the recipe's package
+	// order here so an unchanged recipe is written back as it was.
+	keyOriginalInclude = "original_include"
+)
+
+// The pages fields are grouped on, in order.
+const (
+	PageImage    = "Image"
+	PageUser     = "User"
+	PageSystem   = "System"
+	PagePackages = "Packages"
+)
+
+// Pages returns the page titles in order.
+func Pages() []string { return []string{PageImage, PageUser, PageSystem, PagePackages} }
+
+// Host is what the form reads from the machine it runs on.
+type Host struct {
+	// ReadFile reads a file; os.ReadFile in production. It supplies the
+	// timezone list and the host's own timezone.
+	ReadFile func(name string) ([]byte, error)
+}
+
+// Fields returns every question, in the order they are asked.
+func Fields(host Host) []Field {
+	return []Field{
+		{
+			Key: KeyImageName, Page: PageImage, Kind: KindInput,
+			Title:       "Image name",
+			Description: "Names the tarball and the WSL distribution",
+			Placeholder: "lab",
+			Validate:    recipe.CheckImageName,
+		},
+		{
+			Key: KeyRelease, Page: PageImage, Kind: KindSelect,
+			Title:   "Ubuntu release",
+			Options: releaseOptions(),
+		},
+		{
+			Key: KeyUserName, Page: PageUser, Kind: KindInput,
+			Title:       "User name",
+			Description: "The account WSL logs in as; it owns /home/<name>",
+			Placeholder: "student",
+			Validate:    recipe.CheckUserName,
+		},
+		{
+			Key: KeySudo, Page: PageUser, Kind: KindConfirm,
+			Title:       "Passwordless sudo",
+			Description: "Right for a lab image; a hardened server would say no",
+		},
+		{
+			Key: KeyTimezone, Page: PageSystem, Kind: KindSelect, Filterable: true,
+			Title: "Timezone",
+			// The full-screen list starts in filter mode, where the filter
+			// box takes the title's place, so the description names the
+			// question too.
+			Description: "Timezone: type to filter, for example \"ist\" for Europe/Istanbul, then Enter",
+			Options:     timezoneOptions(host),
+		},
+		{
+			Key: KeyLocale, Page: PageSystem, Kind: KindSelect,
+			Title:   "Locale",
+			Options: localeOptions(),
+		},
+		{
+			Key: KeySystemd, Page: PageSystem, Kind: KindConfirm,
+			Title:       "Boot with systemd",
+			Description: "Needed for services, snapd and most tutorials",
+		},
+		{
+			Key: KeyPackages, Page: PagePackages, Kind: KindMultiSelect, Filterable: true,
+			Title:       "Packages",
+			Description: "Space selects, Enter continues, / filters",
+			Options:     catalogOptions(),
+		},
+		{
+			Key: KeyOtherPackages, Page: PagePackages, Kind: KindInput,
+			Title:       "Other packages",
+			Description: "apt package names not listed above, separated by spaces or commas",
+			Placeholder: "none",
+			Validate:    checkPackageList,
+		},
+	}
+}
+
+// releaseOptions lists the supported Ubuntu releases, marking the one past
+// its standard support.
+func releaseOptions() []Option {
+	var options []Option
+	for _, version := range distro.SupportedVersions() {
+		release, err := distro.Lookup(version, distro.SupportedArch)
+		if err != nil {
+			continue // SupportedVersions only lists what Lookup knows
+		}
+		option := Option{Value: version, Label: fmt.Sprintf("Ubuntu %s LTS (%s)", version, release.Suite)}
+		if release.EndOfLife {
+			option.Description = "past standard support: security fixes only with Ubuntu Pro"
+		}
+		options = append(options, option)
+	}
+	return options
+}
+
+// checkPackageList validates a free-text list of package names separated by
+// spaces or commas. An empty list is fine.
+func checkPackageList(text string) error {
+	for _, packageName := range splitPackageList(text) {
+		if err := recipe.CheckPackageName(packageName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// splitPackageList splits package names on commas and whitespace, as people
+// type them for apt install.
+func splitPackageList(text string) []string {
+	return strings.FieldsFunc(text, func(character rune) bool {
+		return character == ',' || character == ' ' || character == '\t' || character == '\n' || character == '\r'
+	})
+}
