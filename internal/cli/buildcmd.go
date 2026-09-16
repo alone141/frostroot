@@ -115,7 +115,7 @@ func (a *App) cmdBuild(args []string) int {
 	if fi, err := os.Stat(res.TarballPath); err == nil {
 		size = fmt.Sprintf(" (%d MB)", (fi.Size()+1<<19)>>20)
 	}
-	fmt.Fprintf(a.Stdout, "\nWrote %s%s\nWrote frostroot.lock (%d packages)\n", rel, size, res.Packages)
+	fmt.Fprintf(a.Stdout, "\nWrote %s%s\nWrote frostroot.lock (%s)\n", rel, size, packages(res.Packages))
 	fmt.Fprintf(a.Stdout, "\nImport it on Windows:\n  wsl --import %s <install-dir> %s\n", r.Image.Name, rel)
 	if win, err := a.WSLPath(res.TarballPath); err == nil && win != "" {
 		fmt.Fprintf(a.Stdout, "or from any directory in PowerShell:\n  wsl --import %s <install-dir> '%s'\n",

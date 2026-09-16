@@ -161,7 +161,14 @@ func (a *App) cmdValidate(args []string) int {
 	if !ok {
 		return 1
 	}
-	fmt.Fprintf(a.Stdout, "%s: ok (%s, Ubuntu %s %s, %d packages requested)\n",
-		recipeFile, r.Image.Name, r.Image.Release, r.Image.Arch, len(r.Packages.Include))
+	fmt.Fprintf(a.Stdout, "%s: ok (%s, Ubuntu %s %s, %s requested)\n",
+		recipeFile, r.Image.Name, r.Image.Release, r.Image.Arch, packages(len(r.Packages.Include)))
 	return 0
+}
+
+func packages(n int) string {
+	if n == 1 {
+		return "1 package"
+	}
+	return fmt.Sprintf("%d packages", n)
 }

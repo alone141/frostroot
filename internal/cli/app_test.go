@@ -35,7 +35,7 @@ func TestValidateOK(t *testing.T) {
 	if code := app.Run([]string{"validate"}); code != 0 {
 		t.Fatalf("code %d stderr %s", code, errb.String())
 	}
-	if !strings.Contains(out.String(), "frostroot.toml") {
+	if out.String() != "frostroot.toml: ok (cpp-lab, Ubuntu 22.04 amd64, 3 packages requested)\n" {
 		t.Fatalf("stdout should confirm what was checked: %q", out.String())
 	}
 	if errb.Len() != 0 {
