@@ -77,8 +77,11 @@ func (a *App) cmdBuild(args []string) int {
 		if finished.Load() {
 			return
 		}
-		stop() // restore default handling: a second Ctrl-C ends frostroot at once
-		fmt.Fprintln(a.Stderr, "\nfrostroot: interrupted; waiting for mmdebstrap to clean up (Ctrl-C again to abort)")
+		// Restore default handling: a second Ctrl-C ends frostroot at once.
+		// mmdebstrap runs in its own process group and finishes its cleanup
+		// either way; it must never be killed mid-cleanup.
+		stop()
+		fmt.Fprintln(a.Stderr, "\nfrostroot: interrupted; waiting for mmdebstrap to clean up (Ctrl-C again to stop waiting)")
 	}()
 	res, err := a.Builder.Build(ctx, r, builder.Options{
 		Dir:      a.Dir,
