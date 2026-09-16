@@ -70,6 +70,9 @@ func (a *App) withDefaults() *App {
 	if a.WSLPath == nil {
 		a.WSLPath = wslpath
 	}
+	if a.Builder == nil {
+		a.Builder = &builder.Builder{Bootstrap: &builder.Mmdebstrap{Stderr: a.Stderr}}
+	}
 	return a
 }
 

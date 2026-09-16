@@ -66,10 +66,6 @@ func (a *App) cmdBuild(args []string) int {
 			"with known, unfixed security vulnerabilities: security fixes are only published to Ubuntu Pro.\n"+
 			"Prefer 22.04 or 24.04 unless you specifically need %s.\n", r.Image.Release, r.Image.Release)
 	}
-	if a.Builder == nil || a.Builder.Bootstrap == nil {
-		fmt.Fprintln(a.Stderr, "frostroot: internal error: no bootstrapper configured")
-		return 2
-	}
 	fmt.Fprintf(a.Stderr, "frostroot: building %s from Ubuntu %s (%s, %s) using %s\n",
 		r.Image.Name, r.Image.Release, info.Suite, r.Image.Arch, base)
 
