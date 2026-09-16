@@ -86,7 +86,7 @@ func (m *Mmdebstrap) Run(ctx context.Context, spec BootstrapSpec) error {
 		if ctx.Err() != nil {
 			return fmt.Errorf("mmdebstrap interrupted: %w", ctx.Err())
 		}
-		return fmt.Errorf("mmdebstrap failed: %w\n--- end of mmdebstrap output ---\n%s", err, strings.TrimRight(tail.String(), "\n"))
+		return fmt.Errorf("mmdebstrap failed: %w\n--- last lines of mmdebstrap output ---\n%s", err, strings.TrimRight(tail.String(), "\n"))
 	}
 	return nil
 }
