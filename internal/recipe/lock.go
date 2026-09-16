@@ -2,23 +2,24 @@ package recipe
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 
 	"github.com/pelletier/go-toml/v2"
 )
 
-// Lockfile is frostroot.lock: what a build actually produced. It is written by
-// build and committed next to the recipe.
+// Lockfile is the content of frostroot.lock: what a build actually produced.
+// It is written by build and committed next to the recipe.
 type Lockfile struct {
-	Version          int           `toml:"version"`
+	Version          int           `toml:"version"` // lock format version
 	Distro           string        `toml:"distro"`
 	Release          string        `toml:"release"`
 	Suite            string        `toml:"suite"`
 	Arch             string        `toml:"arch"`
-	Mirror           string        `toml:"mirror"`  // base URL actually used
+	Mirror           string        `toml:"mirror"`  // archive URL actually used
 	Sources          []string      `toml:"sources"` // the three deb lines actually used
 	FrostrootVersion string        `toml:"frostroot_version"`
-	Requested        []string      `toml:"requested"` // recipe packages.include as written
+	Requested        []string      `toml:"requested"` // the recipe's packages.include, as written
 	Packages         []LockPackage `toml:"packages"`  // every installed package, sorted
 }
 
@@ -31,24 +32,24 @@ type LockPackage struct {
 	// list-of-tables shape exists so that stays additive.
 }
 
-// LoadLock parses a lockfile. Unknown fields are an error.
+// LoadLock parses the lockfile at path. Unknown fields are an error.
 func LoadLock(path string) (Lockfile, error) {
-	var l Lockfile
-	if err := decodeStrict(path, &l); err != nil {
+	var parsed Lockfile
+	if err := decodeStrict(path, &parsed); err != nil {
 		return Lockfile{}, err
 	}
-	return l, nil
+	return parsed, nil
 }
 
-// SaveLock writes a lockfile. Output depends only on the input, and arrays are
-// written one element per line, so a rebuild that changes one version shows
-// up as a one-line diff. Callers sort Packages.
-func SaveLock(path string, l Lockfile) error {
-	var buf bytes.Buffer
-	enc := toml.NewEncoder(&buf)
-	enc.SetArraysMultiline(true)
-	if err := enc.Encode(l); err != nil {
-		return err
+// SaveLock writes lock to path. The output depends only on the input, and
+// arrays are written one element per line, so a rebuild that changes one
+// version shows up as a one-line diff. Callers sort lock.Packages.
+func SaveLock(path string, lock Lockfile) error {
+	var encoded bytes.Buffer
+	encoder := toml.NewEncoder(&encoded)
+	encoder.SetArraysMultiline(true)
+	if err := encoder.Encode(lock); err != nil {
+		return fmt.Errorf("encoding lock: %w", err)
 	}
-	return os.WriteFile(path, buf.Bytes(), 0o644)
+	return os.WriteFile(path, encoded.Bytes(), 0o644)
 }

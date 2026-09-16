@@ -1,0 +1,81 @@
+# golangci-lint configuration. CONTRIBUTING.md explains the standard these
+# checks enforce and why each linter is here.
+version: "2"
+
+run:
+  # Lint the integration test too; it is compiled only with this tag.
+  build-tags:
+    - integration
+
+linters:
+  # errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  enable:
+    - copyloopvar # loop variables copied needlessly (Go 1.22 semantics)
+    - errname # sentinel errors are named ErrXxx, error types XxxError
+    - errorlint # wrap with %w; compare with errors.Is and errors.As
+    - gocritic # a broad set of correctness and clarity checks
+    - godot # doc comments are sentences
+    - intrange # for i := range n where it reads better
+    - misspell # American English in code and comments, as Go uses
+    - nolintlint # every //nolint names the linter and says why
+    - predeclared # no variables named len, copy, new, ...
+    - revive # Go Code Review Comments: naming, doc comments, error style
+    - thelper # test helpers call t.Helper()
+    - unconvert # no conversions to the type a value already has
+    - usestdlibvars # http.MethodGet over "GET" and the like
+  settings:
+    errcheck:
+      check-type-assertions: true
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment # memory layout, not readability
+        - shadow # `if err := ...; err != nil` in a narrow scope is idiomatic
+    godot:
+      scope: declarations
+    misspell:
+      locale: US
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: early-return
+        - name: empty-block
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: exported
+        - name: import-shadowing
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: use-any
+        - name: var-declaration
+        - name: var-naming
+    staticcheck:
+      checks:
+        - all
+        - -ST1000 # package comments: revive's package-comments reports these
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - frostroot

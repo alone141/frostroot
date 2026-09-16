@@ -7,65 +7,74 @@ import (
 	"frostroot/internal/distro"
 )
 
+// Patterns for the values Validate checks. Locale and timezone are
+// interpolated into the provisioning script in internal/builder, so those two
+// are a shell-injection boundary, not a cosmetic check: keep them strict, and
+// neither may start with a dash.
 var (
-	// The image name becomes a file name and a WSL distro name.
-	imageNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
-	userNameRe  = regexp.MustCompile(`^[a-z_][a-z0-9_-]*$`)
-	// Debian policy: at least two characters, lowercase, digits, + - and dot.
-	// No = / or :, so versions and suites cannot be smuggled into the recipe.
-	pkgTokenRe = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]+$`)
-	// Locale and timezone are interpolated into mmdebstrap hooks in
-	// internal/builder. Keep these strict; they are a shell-injection
-	// boundary, not a cosmetic check. Neither may start with a dash.
-	langRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*\.[A-Za-z0-9-]+$`)
-	tzRe   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_+-]*(/[A-Za-z0-9][A-Za-z0-9_+-]*){0,2}$`)
+	// imageNamePattern: the image name becomes a file name and a WSL
+	// distribution name.
+	imageNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+	userNamePattern  = regexp.MustCompile(`^[a-z_][a-z0-9_-]*$`)
+	// packageNamePattern follows Debian policy: at least two characters,
+	// lowercase letters, digits, + - and dot. No = / or :, so versions and
+	// suites cannot be smuggled into the recipe.
+	packageNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]+$`)
+	localePattern      = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*\.[A-Za-z0-9-]+$`)
+	timezonePattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_+-]*(/[A-Za-z0-9][A-Za-z0-9_+-]*){0,2}$`)
 )
 
-// Validate returns every problem with the recipe, one message per problem.
-// It needs no network and no root. Whether the timezone exists can only be
-// checked inside the image, so build does that in a hook.
-func Validate(r Recipe) []string {
-	var probs []string
-	if !imageNameRe.MatchString(r.Image.Name) {
-		probs = append(probs, fmt.Sprintf("invalid image name %q (letters, digits, dot, dash, underscore; must not be empty)", r.Image.Name))
+// maxUserNameLength is the longest name useradd accepts.
+const maxUserNameLength = 32
+
+// Validate returns every problem with imageRecipe, one message per problem,
+// or nil when there are none. It needs no network and no root. Whether the
+// timezone and locale exist can only be checked inside the image, so build
+// does that during provisioning.
+func Validate(imageRecipe Recipe) []string {
+	var problems []string
+	if !imageNamePattern.MatchString(imageRecipe.Image.Name) {
+		problems = append(problems, fmt.Sprintf("invalid image name %q (letters, digits, dot, dash, underscore; must not be empty)", imageRecipe.Image.Name))
 	}
-	if _, err := distro.Lookup(r.Image.Release, r.Image.Arch); err != nil {
-		for _, e := range each(err) {
-			probs = append(probs, e.Error())
+	if _, err := distro.Lookup(imageRecipe.Image.Release, imageRecipe.Image.Arch); err != nil {
+		for _, lookupErr := range splitJoinedError(err) {
+			problems = append(problems, lookupErr.Error())
 		}
 	}
-	if r.User.Name == "root" || !userNameRe.MatchString(r.User.Name) || len(r.User.Name) > 32 {
-		probs = append(probs, fmt.Sprintf("invalid user name %q (lowercase letters, digits, - and _; 1-32 chars; not root)", r.User.Name))
+	userName := imageRecipe.User.Name
+	if userName == "root" || !userNamePattern.MatchString(userName) || len(userName) > maxUserNameLength {
+		problems = append(problems, fmt.Sprintf("invalid user name %q (lowercase letters, digits, - and _; 1-%d chars; not root)", userName, maxUserNameLength))
 	}
-	if r.WSL.DefaultUser != "" && r.WSL.DefaultUser != r.User.Name {
-		probs = append(probs, fmt.Sprintf("wsl.default_user %q must equal user.name %q", r.WSL.DefaultUser, r.User.Name))
+	if defaultUser := imageRecipe.WSL.DefaultUser; defaultUser != "" && defaultUser != userName {
+		problems = append(problems, fmt.Sprintf("wsl.default_user %q must equal user.name %q", defaultUser, userName))
 	}
-	if r.Locale.Lang != "" && !langRe.MatchString(r.Locale.Lang) {
-		probs = append(probs, fmt.Sprintf("invalid locale lang %q (expected e.g. en_US.UTF-8)", r.Locale.Lang))
+	if lang := imageRecipe.Locale.Lang; lang != "" && !localePattern.MatchString(lang) {
+		problems = append(problems, fmt.Sprintf("invalid locale lang %q (expected e.g. en_US.UTF-8)", lang))
 	}
-	if r.Locale.Timezone != "" && !tzRe.MatchString(r.Locale.Timezone) {
-		probs = append(probs, fmt.Sprintf("invalid timezone %q (expected e.g. UTC or Europe/Istanbul)", r.Locale.Timezone))
+	if timezone := imageRecipe.Locale.Timezone; timezone != "" && !timezonePattern.MatchString(timezone) {
+		problems = append(problems, fmt.Sprintf("invalid timezone %q (expected e.g. UTC or Europe/Istanbul)", timezone))
 	}
-	for _, p := range r.Packages.Include {
-		if !pkgTokenRe.MatchString(p) {
-			probs = append(probs, fmt.Sprintf("invalid package name %q (apt package names only; versions belong in the lock)", p))
+	for _, packageName := range imageRecipe.Packages.Include {
+		if !packageNamePattern.MatchString(packageName) {
+			problems = append(problems, fmt.Sprintf("invalid package name %q (apt package names only; versions belong in the lock)", packageName))
 		}
 	}
-	return probs
+	return problems
 }
 
-// each returns the errors inside an errors.Join result, or err itself.
-func each(err error) []error {
+// splitJoinedError returns the errors combined by errors.Join, or err itself
+// when it is not a joined error.
+func splitJoinedError(err error) []error {
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
 		return joined.Unwrap()
 	}
 	return []error{err}
 }
 
-// DefaultUser is the account WSL logs in as.
-func DefaultUser(r Recipe) string {
-	if r.WSL.DefaultUser != "" {
-		return r.WSL.DefaultUser
+// DefaultUser returns the account WSL logs in as.
+func DefaultUser(imageRecipe Recipe) string {
+	if imageRecipe.WSL.DefaultUser != "" {
+		return imageRecipe.WSL.DefaultUser
 	}
-	return r.User.Name
+	return imageRecipe.User.Name
 }

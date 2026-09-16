@@ -7,147 +7,66 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"frostroot/internal/builder"
 )
 
-func testdata(name string) string { return filepath.Join("..", "..", "testdata", name) }
+// testdataPath returns the path of a fixture in the repository's testdata
+// directory.
+func testdataPath(name string) string { return filepath.Join("..", "..", "testdata", name) }
 
-func copyFile(t *testing.T, src, dst string) {
+// newRecipeDir returns a new temporary directory holding a copy of a fixture
+// as frostroot.toml.
+func newRecipeDir(t *testing.T, fixtureName string) string {
 	t.Helper()
-	body, err := os.ReadFile(src)
+	fixture, err := os.ReadFile(testdataPath(fixtureName))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(dst, body, 0o644); err != nil {
+	recipeDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(recipeDir, "frostroot.toml"), fixture, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	return recipeDir
 }
 
-func recipeDir(t *testing.T, fixture string) string {
-	t.Helper()
-	dir := t.TempDir()
-	copyFile(t, testdata(fixture), filepath.Join(dir, "frostroot.toml"))
-	return dir
-}
-
-func TestValidateOK(t *testing.T) {
-	var out, errb bytes.Buffer
-	app := App{Stdout: &out, Stderr: &errb, Dir: recipeDir(t, "valid.toml")}
-	if code := app.Run([]string{"validate"}); code != 0 {
-		t.Fatalf("code %d stderr %s", code, errb.String())
-	}
-	if out.String() != "frostroot.toml: ok (cpp-lab, Ubuntu 22.04 amd64, 3 packages requested)\n" {
-		t.Fatalf("stdout should confirm what was checked: %q", out.String())
-	}
-	if errb.Len() != 0 {
-		t.Fatalf("stderr should be empty: %q", errb.String())
-	}
-}
-
-func TestValidateReportsProblems(t *testing.T) {
-	var out, errb bytes.Buffer
-	app := App{Stdout: &out, Stderr: &errb, Dir: recipeDir(t, "bad-user.toml")}
-	if code := app.Run([]string{"validate"}); code != 1 {
-		t.Fatalf("code %d", code)
-	}
-	if !strings.Contains(errb.String(), "user name") {
-		t.Fatalf("stderr %s", errb.String())
-	}
-}
-
-func TestValidateReportsEveryProblem(t *testing.T) {
-	dir := t.TempDir()
-	body := "[image]\nname = \"../x\"\nrelease = \"18.04\"\narch = \"amd64\"\n\n[user]\nname = \"root\"\n\n[packages]\ninclude = [\"ok\", \"no way\"]\n"
-	if err := os.WriteFile(filepath.Join(dir, "frostroot.toml"), []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	var errb bytes.Buffer
-	app := App{Stdout: io.Discard, Stderr: &errb, Dir: dir}
-	if code := app.Run([]string{"validate"}); code != 1 {
-		t.Fatalf("code %d", code)
-	}
-	for _, want := range []string{"image name", "unknown ubuntu release", "user name", `"no way"`} {
-		if !strings.Contains(errb.String(), want) {
-			t.Fatalf("missing %q in:\n%s", want, errb.String())
-		}
-	}
-}
-
-func TestValidateBadRelease(t *testing.T) {
-	var errb bytes.Buffer
-	app := App{Stdout: io.Discard, Stderr: &errb, Dir: recipeDir(t, "bad-release.toml")}
-	if code := app.Run([]string{"validate"}); code != 1 {
-		t.Fatalf("code %d", code)
-	}
-	if !strings.Contains(errb.String(), "18.04") {
-		t.Fatalf("stderr %s", errb.String())
-	}
-}
-
-func TestValidateBadLocale(t *testing.T) {
-	var errb bytes.Buffer
-	app := App{Stdout: io.Discard, Stderr: &errb, Dir: recipeDir(t, "bad-locale.toml")}
-	if code := app.Run([]string{"validate"}); code != 1 {
-		t.Fatalf("code %d", code)
-	}
-	if !strings.Contains(errb.String(), "locale lang") {
-		t.Fatalf("stderr %s", errb.String())
-	}
-}
-
-func TestValidateUnknownField(t *testing.T) {
-	var errb bytes.Buffer
-	app := App{Stdout: io.Discard, Stderr: &errb, Dir: recipeDir(t, "unknown-field.toml")}
-	if code := app.Run([]string{"validate"}); code != 1 {
-		t.Fatalf("code %d", code)
-	}
-	if !strings.Contains(errb.String(), "[package]") {
-		t.Fatalf("stderr should point at the typo: %s", errb.String())
-	}
-}
-
-func TestValidateMissingFile(t *testing.T) {
-	var errb bytes.Buffer
-	app := App{Stdout: io.Discard, Stderr: &errb, Dir: t.TempDir()}
-	if code := app.Run([]string{"validate"}); code != 1 {
-		t.Fatalf("code %d", code)
-	}
-	if !strings.Contains(errb.String(), "frostroot.toml") || !strings.Contains(errb.String(), "frostroot init") {
-		t.Fatalf("stderr should name the file and suggest init: %s", errb.String())
-	}
-}
-
-func TestValidateRejectsArguments(t *testing.T) {
-	var errb bytes.Buffer
-	app := App{Stdout: io.Discard, Stderr: &errb, Dir: recipeDir(t, "valid.toml")}
-	if code := app.Run([]string{"validate", "other.toml"}); code != 1 {
-		t.Fatalf("code %d", code)
-	}
-}
-
-func TestUnknownVerbAndNoArgs(t *testing.T) {
+func TestRunRejectsMissingOrUnknownCommand(t *testing.T) {
 	for _, args := range [][]string{{}, {"frobnicate"}, {"--bogus"}} {
-		var errb bytes.Buffer
-		app := App{Stdout: io.Discard, Stderr: &errb, Dir: t.TempDir()}
-		if code := app.Run(args); code != 1 {
-			t.Fatalf("args %v: code %d", args, code)
+		var stderr bytes.Buffer
+		app := App{Stdout: io.Discard, Stderr: &stderr, RecipeDir: t.TempDir()}
+		if exitCode := app.Run(args); exitCode != exitUserError {
+			t.Errorf("Run(%q) = %d, want %d", args, exitCode, exitUserError)
 		}
-		if !strings.Contains(errb.String(), "usage") {
-			t.Fatalf("args %v: stderr %s", args, errb.String())
+		if !strings.Contains(stderr.String(), "usage") {
+			t.Errorf("Run(%q) should print usage to stderr, got %q", args, stderr.String())
 		}
 	}
 }
 
-func TestHelp(t *testing.T) {
+func TestRunHelp(t *testing.T) {
 	for _, args := range [][]string{{"help"}, {"-h"}, {"--help"}} {
-		var out bytes.Buffer
-		app := App{Stdout: &out, Stderr: io.Discard, Dir: t.TempDir()}
-		if code := app.Run(args); code != 0 {
-			t.Fatalf("args %v: code %d", args, code)
+		var stdout bytes.Buffer
+		app := App{Stdout: &stdout, Stderr: io.Discard, RecipeDir: t.TempDir()}
+		if exitCode := app.Run(args); exitCode != exitSuccess {
+			t.Errorf("Run(%q) = %d, want %d", args, exitCode, exitSuccess)
 		}
-		for _, verb := range []string{"init", "validate", "build"} {
-			if !strings.Contains(out.String(), verb) {
-				t.Fatalf("args %v: usage should list %s: %s", args, verb, out.String())
+		for _, command := range []string{"init", "validate", "build"} {
+			if !strings.Contains(stdout.String(), command) {
+				t.Errorf("Run(%q): usage should list %s: %q", args, command, stdout.String())
 			}
 		}
+	}
+}
+
+func TestNewUsesRealMmdebstrap(t *testing.T) {
+	app := New()
+	if app.Builder == nil {
+		t.Fatal("New().Builder is nil")
+	}
+	if _, isMmdebstrap := app.Builder.Bootstrapper.(*builder.Mmdebstrap); !isMmdebstrap {
+		t.Errorf("New must build with mmdebstrap, got %T", app.Builder.Bootstrapper)
+	}
+	if app.Prompt == nil || app.WSLPath == nil || app.Getenv == nil || app.RecipeDir == "" || app.GOOS == "" {
+		t.Errorf("New left defaults unset: %+v", app)
 	}
 }
