@@ -37,6 +37,8 @@ func (p *plainProgress) Report(event builder.ProgressEvent) {
 		}
 		p.lastTenth = tenth
 		p.printf("frostroot:   %3d%%  %s\n", tenth*10, event.Summary())
+	case builder.EventLogFile:
+		p.printf("frostroot: mmdebstrap output goes to %s\n", event.Line)
 	case builder.EventLogLine, builder.EventPhaseFinished:
 	}
 }

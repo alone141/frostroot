@@ -264,6 +264,8 @@ func kindName(kind EventKind) string {
 		return "log"
 	case EventPhaseFinished:
 		return "finished"
+	case EventLogFile:
+		return "logfile"
 	}
 	return "unknown"
 }
