@@ -30,7 +30,9 @@ func Validate(r Recipe) []string {
 		probs = append(probs, fmt.Sprintf("invalid image name %q (letters, digits, dot, dash, underscore; must not be empty)", r.Image.Name))
 	}
 	if _, err := distro.Lookup(r.Image.Release, r.Image.Arch); err != nil {
-		probs = append(probs, err.Error())
+		for _, e := range each(err) {
+			probs = append(probs, e.Error())
+		}
 	}
 	if r.User.Name == "root" || !userNameRe.MatchString(r.User.Name) || len(r.User.Name) > 32 {
 		probs = append(probs, fmt.Sprintf("invalid user name %q (lowercase letters, digits, - and _; 1-32 chars; not root)", r.User.Name))
@@ -50,6 +52,14 @@ func Validate(r Recipe) []string {
 		}
 	}
 	return probs
+}
+
+// each returns the errors inside an errors.Join result, or err itself.
+func each(err error) []error {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		return joined.Unwrap()
+	}
+	return []error{err}
 }
 
 // DefaultUser is the account WSL logs in as.

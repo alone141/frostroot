@@ -107,18 +107,22 @@ func TestInitAsksInOrder(t *testing.T) {
 }
 
 func TestInitPresetsExpandAndExtrasAppend(t *testing.T) {
-	dir := t.TempDir()
-	code, _, errs := runInit(t, dir, []string{"py", "22.04", "", "", "python-lab", " numpy-dev , ,git,python3 "})
-	if code != 0 {
-		t.Fatalf("code %d: %s", code, errs)
-	}
-	r, err := recipe.Load(filepath.Join(dir, "frostroot.toml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"python3", "python3-pip", "python3-venv", "git", "numpy-dev"}
-	if !reflect.DeepEqual(r.Packages.Include, want) {
-		t.Fatalf("include %#v want %#v", r.Packages.Include, want)
+	// Extras may be separated by commas, spaces or both: people type them the
+	// way they would for apt install.
+	for _, extra := range []string{" numpy-dev , ,git,python3 ", "numpy-dev git python3", "numpy-dev, git  python3"} {
+		dir := t.TempDir()
+		code, _, errs := runInit(t, dir, []string{"py", "22.04", "", "", "python-lab", extra})
+		if code != 0 {
+			t.Fatalf("%q: code %d: %s", extra, code, errs)
+		}
+		r, err := recipe.Load(filepath.Join(dir, "frostroot.toml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"python3", "python3-pip", "python3-venv", "git", "numpy-dev"}
+		if !reflect.DeepEqual(r.Packages.Include, want) {
+			t.Fatalf("%q: include %#v want %#v", extra, r.Packages.Include, want)
+		}
 	}
 }
 

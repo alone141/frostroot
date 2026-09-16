@@ -71,6 +71,10 @@ func decodeStrict(path string, v any) error {
 	if err != nil {
 		return err
 	}
+	// Notepad's "UTF-8 with BOM" is a real way for a recipe to be saved, and
+	// TOML says nothing about byte order marks. Without this the error is
+	// "invalid character at start of key: U+00EF", which explains nothing.
+	body = bytes.TrimPrefix(body, []byte("\xef\xbb\xbf"))
 	dec := toml.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {

@@ -120,7 +120,7 @@ Ubuntu release (20.04, 22.04, 24.04) [24.04]: 22.04
 User name [student]:
 Timezone, e.g. UTC or Europe/Istanbul [UTC]: Europe/Istanbul
 Package preset (none, build-essential, python-lab) [none]: none
-Extra packages, comma-separated: git, build-essential, cmake
+Extra packages, separated by spaces or commas: git build-essential cmake
 
 Wrote frostroot.toml. Next: frostroot validate, then frostroot build.
 
@@ -180,7 +180,7 @@ always kept after a failure).
 | Exit code | Meaning |
 |---|---|
 | 0 | success |
-| 1 | something you can fix: invalid or missing recipe, not Linux, mmdebstrap or ubuntu-keyring missing, unusable work directory |
+| 1 | something you can fix: invalid or missing recipe, not Linux, mmdebstrap or ubuntu-keyring missing, unusable work directory, a `dist/` you cannot write to |
 | 2 | the build failed: mmdebstrap failed (unknown package, mirror unreachable), provisioning failed, the tarball could not be placed |
 | 130 | interrupted with Ctrl-C; nothing is written and the work directory is kept |
 
@@ -203,7 +203,8 @@ Unknown fields are an error, so a `[package]` typo fails loudly instead of
 building an image without your packages. `locale` and `timezone` are checked
 strictly because they reach shell scripts. Whether the timezone and locale
 actually exist can only be checked inside the image, so `build` fails if they
-do not.
+do not. Files saved by Windows editors are fine: CRLF line endings and a UTF-8
+byte order mark are both accepted.
 
 `init` presets are shortcuts for package lists, not a recipe feature:
 `build-essential` is `build-essential git cmake pkg-config`, `python-lab` is
@@ -246,8 +247,11 @@ status, which frostroot parses into the lock. The tarball is moved into
 an image that does not exist. A failed build writes neither.
 
 Work happens in `$XDG_CACHE_HOME/frostroot` if that is set, otherwise in
-`/var/tmp/frostroot`, never under `/mnt` (on WSL that is a slow 9p mount of a
-Windows drive). The recipe directory itself can be on a Windows drive.
+`/var/tmp/frostroot-<uid>` (one per user, so a `sudo` build cannot leave a
+root-owned directory in the way of the next normal one), never under `/mnt`
+(on WSL that is a slow 9p mount of a Windows drive). The recipe directory
+itself can be on a Windows drive. Before spending minutes on a bootstrap,
+`build` checks that it will be able to write the lock and the tarball.
 
 ## Notes
 
@@ -258,6 +262,17 @@ reproducible; the act of building is not, yet. Vendoring `.deb` files is the
 planned next step.
 
 **Builds need network; consuming the tarball does not.**
+
+**Building as root.** `sudo frostroot build` works, but everything it writes
+into the recipe directory (`dist/`, `frostroot.lock`) belongs to root
+afterwards. A later build as yourself in that directory stops before
+bootstrapping and says so; `sudo chown -R $USER dist frostroot.lock` or
+removing them fixes it. Its work directory, `/var/tmp/frostroot-0`, stays out
+of the way of unprivileged builds.
+
+**One build per recipe directory at a time.** Two builds running in the same
+directory do not disturb each other's temporary files, but whichever finishes
+last wins, and the lock and tarball may then come from different builds.
 
 **20.04 images ship known, unfixed CVEs.** Focal's standard support ended in
 May 2025. Its packages are still on the archive, but security fixes since then

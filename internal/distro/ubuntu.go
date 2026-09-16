@@ -33,14 +33,19 @@ var table = map[string]Info{
 }
 
 // Lookup returns bootstrap information for an Ubuntu release. v1 supports
-// amd64 only.
+// amd64 only. When both the release and the arch are wrong the returned error
+// wraps both (errors.Join, release first), so validate can report each.
 func Lookup(release, arch string) (Info, error) {
-	if arch != "amd64" {
-		return Info{}, fmt.Errorf("%w: %q (v1 supports amd64 only)", ErrUnsupportedArch, arch)
-	}
+	var errs []error
 	info, ok := table[release]
 	if !ok {
-		return Info{}, fmt.Errorf("%w: %q (known: %s)", ErrUnknownRelease, release, strings.Join(KnownReleases(), ", "))
+		errs = append(errs, fmt.Errorf("%w: %q (known: %s)", ErrUnknownRelease, release, strings.Join(KnownReleases(), ", ")))
+	}
+	if arch != "amd64" {
+		errs = append(errs, fmt.Errorf("%w: %q (v1 supports amd64 only)", ErrUnsupportedArch, arch))
+	}
+	if len(errs) > 0 {
+		return Info{}, errors.Join(errs...)
 	}
 	out := info
 	out.Components = append([]string{}, info.Components...)
