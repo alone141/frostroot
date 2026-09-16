@@ -1,0 +1,259 @@
+// Package builder turns a recipe into a lockfile and an image tarball. The
+// bootstrap itself sits behind the Bootstrapper interface: the real one runs
+// mmdebstrap, tests use fakes that produce the same artifacts.
+package builder
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+
+	"frostroot/internal/distro"
+	"frostroot/internal/export"
+	"frostroot/internal/recipe"
+)
+
+// Version is recorded in every lockfile.
+const Version = "0.1.0"
+
+// UbuntuKeyring verifies the Ubuntu archive's Release files.
+const UbuntuKeyring = "/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+
+// Host and configuration problems a user can fix. Every other build error is
+// a failure of the build itself.
+var (
+	ErrNotLinux         = errors.New("frostroot build requires Linux")
+	ErrNoMmdebstrap     = errors.New("mmdebstrap not found on PATH")
+	ErrNoKeyring        = errors.New("Ubuntu archive keyring not found")
+	ErrBadWorkRoot      = errors.New("unusable work directory")
+	ErrUnwritableOutput = errors.New("cannot write the build output")
+)
+
+// BootstrapSpec is everything a bootstrapper needs for one image.
+type BootstrapSpec struct {
+	Suite      string
+	Sources    []string // full "deb URL suite components" lines, all three pockets
+	Include    []string
+	Hooks      []string // --customize-hook arguments, in order
+	TarPath    string   // the bootstrapper writes the tarball here, inside its namespace
+	WorkDir    string   // scratch space for the bootstrapper (TMPDIR)
+	Arch       string
+	Recommends bool
+	Keyring    string
+}
+
+// Bootstrapper builds an image tarball. Implementations must write the
+// tarball to spec.TarPath and run spec.Hooks, which download the image's dpkg
+// status file into the work directory.
+type Bootstrapper interface {
+	Run(ctx context.Context, spec BootstrapSpec) error
+}
+
+// Preflighter is implemented by bootstrappers that can check host
+// requirements (tools, keyrings) before any work directory is created.
+type Preflighter interface {
+	Preflight(spec BootstrapSpec) error
+}
+
+// Options are the per-invocation settings of a build.
+type Options struct {
+	Dir      string // recipe directory; the lock and dist/ go here
+	Mirror   string // replaces the archive base URL in all three pockets
+	KeepWork bool
+	GOOS     string              // default runtime.GOOS
+	Getenv   func(string) string // default os.Getenv
+}
+
+// Result describes a finished or failed build.
+type Result struct {
+	LockPath    string
+	TarballPath string
+	Packages    int    // installed packages recorded in the lock
+	WorkDir     string // set when the work directory was kept: KeepWork, a failure, or a failed cleanup
+	CleanupErr  error  // the build succeeded but the work directory could not be removed
+}
+
+// Builder runs builds.
+type Builder struct {
+	Bootstrap Bootstrapper
+}
+
+// Build validates nothing about the recipe itself (callers run
+// recipe.Validate); it resolves the release, bootstraps the image and, only if
+// everything succeeded, places the tarball and then the lock. A failure leaves
+// no lock, no tarball and no temporary lock, and keeps the work directory.
+func (b *Builder) Build(ctx context.Context, r recipe.Recipe, opts Options) (Result, error) {
+	goos := opts.GOOS
+	if goos == "" {
+		goos = runtime.GOOS
+	}
+	if goos != "linux" {
+		return Result{}, ErrNotLinux
+	}
+	getenv := opts.Getenv
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	info, err := distro.Lookup(r.Image.Release, r.Image.Arch)
+	if err != nil {
+		return Result{}, err
+	}
+	mirror := info.Base
+	if opts.Mirror != "" {
+		mirror = opts.Mirror
+	}
+	uid := os.Getuid()
+	root, err := WorkRoot(getenv, uid)
+	if err != nil {
+		return Result{}, err
+	}
+	spec := BootstrapSpec{
+		Suite:      info.Suite,
+		Sources:    info.Sources(opts.Mirror),
+		Include:    MergeInclude(r.Packages.Include),
+		Arch:       r.Image.Arch,
+		Recommends: true,
+		Keyring:    UbuntuKeyring,
+		WorkDir:    root, // for Preflight: where the build directory will go
+	}
+	if p, ok := b.Bootstrap.(Preflighter); ok {
+		if err := p.Preflight(spec); err != nil {
+			return Result{}, err
+		}
+	}
+	if err := checkOutput(opts.Dir); err != nil {
+		return Result{}, err
+	}
+	if err := prepareWorkRoot(root, uid); err != nil {
+		return Result{}, err
+	}
+	// 0755 whatever the umask: in unshare mode mmdebstrap's root is "other"
+	// to this directory and must be able to enter it.
+	work, err := os.MkdirTemp(root, "build-*")
+	if err == nil {
+		err = os.Chmod(work, 0o755)
+	}
+	if err != nil {
+		return Result{}, fmt.Errorf("%w: creating a build directory under %s: %v; set XDG_CACHE_HOME to use another location", ErrBadWorkRoot, root, err)
+	}
+
+	// From here on every failure keeps the work directory: it is the only
+	// debugging evidence. Nothing in dist/ or the lock is touched until the
+	// bootstrap has fully succeeded.
+	res := Result{WorkDir: work}
+	lockPath := filepath.Join(opts.Dir, "frostroot.lock")
+	var tmpLock string // this build's own temporary lock, once created
+	fail := func(err error) (Result, error) {
+		if tmpLock != "" {
+			os.Remove(tmpLock)
+		}
+		return res, err
+	}
+
+	stage, err := WriteStage(filepath.Join(work, "stage"), r)
+	if err != nil {
+		return fail(err)
+	}
+	spec.Hooks = CustomizeHooks(stage)
+	spec.TarPath = filepath.Join(work, "image.tar.gz")
+	spec.WorkDir = work
+	if err := b.Bootstrap.Run(ctx, spec); err != nil {
+		return fail(err)
+	}
+
+	pkgs, err := readStatus(stage.StatusOut)
+	if err != nil {
+		return fail(err)
+	}
+	requested := r.Packages.Include
+	if requested == nil {
+		requested = []string{}
+	}
+	lock := recipe.Lockfile{
+		Version:          1,
+		Distro:           "ubuntu",
+		Release:          r.Image.Release,
+		Suite:            info.Suite,
+		Arch:             r.Image.Arch,
+		Mirror:           mirror,
+		Sources:          spec.Sources,
+		FrostrootVersion: Version,
+		Requested:        requested,
+		Packages:         pkgs,
+	}
+	// A unique name, so two builds in one directory cannot delete or
+	// overwrite each other's temporary lock.
+	tmp, err := export.CreateTemp(opts.Dir, ".frostroot.lock.*.tmp")
+	if err != nil {
+		return fail(fmt.Errorf("writing the lock: %w", err))
+	}
+	tmpLock = tmp.Name()
+	tmp.Close()
+	if err := recipe.SaveLock(tmpLock, lock); err != nil {
+		return fail(err)
+	}
+
+	// mmdebstrap creates its output file before it starts, so existence alone
+	// proves nothing.
+	if fi, err := os.Stat(spec.TarPath); err != nil || fi.Size() == 0 {
+		return fail(fmt.Errorf("bootstrap reported success but left no tarball at %s", spec.TarPath))
+	}
+	dest := filepath.Join(opts.Dir, export.TarballRelPath(r.Image.Name, r.Image.Release, r.Image.Arch))
+	if err := export.Place(spec.TarPath, dest); err != nil {
+		return fail(fmt.Errorf("placing tarball: %w", err))
+	}
+	// The lock goes into place only after the tarball has landed, so a lock
+	// never describes an image that does not exist.
+	if err := os.Rename(tmpLock, lockPath); err != nil {
+		return fail(err)
+	}
+
+	res.LockPath = lockPath
+	res.TarballPath = dest
+	res.Packages = len(pkgs)
+	if opts.KeepWork {
+		return res, nil
+	}
+	if err := os.RemoveAll(work); err != nil {
+		res.CleanupErr = err
+		return res, nil
+	}
+	res.WorkDir = ""
+	return res, nil
+}
+
+// mkdirAllMode is os.MkdirAll that gives every directory it creates exactly
+// mode perm instead of perm minus the umask. Existing directories are left
+// alone.
+func mkdirAllMode(path string, perm os.FileMode) error {
+	if fi, err := os.Stat(path); err == nil {
+		if !fi.IsDir() {
+			return fmt.Errorf("%s exists and is not a directory", path)
+		}
+		return nil
+	}
+	if parent := filepath.Dir(path); parent != path {
+		if err := mkdirAllMode(parent, perm); err != nil {
+			return err
+		}
+	}
+	if err := os.Mkdir(path, perm); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return nil // created concurrently
+		}
+		return err
+	}
+	return os.Chmod(path, perm)
+}
+
+func readStatus(path string) ([]recipe.LockPackage, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("bootstrap did not produce the image's dpkg status: %w", err)
+	}
+	defer f.Close()
+	return ParseDpkgStatus(f)
+}
