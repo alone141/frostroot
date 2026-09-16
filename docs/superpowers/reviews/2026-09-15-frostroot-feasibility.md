@@ -346,3 +346,80 @@ generated `resolv.conf`, and DNS resolves.
   '/home/<user>/.dpkg.cfg'` (namespace root cannot read the user's home).
 - `git` on the host reads the working directory's `.git/config`, so run image
   checks from a neutral directory.
+
+## Release verification (v0.1.0, 2026-09-16)
+
+The spike checked hand-written commands. This section checks the product:
+the `frostroot` binary, from `init` to `wsl --import` and logging in, using the
+exact import line `build` printed. Same Windows host and build host as the
+spike.
+
+### Three releases, end to end
+
+| | 24.04 `noble-lab` | 22.04 `cpp-lab` | 20.04 `focal-lab` |
+|---|---|---|---|
+| Recipe | `python-lab` preset plus `curl`; `Asia/Tokyo` | `git`, `build-essential`, `cmake`; `Europe/Istanbul` | `git`; user `teacher`; `UTC` |
+| Recipe directory | `/mnt/c/…`: drvfs, so `dist/` needs the cross-device copy | Linux filesystem | Linux filesystem |
+| `build` | exit 0, 246 s (in parallel with 22.04) | exit 0, 275 s (in parallel) | exit 0, 147 s, EOL warning printed |
+| Tarball / lock entries | 255 MB / 368 | 222 MB / 341 | 130 MB / 265 |
+| `wsl --import` via the printed path | `C:\…` form, 4.2 s | `\\wsl.localhost\…` form, 10.6 s | `\\wsl.localhost\…` form, 6.4 s |
+| Login, sudo, PID 1 | `student`, no password, systemd | `student`, no password, systemd | `teacher`, no password, systemd |
+| `systemctl is-system-running` | `degraded`: `getty@tty1`, `console-getty` | `degraded`: `ua-auto-attach` | `degraded`: `ua-auto-attach`, plus `user@1000` on the first start only (active on the next two) |
+| Timezone after boot (Windows is Istanbul) | `Asia/Tokyo` | `Europe/Istanbul` | `UTC` |
+| DNS, `sudo apt-get update`, `ping`, TLS with the image's CA bundle | all work | all work | all work |
+| Workload | venv and pip work; pip outside a venv stops at PEP 668 | CMake and g++ build and run a C++ program | n/a |
+
+### Test suites
+
+- `go test ./...`: passes. The compiled test binaries also pass **inside the
+  24.04 image**, as uid 1000, with no Go, no mmdebstrap and no network (a
+  network namespace in which name resolution fails): criterion 9 checked
+  literally, not by assumption.
+- `go test -tags=integration`: passes in 120 s.
+
+### Failure paths, real binary and real mmdebstrap
+
+| Case | Result |
+|---|---|
+| `XDG_CACHE_HOME` under a 0750 directory | exit 1 before any download, naming the blocking directory |
+| Unknown package | exit 2; the error ends with apt's `Unable to locate package`; no lock, no tarball |
+| Timezone that validates but is not in tzdata (`Mars/Olympus_Mons`) | exit 2 with `timezone Mars/Olympus_Mons does not exist in this image` |
+| SIGINT to the frostroot process (not a terminal) 25 s into the bootstrap | mmdebstrap's main process and its workers all logged the signal; exit 130; no lock; no mmdebstrap processes left |
+
+Every failed build kept its work directory, and each held only frostroot's
+stage files and mmdebstrap's truncated output: mmdebstrap removed its chroot
+even when interrupted, and a normal user could delete what was left.
+
+### Defects that only real builds found
+
+The unit suite was green for every one of these. Each now has a test that fails
+without its fix.
+
+1. **Every non-root build failed.** `os.MkdirTemp` makes 0700 directories, and
+   in unshare mode mmdebstrap's root is a subordinate uid that cannot enter
+   them. Found by the first integration run. The spike had used a 0755 `mkdir`.
+2. **Every build with `dist/` on a Windows drive failed at the last step.** The
+   cross-device copy chmodded its temporary file, and chmod returns EPERM on
+   drvfs. Found by the first end-to-end run with the recipe under `/mnt/c`.
+3. **Stopping a build with `kill` or `timeout` did not stop it.** mmdebstrap's
+   main process answers SIGINT by waiting for its workers, relying on a
+   terminal to signal the whole process group. Found by reading mmdebstrap
+   while writing the interrupt test; mmdebstrap now runs in its own process
+   group and frostroot signals that group.
+4. **Unknown locales were not a failure.** `locale-gen` reports the error and
+   exits 0. Found by running the provision script against the spike's noble
+   and focal userlands before wiring it in.
+
+### Success criteria
+
+| # | Criterion | Status |
+|---|---|---|
+| 1 | `init` writes a valid `frostroot.toml` | met: unit tests, and three real recipes that `validate` accepted |
+| 2 | `build` for 24.04 writes the lock and `dist/<name>-ubuntu-24.04-amd64.tar.gz` | met |
+| 3 | lock lists every installed package with versions, architectures and the three sources | met: 368 and 341 and 265 entries, three `sources` each |
+| 4 | tarball has `wsl.conf` with systemd and the user, home, passwordless sudo, and systemd installed | met: integration test and three boots |
+| 5 | tarball structurally sound | met: integration test (symlinks, hardlinks, owners, capabilities, no host files) |
+| 6 | `wsl --import` boots and logs in as the user | met, manually, for all three releases |
+| 7 | 20.04 builds (from the archive, see finding 1 above) and warns | met |
+| 8 | versions come from `-updates` and `-security` | met: e.g. `git 1:2.34.1-1ubuntu1.17` on 22.04 |
+| 9 | `go test ./...` passes offline, without root, without mmdebstrap | met, including inside an image with none of the three |
