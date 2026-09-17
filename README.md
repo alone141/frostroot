@@ -2,12 +2,14 @@
 
 **Freeze an Ubuntu root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
 
-> **Status: v0.3.0.** `init`, `edit`, `capture`, `validate` and `build` work.
-> In a terminal, `init`, `edit` and `capture` are a full-screen form driven
-> with the arrow keys, and `build` is a progress screen with bars. Every path in this README
-> was run for real: images for Ubuntu 20.04, 22.04 and 24.04 were built with
+> **Status: v0.4.0.** `init`, `edit`, `capture`, `validate`, `build`,
+> `vendor` and `build --offline` work. In a terminal, `init`, `edit` and
+> `capture` are a full-screen form driven with the arrow keys; `build` and
+> `vendor` are a progress screen with bars. Every path in this README was run
+> for real: images for Ubuntu 20.04, 22.04 and 24.04 were built with
 > `frostroot build`, imported with `wsl --import` on Windows 11, and logged
-> into. See [Verification](#verification).
+> into; a lock was vendored and rebuilt offline to the same package set. See
+> [Verification](#verification).
 
 ---
 
@@ -60,9 +62,10 @@ wsl -d cpp-lab
 No internet needed on the receiving end.
 
 **`frostroot.lock`**: a receipt listing every package that ended up inside,
-with exact versions. You asked for three packages; installing them pulled in
-several hundred, and the lock records all of them. Commit it to git and you
-can see exactly what changed between builds.
+with exact versions and the checksum of every `.deb` file. You asked for
+three packages; installing them pulled in several hundred, and the lock
+records all of them. Commit it to git and you can see exactly what changed
+between builds.
 
 ```toml
 version = 1
@@ -76,7 +79,7 @@ sources = [
   'deb http://archive.ubuntu.com/ubuntu jammy-updates main universe',
   'deb http://archive.ubuntu.com/ubuntu jammy-security main universe'
 ]
-frostroot_version = '0.1.0'
+frostroot_version = '0.4.0'
 requested = [
   'git',
   'build-essential',
@@ -87,6 +90,9 @@ requested = [
 name = 'git'
 version = '1:2.34.1-1ubuntu1.17'
 arch = 'amd64'
+sha256 = '8d3b6ba5a1a1d2b7dfd6b6e0f7a8b1e2b3f4c5d6e7f8091a2b3c4d5e6f708192'
+size = 3165964
+filename = 'pool/main/g/git/git_1%3a2.34.1-1ubuntu1.17_amd64.deb'
 ```
 
 That is an excerpt of a real lock: this recipe produced 341 `[[packages]]`
@@ -95,17 +101,36 @@ entries and a 222 MB tarball.
 The recipe is **intent** and you edit it. The lock is **fact** and the build
 writes it. Versions never appear in the recipe.
 
+The lock is also what makes a rebuild exact. `frostroot vendor` downloads
+every file it names into `vendor/debs/`, checked against those checksums, and
+`frostroot build --offline` rebuilds the image from that directory alone: no
+archive, no network, and it fails rather than produce an image whose packages
+differ from the lock by one version. See
+[Rebuilding offline](#rebuilding-offline).
+
 ## Install
 
 frostroot is a **Linux** program. On Windows, run it inside WSL. The images it
 builds are imported into WSL too, but they do not have to be built there.
 
+From a [release](https://github.com/alone141/frostroot/releases): download
+`frostroot-linux-amd64` and `SHA256SUMS`, then
+
 ```sh
+sha256sum -c SHA256SUMS
+install -m 0755 frostroot-linux-amd64 ~/.local/bin/frostroot
+frostroot version
 sudo apt install mmdebstrap        # also pulls uidmap
+```
+
+The binary is static and runs on any distribution, including Ubuntu 20.04.
+Or from source, with Go 1.24 or newer:
+
+```sh
 go build -o frostroot ./cmd/frostroot
 ```
 
-Go 1.24 or newer. On a Debian host, also `sudo apt install ubuntu-keyring`.
+On a Debian host, also `sudo apt install ubuntu-keyring`.
 
 Building needs either **user namespaces** (normal on current distributions,
 and what you get when you run frostroot as yourself) or **root** (`sudo
@@ -158,9 +183,13 @@ minutes for a minimal 24.04 image, and four and a half for this one on a
 2 MB/s connection. On WSL, `build` also prints the tarball's Windows path, so
 the import line can be pasted into PowerShell from any directory.
 
+To be able to rebuild this exact image later, run `frostroot vendor` now,
+while the archive still has every file the lock names; see
+[Rebuilding offline](#rebuilding-offline).
+
 Without a terminal (a pipe, CI, a redirected log) or with `--plain`, `init`
-and `edit` ask the same questions one line at a time, and `build` prints one
-line per phase and one at every tenth of a measured phase.
+and `edit` ask the same questions one line at a time, and `build` and
+`vendor` print one line per phase and one at every tenth of a measured phase.
 
 Then, in PowerShell:
 
@@ -181,19 +210,23 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 | `frostroot capture [--root DIR] [--force] [--plain]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt and the configuration files say, writes `frostroot.toml`, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing; needs no root. |
 | `frostroot validate` | Checks `frostroot.toml` and prints every problem. No network, no root. |
 | `frostroot build [--mirror URL] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-ubuntu-<release>-amd64.tar.gz`. Never prompts. Overwrites the previous lock and tarball. |
+| `frostroot vendor [--mirror URL] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name. |
+| `frostroot build --offline [--keep-work] [--plain]` | Rebuilds the image from `frostroot.lock` and `vendor/debs/`, without the archive. Fails unless the result has exactly the lock's packages. The lock is read, not written. |
+| `frostroot version` | Prints the version and the commit it was built from. |
 
-All five work on the recipe in the current directory. `--plain` asks for the
-line interface even in a terminal. `--mirror` replaces
+All of them work on the recipe in the current directory. `--plain` asks for
+the line interface even in a terminal. `--mirror` replaces
 `http://archive.ubuntu.com/ubuntu` in all three pockets, for a local or faster
-mirror. `--keep-work` keeps the work directory after a successful build (it is
-always kept after a failure).
+mirror; for `vendor` it replaces the mirror recorded in the lock.
+`--keep-work` keeps the work directory after a successful build (it is always
+kept after a failure).
 
 | Exit code | Meaning |
 |---|---|
 | 0 | success |
-| 1 | something you can fix: invalid or missing recipe, not Linux, mmdebstrap or ubuntu-keyring missing, unusable work directory, a `dist/` you cannot write to |
-| 2 | the build failed: mmdebstrap failed (unknown package, mirror unreachable), provisioning failed, the tarball could not be placed |
-| 130 | interrupted with Ctrl-C; nothing is written and the work directory is kept |
+| 1 | something you can fix: invalid or missing recipe, not Linux, mmdebstrap or ubuntu-keyring missing, unusable work directory, a `dist/` you cannot write to; for `vendor` and `--offline`, no lock, a lock without checksums, a recipe that changed since the lock, an incomplete `vendor/debs/` |
+| 2 | the build failed: mmdebstrap failed (unknown package, mirror unreachable), provisioning failed, the tarball could not be placed, an offline build's packages differ from the lock; for `vendor`, a download failed or a file did not match its checksum |
+| 130 | interrupted with Ctrl-C; nothing is written and the work directory is kept; `vendor` keeps finished downloads |
 
 ## The recipe
 
@@ -255,6 +288,46 @@ Two rules, both deliberate:
 
 `--root DIR` captures another root filesystem, such as a mounted disk.
 
+## Rebuilding offline
+
+The Ubuntu archive moves. The `-updates` and `-security` pockets change
+weekly, and superseded packages leave the pool soon after, so a lock older
+than a few weeks names packages the archive no longer serves. If the frozen
+image is the tarball, the frozen *recipe for the tarball* is the lock plus
+the packages it names, and that is what `vendor` keeps:
+
+```console
+$ frostroot vendor
+Vendored 341 packages (212 MB) into vendor/debs: 341 downloaded.
+
+$ frostroot build --offline
+Wrote dist/cpp-lab-ubuntu-22.04-amd64.tar.gz (222 MB), rebuilt from frostroot.lock: 341 packages, every one as locked.
+```
+
+`vendor` reads the lock, checks what `vendor/debs/` already holds, and
+downloads the rest from the mirror the lock records, four files at a time,
+each verified by size and SHA-256 before it gets its final name. A package
+the archive has dropped is fetched from Launchpad's librarian, which keeps
+every file ever published to Ubuntu; the checksum decides, not the source.
+Rerunning after an interruption resumes; a corrupt file is replaced.
+
+`build --offline` refuses to start unless the lock still describes the
+recipe (same release, architecture and `include` list; the user, sudo,
+locale, timezone and systemd may change freely) and `vendor/debs/` holds
+every locked file intact. It then hands mmdebstrap a local, trusted
+repository of exactly those files, installs every one of them, and compares
+the result with the lock. A difference is a failed build (exit 2) with the
+packages named; nothing is placed. No archive is contacted and no keyring is
+needed: the checksum check against the lock is the trust.
+
+What is guaranteed: the same packages at the same versions from the same
+bytes. What is not: a byte-identical tarball. File timestamps and the
+gzip header differ between two builds; the files inside do not.
+
+`vendor/debs/` is a few hundred megabytes to a gigabyte. Ship it beside the
+tarball or in an archive; add `vendor/` to `.gitignore` unless you use git
+LFS.
+
 ## What is in the image
 
 - Ubuntu `--variant=important` plus your packages, with **Recommends on**, so
@@ -286,10 +359,18 @@ frostroot.toml ──▶ validate ──▶ mmdebstrap ──▶ image.tar.gz �
 inside its user namespace, which is the only place ownership, symlinks,
 hardlinks and file capabilities come out correct. Customize hooks upload the
 rendered `wsl.conf` and sudoers drop-in and run one generated provisioning
-script (user, sudo, locale, timezone, cleanup), then download the image's dpkg
-status, which frostroot parses into the lock. The tarball is moved into
-`dist/` first and the lock renamed into place second, so a lock never describes
-an image that does not exist. A failed build writes neither.
+script (user, sudo, locale, timezone, cleanup), copy out the apt indexes the
+chroot verified (the lock's checksums come from them), then download the
+image's dpkg status, which frostroot parses into the lock. The tarball is
+moved into `dist/` first and the lock renamed into place second, so a lock
+never describes an image that does not exist. A failed build writes neither.
+
+Offline, the three `deb http://…` lines become one
+`deb [trusted=yes] copy://<work>/pool ./` pointing at a flat repository
+frostroot writes in the work directory from the vendored files (their own
+control files, plus a `Release` naming the suite, which mmdebstrap needs to
+find the essential set), every locked package goes into `--include`, and a
+hook restores the archive's lines in the image's `sources.list`.
 
 Work happens in `$XDG_CACHE_HOME/frostroot` if that is set, otherwise in
 `/var/tmp/frostroot-<uid>` (one per user, so a `sudo` build cannot leave a
@@ -300,13 +381,15 @@ itself can be on a Windows drive. Before spending minutes on a bootstrap,
 
 ## Notes
 
-**The tarball is the golden image.** v1 does not rebuild from the lock's
-versions. Running `build` again next month fetches whatever the Ubuntu archive
-holds then, and the new lock shows exactly what moved. The file you hand out is
-reproducible; the act of building is not, yet. Vendoring `.deb` files is the
-planned next step.
+**Two ways to freeze.** The tarball is the golden image: hand it out and
+everyone gets the same machine. The lock plus `vendor/debs/` is the frozen
+build: `build --offline` produces that machine again, with a different user
+name or timezone if you like, in a year, without the archive. A plain
+`build` next month fetches whatever the archive holds then, and the new lock
+shows exactly what moved.
 
-**Builds need network; consuming the tarball does not.**
+**Online builds need network; consuming the tarball and offline builds do
+not.**
 
 **Building as root.** `sudo frostroot build` works, but everything it writes
 into the recipe directory (`dist/`, `frostroot.lock`) belongs to root
@@ -357,11 +440,14 @@ publishing images publicly.
 **In v1:** Ubuntu 20.04, 22.04 and 24.04, amd64, apt packages by name, one sudo
 user, WSL-ready images.
 
-**Deliberately not in v1:** Fedora or any non-Ubuntu family · PPAs and extra
-apt sources · pip / npm / cargo lockfiles · vendoring `.deb` files and offline
-builds · bit-identical rebuilds · bare-metal disk or ISO images · a package
-picker TUI · a native Windows binary · architectures other than amd64 ·
-capturing an existing machine (`frostroot capture`, planned for after v1).
+**Since then:** the arrow-key form and progress screen (v0.2), `frostroot
+capture` (v0.3), vendoring and offline rebuilds with a release process
+(v0.4).
+
+**Deliberately not yet:** Fedora or any non-Ubuntu family · PPAs and extra
+apt sources · pip / npm / cargo lockfiles · bit-identical tarballs ·
+bare-metal disk or ISO images · a native Windows binary · architectures other
+than amd64.
 
 Each exclusion has a door left open in the design. Adding Fedora means a new
 `internal/distro` implementation, not a rewrite.
@@ -377,8 +463,12 @@ covers recipe and lock parsing, the distro table, dpkg status parsing, the
 rendered files and hooks (including running the hook text through a real
 shell with hostile paths), the build orchestration against a fake
 bootstrapper, every exit code, the progress parser against a recording of a
-real mmdebstrap run, the form's field table and its recipe round trip, and
-the two screens, driven key by key.
+real mmdebstrap run, the form's field table and its recipe round trip, the
+two screens driven key by key, `.deb` reading for every compression Ubuntu
+has used, the flat repository writer, the vendor pool against a local HTTP
+server (fresh, resumed, corrupt, dropped from the mirror, mismatched,
+interrupted), and offline builds against the fake bootstrapper, including
+every refusal and the final comparison with the lock.
 
 ```sh
 go test -tags=integration -run TestIntegration -v -timeout 30m ./...
@@ -408,6 +498,8 @@ failure paths; the results are recorded in the
 |---|---|
 | [Design spec](docs/superpowers/specs/2026-09-14-frostroot-design.md) | Source of truth for v1: recipe, lock, tarball, build pipeline. |
 | [TUI spec](docs/superpowers/specs/2026-09-17-frostroot-tui.md) | v0.2: the form, the build screen, the progress parser, the plain fallback. |
+| [Capture spec](docs/superpowers/specs/2026-09-17-frostroot-capture.md) | v0.3: reading an installed machine, the report of the gaps. |
+| [Vendor spec](docs/superpowers/specs/2026-09-17-frostroot-vendor.md) | v0.4: checksums in the lock, `vendor`, `build --offline`, releases; with the spike results. |
 | [Implementation plan](docs/superpowers/plans/2026-09-15-frostroot-v1.md) | The 13 tasks v1 was built from, with the spike's amendments. |
 | [TUI plan](docs/superpowers/plans/2026-09-17-frostroot-tui.md) | The seven tasks v0.2 was built from. |
 | [Plan review](docs/superpowers/reviews/2026-09-14-frostroot-plan-review.md) | Found four defects that would have shipped a non-booting image |
@@ -418,13 +510,15 @@ failure paths; the results are recorded in the
 
 ```
 cmd/frostroot/      main
-internal/cli/       init, edit, capture, validate, build; flags, exit codes, the plain line interface
+internal/cli/       init, edit, capture, validate, build, vendor, version; flags, exit codes, the plain line interface
 internal/capture/   reading an installed system: packages asked for, user, locale, and the report of the gaps
 internal/form/      the questions as data: fields, package catalog, timezones, locales, recipe mapping
-internal/tui/       the full-screen form and build screen (the only package using the Charm libraries)
+internal/tui/       the full-screen form and progress screen (the only package using the Charm libraries)
 internal/recipe/    frostroot.toml and frostroot.lock: types, strict parsing, validation
 internal/distro/    Ubuntu releases, archive URL, the three pocket lines
-internal/builder/   orchestration, mmdebstrap runner and progress parser, provisioning, dpkg status, work directory
+internal/builder/   orchestration, mmdebstrap runner and progress parser, provisioning, dpkg status, lock checksums, offline builds
+internal/pool/      the vendored pool: manifest from the lock, verify, fetch, prune, stage as a flat repository
+internal/deb/       Debian formats: control stanzas, Packages indexes, .deb control files, flat repository index
 internal/export/    tarball naming and atomic placement
 testdata/           recipe fixtures
 ```
