@@ -1,4 +1,5 @@
-// Package cli implements the frostroot command line: init, validate and build.
+// Package cli implements the frostroot command line: init, edit, capture,
+// validate, build, vendor and version.
 package cli
 
 import (
@@ -9,8 +10,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 
 	"frostroot/internal/builder"
+	"frostroot/internal/pool"
 	"frostroot/internal/recipe"
 )
 
@@ -50,6 +53,13 @@ type App struct {
 	IsTerminal func(stream any) bool
 	// ReadFile reads host files the form consults, such as the timezone list.
 	ReadFile func(name string) ([]byte, error)
+	// BuildInfo returns the binary's build information for the version
+	// command; defaults to debug.ReadBuildInfo.
+	BuildInfo func() (*debug.BuildInfo, bool)
+	// VendorFallback returns where to fetch a package the mirror no longer
+	// has, or "" for nowhere; nil means Launchpad for Ubuntu locks. Tests
+	// point it at their own server.
+	VendorFallback func(pool.Entry) string
 }
 
 // New returns an App wired to the real process.
@@ -91,6 +101,9 @@ func (a *App) withDefaults() *App {
 	if a.ReadFile == nil {
 		a.ReadFile = os.ReadFile
 	}
+	if a.BuildInfo == nil {
+		a.BuildInfo = debug.ReadBuildInfo
+	}
 	if a.Builder == nil {
 		a.Builder = &builder.Builder{Bootstrapper: &builder.Mmdebstrap{}}
 	}
@@ -105,14 +118,16 @@ Commands:
   capture    describe this installed Ubuntu system as a recipe, with a report of the gaps
   validate   check frostroot.toml (no network, no root)
   build      build frostroot.lock and dist/<name>-ubuntu-<release>-amd64.tar.gz
+  vendor     download the lock's packages into vendor/debs, for build --offline
+  version    print the version
 
-init, edit, capture and build show a full-screen interface in a terminal and plain
-lines otherwise; --plain asks for the lines. Run "frostroot <command> -h" for
-a command's flags.
+init, edit, capture, build and vendor show a full-screen interface in a terminal
+and plain lines otherwise; --plain asks for the lines. Run "frostroot <command> -h"
+for a command's flags.
 `
 
 // Run executes the command named by args[0] and returns the process exit
-// code: 0 success, 1 user error, 2 build error, 130 interrupted.
+// code: 0 success, 1 user error, 2 build or download error, 130 interrupted.
 func (a *App) Run(args []string) int {
 	a.withDefaults()
 	if len(args) == 0 {
@@ -131,6 +146,10 @@ func (a *App) Run(args []string) int {
 		return a.runValidate(commandArgs)
 	case "build":
 		return a.runBuild(commandArgs)
+	case "vendor":
+		return a.runVendor(commandArgs)
+	case "version", "--version", "-v":
+		return a.runVersion(commandArgs)
 	case "help", "-h", "--help":
 		a.stdoutf("%s", usageText)
 		return exitSuccess

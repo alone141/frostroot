@@ -115,11 +115,17 @@ the caller handles it immediately.
 - **Keep the happy path unindented.** Handle the error and return early; don't
   nest the rest of the function in an `else`.
 - **Standard library first.** A new dependency needs a reason that would
-  convince a reviewer. The one standing exception is the terminal interface:
-  the Charm libraries (`bubbletea`, `huh`, `bubbles`, `lipgloss`) are imported
-  by `internal/tui` and nowhere else. Everything the interface shows is
-  computed in plain packages (`internal/form`, `internal/builder`) that know
-  nothing about terminals, so it can be tested without one.
+  convince a reviewer. Two standing exceptions:
+  - The terminal interface: the Charm libraries (`bubbletea`, `huh`,
+    `bubbles`, `lipgloss`) are imported by `internal/tui` and nowhere else.
+    Everything the interface shows is computed in plain packages
+    (`internal/form`, `internal/builder`) that know nothing about
+    terminals, so it can be tested without one.
+  - Compression the standard library lacks: `.deb` files carry their control
+    file in a `control.tar` member compressed with gzip, xz or zstd depending
+    on the Ubuntu release, so `internal/deb` imports
+    `github.com/klauspost/compress/zstd` and `github.com/ulikunitz/xz`,
+    and nothing else does.
 
 ## Comments
 

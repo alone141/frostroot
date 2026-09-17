@@ -50,7 +50,7 @@ func TestRunHelp(t *testing.T) {
 		if exitCode := app.Run(args); exitCode != exitSuccess {
 			t.Errorf("Run(%q) = %d, want %d", args, exitCode, exitSuccess)
 		}
-		for _, command := range []string{"init", "validate", "build"} {
+		for _, command := range []string{"init", "edit", "capture", "validate", "build", "vendor", "version"} {
 			if !strings.Contains(stdout.String(), command) {
 				t.Errorf("Run(%q): usage should list %s: %q", args, command, stdout.String())
 			}

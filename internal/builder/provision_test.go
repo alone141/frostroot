@@ -117,7 +117,7 @@ func TestRenderSudoers(t *testing.T) {
 func TestWriteStageWritesRenderedFiles(t *testing.T) {
 	stageDir := filepath.Join(t.TempDir(), "stage")
 	imageRecipe := sampleRecipe()
-	stage, err := WriteStage(stageDir, imageRecipe)
+	stage, err := WriteStage(stageDir, imageRecipe, StageOptions{CopyAptLists: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,17 +138,44 @@ func TestWriteStageWritesRenderedFiles(t *testing.T) {
 	if stage.DpkgStatusPath != filepath.Join(stageDir, "dpkg-status") {
 		t.Errorf("DpkgStatusPath = %q", stage.DpkgStatusPath)
 	}
+	if stage.AptListsDir != filepath.Join(stageDir, "lists") || stage.SourcesListPath != "" {
+		t.Errorf("AptListsDir = %q, SourcesListPath = %q; want the lists inside the stage and no sources.list", stage.AptListsDir, stage.SourcesListPath)
+	}
 }
 
 func TestWriteStageWithoutSudo(t *testing.T) {
 	imageRecipe := sampleRecipe()
 	imageRecipe.User.Sudo = false
-	stage, err := WriteStage(t.TempDir(), imageRecipe)
+	stage, err := WriteStage(t.TempDir(), imageRecipe, StageOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if stage.SudoersPath != "" {
 		t.Fatalf("SudoersPath = %q, want no sudoers file staged", stage.SudoersPath)
+	}
+	if stage.AptListsDir != "" {
+		t.Fatalf("AptListsDir = %q, want none when not asked for", stage.AptListsDir)
+	}
+}
+
+func TestWriteStageSourcesListForOfflineBuilds(t *testing.T) {
+	sourceLines := []string{"deb http://archive.ubuntu.com/ubuntu jammy main universe", "deb http://archive.ubuntu.com/ubuntu jammy-updates main universe"}
+	stage, err := WriteStage(t.TempDir(), sampleRecipe(), StageOptions{SourceLines: sourceLines})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(stage.SourcesListPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != strings.Join(sourceLines, "\n")+"\n" {
+		t.Errorf("sources.list = %q", content)
+	}
+	hooks := CustomizeHooks(stage)
+	uploadIndex := slices.IndexFunc(hooks, func(hook string) bool { return strings.HasSuffix(hook, " /etc/apt/sources.list") })
+	provisionIndex := slices.IndexFunc(hooks, func(hook string) bool { return strings.HasPrefix(hook, "chroot ") })
+	if uploadIndex < 0 || uploadIndex > provisionIndex {
+		t.Errorf("hooks = %q, want the sources.list uploaded before provisioning", hooks)
 	}
 }
 
@@ -170,16 +197,24 @@ func TestShellQuoteSurvivesTheShell(t *testing.T) {
 }
 
 func TestCustomizeHooksOrderAndContent(t *testing.T) {
-	hooks := CustomizeHooks(sampleStage("/w/stage"))
+	stage := sampleStage("/w/stage")
+	stage.AptListsDir = "/w/stage/lists"
+	hooks := CustomizeHooks(stage)
 	wantHooks := []string{
 		"upload '/w/stage/wsl.conf' /etc/wsl.conf",
 		"upload '/w/stage/sudoers' /etc/sudoers.d/90-frostroot",
 		`chroot "$1" /bin/sh -c "$(cat '/w/stage/provision.sh')" frostroot-provision`,
+		// copy-out puts "lists" inside its destination, so the stage
+		// directory is named, not the lists directory.
+		"copy-out /var/lib/apt/lists '/w/stage'",
 		// Last, so that the status reflects everything installed.
 		"download /var/lib/dpkg/status '/w/stage/dpkg-status'",
 	}
 	if !slices.Equal(hooks, wantHooks) {
 		t.Fatalf("CustomizeHooks =\n%s\nwant\n%s", strings.Join(hooks, "\n"), strings.Join(wantHooks, "\n"))
+	}
+	if without := CustomizeHooks(sampleStage("/w/stage")); len(without) != 4 || strings.Contains(strings.Join(without, "\n"), "copy-out") {
+		t.Errorf("without AptListsDir the hooks must not copy the lists out: %q", without)
 	}
 }
 
