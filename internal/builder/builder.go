@@ -18,7 +18,7 @@ import (
 )
 
 // Version is the frostroot version recorded in every lockfile.
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 // UbuntuArchiveKeyring is the keyring that verifies the Ubuntu archive's
 // Release files.
