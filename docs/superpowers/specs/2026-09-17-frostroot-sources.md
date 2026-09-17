@@ -1,8 +1,38 @@
 # frostroot v0.5: extra apt sources
 
 Date: 2026-09-17
-Status: approved by the project owner in conversation ("plan and work for 2", the extra-apt-sources item of the roadmap); implementation on branch `feature/sources`
+Status: approved by the project owner in conversation ("plan and work for 2", the extra-apt-sources item of the roadmap); implemented on branch `feature/sources`
 Extends: [`2026-09-14-frostroot-design.md`](2026-09-14-frostroot-design.md) (the extension point "Extra apt sources"), [`2026-09-17-frostroot-capture.md`](2026-09-17-frostroot-capture.md) (the report's third-party areas) and [`2026-09-17-frostroot-vendor.md`](2026-09-17-frostroot-vendor.md) (the lock and the pool)
+
+## Verification (2026-09-17, build host)
+
+- `gofmt`, `go vet` with and without the `integration` tag, `go test -race
+  ./...`, `GOOS=windows go build ./...` and `golangci-lint`: clean.
+- **Real binary against a local signed repository** (the spike's, served on
+  `127.0.0.1:8099`, one package, a throwaway key): a 24.04 recipe with
+  `curl`, the repository's package and one `[[sources]]` entry.
+  `validate` reports one extra source. `build` in 126 s; the lock holds
+  `[[repositories]]` with the URL, suite `noble`, `main` and the key's
+  SHA-256, and the repository's package carries `source = 'spike'` while
+  the other 238 carry none. The image's `sources.list` holds the archive's
+  three lines and `deb [signed-by=/etc/apt/keyrings/frostroot-spike.gpg]
+  http://127.0.0.1:8099 noble main`, and that keyring (239 bytes, binary)
+  is in the image. `vendor` fetched all 239 files (82.7 MB, 35 s), the
+  repository's from `127.0.0.1:8099`. `build --offline` in 73 s: "239
+  packages, every one as locked", the lock unchanged, the same
+  `sources.list` and keyring in the offline image.
+- **`capture` of a fixture root** with a one-line source naming a
+  `signed-by` key file: the recipe gets the source (named `127-0-0-1`, as
+  neither a catalog entry nor a PPA), the key is saved armored under
+  `keys/`, and `validate` accepts the result.
+- **The Sources page under a pty**: `init` and `edit` render the two new
+  fields and write the recipe with Enter through them.
+- Real HTTPS sources (PPAs, Docker) could not be exercised from this build
+  host, whose network intercepts TLS; their catalog entries were checked
+  from the Windows side: every `InRelease` exists for the releases each
+  entry claims, and every key's fingerprint was computed from the live key
+  with gpg before being pinned. The mechanism the real run exercised is
+  the same for every source.
 
 ## Why
 
@@ -216,25 +246,26 @@ source lines already carry the `signed-by` paths.
 
 Capture reads `/etc/apt/sources.list` and `sources.list.d/*.list` (one-line
 format, with `[options]`) and `sources.list.d/*.sources` (deb822: `Types`,
-`URIs`, `Suites`, `Components`, `Signed-By`). For every entry that is not
-the Ubuntu archive, `deb` (not `deb-src`), has a suite that is not `./`,
-and names a `Signed-By` that is a readable key file or an inline armored
-key, it produces one `[[sources]]` entry per URL and suite: the catalog's
-name when the URL and suite match an entry, `ppa-<owner>-<name>` for a
-PPA, otherwise the host with dots turned into dashes (`download-docker-com`),
-made unique. The key is read and written beside the recipe as
-`keys/<name>.asc`.
+`URIs`, `Suites`, `Components`, `Signed-By`, `Enabled`). `deb-src` entries
+install nothing and are ignored. For every `deb` entry that is not the
+Ubuntu archive, has a suite that is not `./`, and names a `Signed-By` that
+is a readable key file or an inline armored key, it produces one
+`[[sources]]` entry per URL and suite: the catalog's name when the URL and
+suite match an entry, `ppa-<owner>-<name>` for a PPA, otherwise the host
+with dots turned into dashes (`download-docker-com`), made unique. The key
+is read and written beside the recipe as `keys/<name>.asc`.
 
 This is the one file capture copies, and it is a public key. The README's
 rule becomes "it copies nothing but apt signing keys, which are public".
 Everything else holds: no home directory content, no `/etc` files, no
 secrets.
 
-The report's "Third-party apt sources" area now lists what was carried
-into the recipe and, separately, what was not and why (no key, a
-`trusted.gpg.d` key, a flat repository, `deb-src` only). "Packages from
-third-party sources" keeps only packages whose source was not carried:
-the others are now ordinary requested packages that `build` will find.
+The carried sources appear in the report's captured section, each with
+the file and the key it came from. The "Third-party apt sources" area
+lists what was not carried and why (no `signed-by` key, a flat
+repository, an unreadable key). "Packages from third-party sources" keeps
+only packages whose source was not carried: the others are now ordinary
+requested packages that `build` will find.
 
 ## Errors
 
