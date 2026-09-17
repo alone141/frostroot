@@ -59,18 +59,27 @@ var (
 	}
 )
 
-// thirdPartySourceFinding lists apt sources that are not Ubuntu's.
-func thirdPartySourceFinding(sourceFiles []string) Finding {
-	return Finding{
-		Area: AreaThirdPartySources, Count: len(sourceFiles), Examples: sourceFiles,
-		Advice: "The recipe cannot add apt sources yet (roadmap: extra apt sources); build installs from the Ubuntu archive only.",
+// thirdPartySourceFinding lists the apt sources that are not Ubuntu's and
+// could not be carried into the recipe, with the reason. The carried ones
+// are in the recipe and in the captured section of the report.
+func thirdPartySourceFinding(left []leftSource) Finding {
+	finding := Finding{
+		Area:   AreaThirdPartySources,
+		Advice: "These sources could not be carried into the recipe; build installs from the Ubuntu archive and the recipe's [[sources]] only. A source with a signing key file can be added to the recipe by hand.",
 	}
+	for _, source := range left {
+		finding.Examples = append(finding.Examples, source.String())
+	}
+	finding.Count = len(finding.Examples)
+	return finding
 }
 
-// thirdPartyPackageFinding lists requested packages that only a third-party
-// source offers, and the ones no index offers at all.
-func thirdPartyPackageFindings(requested []string, origins packageOrigins) (thirdParty, unsourced Finding) {
-	thirdParty = Finding{Area: AreaThirdPartyPackages, Advice: "build looks for these in the Ubuntu archive; if they are not there, the build fails at the download phase."}
+// thirdPartyPackageFindings lists requested packages that only a third-party
+// source offers and that source was not carried into the recipe, and the
+// ones no index offers at all. carriedHosts are the hosts of the sources the
+// recipe now holds; their packages are ordinary requested packages.
+func thirdPartyPackageFindings(requested []string, origins packageOrigins, carriedHosts map[string]bool) (thirdParty, unsourced Finding) {
+	thirdParty = Finding{Area: AreaThirdPartyPackages, Advice: "Their source is not in the recipe, so build looks for them in the Ubuntu archive and fails at the download phase if they are not there."}
 	unsourced = Finding{Area: AreaUnsourcedPackages, Advice: "Installed from a downloaded .deb or from a source since removed; build will not find them."}
 	if !origins.hasIndexes {
 		thirdParty.Unavailable = "apt has no package indexes under /var/lib/apt/lists (apt update never ran here), so package origins could not be checked."
@@ -78,8 +87,10 @@ func thirdPartyPackageFindings(requested []string, origins packageOrigins) (thir
 		return thirdParty, unsourced
 	}
 	for _, name := range requested {
-		switch hosts := origins.thirdParty[name]; {
-		case origins.inUbuntu[name]:
+		hosts := origins.thirdParty[name]
+		carried := slices.ContainsFunc(hosts, func(host string) bool { return carriedHosts[host] })
+		switch {
+		case origins.inUbuntu[name] || carried:
 		case len(hosts) > 0:
 			thirdParty.Examples = append(thirdParty.Examples, fmt.Sprintf("%s (%s)", name, strings.Join(hosts, ", ")))
 		default:

@@ -77,7 +77,7 @@ func TestInitWithSourcesFetchesTheirKeys(t *testing.T) {
 			t.Errorf("%s: %v, %+v", source.Key, err, key)
 		}
 	}
-	for _, wantText := range []string{"Fetched the signing key of docker into keys/docker.asc (fingerprint 9DC8 5822", "Fetched the signing key of ppa-deadsnakes-ppa"} {
+	for _, wantText := range []string{"Saved the signing key of docker from https://download.docker.com/linux/ubuntu/gpg into keys/docker.asc (fingerprint 9DC8 5822", "Saved the signing key of ppa-deadsnakes-ppa from https://keyserver.ubuntu.com"} {
 		if !strings.Contains(stdout, wantText) {
 			t.Errorf("stdout lacks %q:\n%s", wantText, stdout)
 		}
@@ -110,7 +110,7 @@ func TestInitWithSourcesKeepsExistingKeys(t *testing.T) {
 	if exitCode != exitSuccess {
 		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr)
 	}
-	if len(client.requests) != 0 || strings.Contains(stdout, "Fetched") {
+	if len(client.requests) != 0 || strings.Contains(stdout, "Saved the signing key") {
 		t.Errorf("a key already there must not be fetched: requests %q", client.requests)
 	}
 }

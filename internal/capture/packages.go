@@ -224,56 +224,6 @@ func (root systemRoot) packageOrigins() packageOrigins {
 	return origins
 }
 
-// thirdPartySourceFiles lists the apt source files that are not Ubuntu's
-// own, with the URIs they point at.
-func (root systemRoot) thirdPartySourceFiles() []string {
-	var files []string
-	candidates := []string{aptSourcesPath}
-	if entries, err := os.ReadDir(root.path(aptSourcesDir)); err == nil {
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				candidates = append(candidates, aptSourcesDir+"/"+entry.Name())
-			}
-		}
-	}
-	for _, candidate := range candidates {
-		content, ok := root.readText(candidate)
-		if !ok {
-			continue
-		}
-		for _, uri := range sourceURIs(content) {
-			if !isUbuntuArchiveURI(uri) {
-				files = append(files, "/"+candidate+" ("+uri+")")
-			}
-		}
-	}
-	slices.Sort(files)
-	return slices.Compact(files)
-}
-
-// sourceURIs extracts the URIs of a sources.list (one-line "deb URI ...")
-// or a deb822 .sources file ("URIs: ...").
-func sourceURIs(content string) []string {
-	var uris []string
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(line, "#") || line == "":
-		case strings.HasPrefix(line, "deb ") || strings.HasPrefix(line, "deb-src "):
-			fields := strings.Fields(line)
-			for _, field := range fields[1:] {
-				if strings.Contains(field, "://") {
-					uris = append(uris, field)
-					break
-				}
-			}
-		case strings.HasPrefix(line, "URIs:"):
-			uris = append(uris, strings.Fields(strings.TrimPrefix(line, "URIs:"))...)
-		}
-	}
-	return uris
-}
-
 // isUbuntuArchiveURI reports whether a source URI points at Ubuntu's archive.
 func isUbuntuArchiveURI(uri string) bool {
 	_, rest, found := strings.Cut(uri, "://")

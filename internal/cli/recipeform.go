@@ -41,7 +41,10 @@ func isCharacterDevice(stream any) bool {
 // runRecipeForm asks the recipe questions starting from initial, in the
 // full-screen or the plain interface, and writes the recipe to recipePath.
 // Nothing is written unless every answer validates and the user confirms.
-func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath string, plainRequested bool) int {
+// providedKeys are armored signing keys by source name that the caller
+// already has (capture read them from the machine); other missing keys are
+// fetched.
+func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath string, plainRequested bool, providedKeys map[string][]byte) int {
 	fields := form.Fields(a.host())
 	fullScreen := a.useFullScreen(plainRequested)
 	var values form.Values
@@ -90,7 +93,7 @@ func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath 
 		return exitUserError
 	}
 	a.stdoutf("\nWrote %s.\n", recipeFileName)
-	if exitCode := a.fetchMissingKeys(commandName, imageRecipe.Sources); exitCode != exitSuccess {
+	if exitCode := a.fetchMissingKeys(commandName, imageRecipe.Sources, providedKeys); exitCode != exitSuccess {
 		return exitCode
 	}
 	a.stdoutf("Next: frostroot validate, then frostroot build.\n")
@@ -100,21 +103,32 @@ func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath 
 	return exitSuccess
 }
 
-// fetchMissingKeys fetches and checks the signing key of every source whose
-// key file is not there yet, and writes it. Keys already present are left
-// alone. Every source is tried; any failure ends in exitUserError with the
-// recipe already written, so that fixing the network or saving a key by
-// hand is all that is left to do.
-func (a *App) fetchMissingKeys(commandName string, recipeSources []recipe.Source) int {
+// fetchMissingKeys writes the signing key of every source whose key file is
+// not there yet: from providedKeys when the caller has it, otherwise fetched
+// and checked. Keys already present are left alone. Every source is tried;
+// any failure ends in exitUserError with the recipe already written, so
+// that fixing the network or saving a key by hand is all that is left to do.
+func (a *App) fetchMissingKeys(commandName string, recipeSources []recipe.Source, providedKeys map[string][]byte) int {
 	failed := false
 	for _, source := range recipeSources {
 		keyPath := recipe.KeyPath(a.RecipeDir, source)
 		if _, err := os.Stat(keyPath); err == nil {
 			continue
 		}
-		fetched, err := sources.FetchKey(context.Background(), a.KeyClient, source)
+		armored, provided := providedKeys[source.Name]
+		origin := "the machine"
+		if !provided {
+			fetched, err := sources.FetchKey(context.Background(), a.KeyClient, source)
+			if err != nil {
+				a.stderrf("frostroot %s: %v\n", commandName, err)
+				failed = true
+				continue
+			}
+			armored, origin = fetched.Armored, fetched.SourceURL
+		}
+		key, err := pgp.ParsePublicKey(armored)
 		if err != nil {
-			a.stderrf("frostroot %s: %v\n", commandName, err)
+			a.stderrf("frostroot %s: key of %s: %v\n", commandName, source.Name, err)
 			failed = true
 			continue
 		}
@@ -123,12 +137,12 @@ func (a *App) fetchMissingKeys(commandName string, recipeSources []recipe.Source
 			failed = true
 			continue
 		}
-		if err := writeFileAtomically(keyPath, string(fetched.Armored)); err != nil {
+		if err := writeFileAtomically(keyPath, string(armored)); err != nil {
 			a.stderrf("frostroot %s: writing %s: %v\n", commandName, source.Key, err)
 			failed = true
 			continue
 		}
-		a.stdoutf("Fetched the signing key of %s into %s (fingerprint %s)\n", source.Name, source.Key, pgp.FormatFingerprint(fetched.Fingerprint))
+		a.stdoutf("Saved the signing key of %s from %s into %s (fingerprint %s)\n", source.Name, origin, source.Key, pgp.FormatFingerprint(key.Fingerprint))
 	}
 	if failed {
 		a.stderrf("frostroot %s: %s is written, but frostroot validate will refuse it until every key is in place; frostroot edit fetches them again\n", commandName, recipeFileName)
