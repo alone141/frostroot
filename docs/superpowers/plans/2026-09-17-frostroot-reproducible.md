@@ -32,13 +32,13 @@ build uses both; two offline builds have one SHA-256.
 
 ## Task 3: CLI and docs
 
-- [ ] `build` summary lines: frozen-at online, byte-identical or not
+- [x] `build` summary lines: frozen-at online, byte-identical or not
       offline; the environment note offline; tests.
 - [ ] README: the guarantee, the lock example, notes.
 
 ## Task 4: verification
 
-- [ ] `TestIntegrationOfflineRebuild`: two offline builds, equal sums, no
+- [x] `TestIntegrationOfflineRebuild`: two offline builds, equal sums, no
       entry after the epoch, auto marks in the image.
 - [ ] Build host: real binary, online build, vendor, two offline builds
       apart in time, `sha256sum`, and the online-vs-offline diff. Record in

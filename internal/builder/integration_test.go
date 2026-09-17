@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"frostroot/internal/deb"
 	"frostroot/internal/pool"
@@ -223,9 +224,10 @@ func TestIntegrationNobleTiny(t *testing.T) {
 
 // TestIntegrationOfflineRebuild builds a real minimal image online, vendors
 // its packages from the archive, rebuilds it from the pool alone and checks
-// that the second image has exactly the first one's packages. Takes a few
-// minutes and downloads the packages twice (once through mmdebstrap, once
-// into the pool).
+// that the second image has exactly the first one's packages and apt marks,
+// is dated no later than the lock's instant, and that a third build from the
+// pool is byte-identical with the second. Takes a few minutes and downloads
+// the packages twice (once through mmdebstrap, once into the pool).
 func TestIntegrationOfflineRebuild(t *testing.T) {
 	skipUnlessMmdebstrapAvailable(t)
 	cacheHome, err := os.MkdirTemp("/var/tmp", "frostroot-integration-*")
@@ -259,10 +261,25 @@ func TestIntegrationOfflineRebuild(t *testing.T) {
 	if !lock.HasChecksums() {
 		t.Fatalf("the lock lacks checksums: %+v", lock.Packages[:3])
 	}
+	autoCount := 0
 	for _, locked := range lock.Packages {
 		if !strings.HasPrefix(locked.Filename, "pool/") || len(locked.SHA256) != 64 {
 			t.Errorf("odd lock entry %+v", locked)
 		}
+		if locked.Auto {
+			autoCount++
+		}
+	}
+	if lock.SourceDateEpoch <= 0 || lock.SourceDateEpoch != online.SourceDateEpoch {
+		t.Errorf("the lock records source_date_epoch %d, want the build's %d", lock.SourceDateEpoch, online.SourceDateEpoch)
+	}
+	if autoCount == 0 || autoCount == len(lock.Packages) {
+		t.Errorf("%d of %d packages are marked auto; curl's libraries should be, curl itself not", autoCount, len(lock.Packages))
+	}
+	// The marks the lock records are the ones apt wrote into the image.
+	onlineMarks := autoMarksIn(t, readTarball(t, online.TarballPath))
+	if wantMarks := autoMarksIn(t, tarballContents{smallFileText: map[string]string{"var/lib/apt/extended_states": RenderExtendedStates(lock.Packages, lock.Arch)}}); !slices.Equal(onlineMarks, wantMarks) {
+		t.Errorf("the online image marks %v, the lock %v", onlineMarks, wantMarks)
 	}
 	entries, err := pool.Manifest(lock)
 	if err != nil {
@@ -309,6 +326,9 @@ func TestIntegrationOfflineRebuild(t *testing.T) {
 	if !offline.Offline || offline.InstalledPackageCount != len(lock.Packages) {
 		t.Errorf("Result = %+v, want offline with %d packages", offline, len(lock.Packages))
 	}
+	if !offline.Reproducible || offline.SourceDateEpoch != lock.SourceDateEpoch {
+		t.Errorf("Result = %+v, want a reproducible build frozen at the lock's %d", offline, lock.SourceDateEpoch)
+	}
 	lockAfter, err := os.ReadFile(online.LockPath)
 	if err != nil {
 		t.Fatal(err)
@@ -333,6 +353,55 @@ func TestIntegrationOfflineRebuild(t *testing.T) {
 	if hasCopyLine := strings.Contains(image.fileContent(t, "etc/apt/sources.list"), "copy://"); hasCopyLine {
 		t.Error("the local repository leaked into the image")
 	}
+	if offlineMarks := autoMarksIn(t, image); !slices.Equal(offlineMarks, onlineMarks) {
+		t.Errorf("the offline image marks %v, the online one %v", offlineMarks, onlineMarks)
+	}
+	frozenAt := time.Unix(lock.SourceDateEpoch, 0)
+	for name, header := range image.entries {
+		if header.ModTime.After(frozenAt) {
+			t.Errorf("%s is dated %v, after the instant the image is frozen at (%v)", name, header.ModTime, frozenAt)
+		}
+	}
+
+	t.Log("second offline build")
+	firstTarball := filepath.Join(recipeDir, "first.tar.gz")
+	if err := os.Rename(offline.TarballPath, firstTarball); err != nil {
+		t.Fatal(err)
+	}
+	options.Progress = nil
+	second, err := builder.Build(context.Background(), imageRecipe, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstSum, secondSum := sha256Of(t, firstTarball), sha256Of(t, second.TarballPath); firstSum != secondSum {
+		t.Errorf("two offline builds of one lock differ: %s and %s", firstSum, secondSum)
+	}
+}
+
+// autoMarksIn returns the names of the packages apt marks auto-installed in
+// image, sorted.
+func autoMarksIn(t *testing.T, image tarballContents) []string {
+	t.Helper()
+	marks, err := ParseExtendedStates(strings.NewReader(image.fileContent(t, "var/lib/apt/extended_states")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(marks))
+	for _, mark := range marks {
+		names = append(names, mark.Name)
+	}
+	slices.Sort(names)
+	return names
+}
+
+// sha256Of returns the hex SHA-256 of the file at path.
+func sha256Of(t *testing.T, path string) string {
+	t.Helper()
+	_, digest, err := deb.SHA256File(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digest
 }
 
 // TestIntegrationUnreachableWorkRootFailsFast checks that a work root which
