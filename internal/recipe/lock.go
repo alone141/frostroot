@@ -23,13 +23,32 @@ type Lockfile struct {
 	Packages         []LockPackage `toml:"packages"`  // every installed package, sorted
 }
 
-// LockPackage is one installed package.
+// LockPackage is one installed package, and where its .deb file comes from.
+// SHA256, Size and Filename are recorded from the apt index the build
+// installed from, so that vendor can fetch the very same file and check it.
+// Locks written before frostroot 0.4 have none of the three.
 type LockPackage struct {
-	Name    string `toml:"name"`
-	Version string `toml:"version"`
-	Arch    string `toml:"arch"`
-	// sha256 and filename land here when vendoring arrives; the
-	// list-of-tables shape exists so that stays additive.
+	Name     string `toml:"name"`
+	Version  string `toml:"version"`
+	Arch     string `toml:"arch"`
+	SHA256   string `toml:"sha256,omitempty"`   // hex digest of the .deb file
+	Size     int64  `toml:"size,omitempty"`     // bytes of the .deb file
+	Filename string `toml:"filename,omitempty"` // path of the .deb below the mirror's base URL
+}
+
+// HasChecksums reports whether every package carries the checksum, size and
+// file name vendoring needs. A lock written by frostroot 0.3 or earlier has
+// none; one written since has all of them.
+func (l Lockfile) HasChecksums() bool {
+	if len(l.Packages) == 0 {
+		return false
+	}
+	for _, locked := range l.Packages {
+		if locked.SHA256 == "" || locked.Size <= 0 || locked.Filename == "" {
+			return false
+		}
+	}
+	return true
 }
 
 // LoadLock parses the lockfile at path. Unknown fields are an error.
