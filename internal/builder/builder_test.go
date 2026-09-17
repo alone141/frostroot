@@ -3,12 +3,14 @@ package builder
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"frostroot/internal/deb"
 	"frostroot/internal/deb/debtest"
@@ -19,6 +21,13 @@ import (
 // sampleDpkgStatus lists two installed packages, deliberately out of order.
 const sampleDpkgStatus = "Package: libc6\nStatus: install ok installed\nArchitecture: amd64\nVersion: 2.35-0ubuntu3.8\n\n" +
 	"Package: git\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1:2.34.1-1ubuntu1.11\n"
+
+// sampleExtendedStates is apt's record for the sample image: libc6 came in
+// as a dependency, git was asked for.
+const sampleExtendedStates = "Package: libc6\nArchitecture: amd64\nAuto-Installed: 1\n\n"
+
+// sampleEpoch is a fixed instant tests freeze images at: 2025-09-17 00:00:00 UTC.
+const sampleEpoch = "1758067200"
 
 // Checksums the sample apt indexes record for the sample packages.
 const (
@@ -41,16 +50,18 @@ func sampleAptLists() map[string]string {
 }
 
 // fakeBootstrapper produces the files the real bootstrapper does: a tarball
-// at TarballPath, a dpkg status file where the download hook says, and, when
-// a copy-out hook asks for the apt lists, a lists directory. It does not run
-// hooks.
+// at TarballPath, a dpkg status file and an extended_states where the
+// download hooks say, and, when a copy-out hook asks for the apt lists, a
+// lists directory. It does not run hooks.
 type fakeBootstrapper struct {
-	runErr       error             // returned by Run instead of producing files
-	dpkgStatus   string            // written as the status file; defaults to sampleDpkgStatus
-	aptLists     map[string]string // written as the lists directory; defaults to sampleAptLists()
-	skipAptLists bool              // leave no lists directory even when asked
-	skipTarball  bool
-	emptyTarball bool // mmdebstrap creates its output file before it starts
+	runErr             error             // returned by Run instead of producing files
+	dpkgStatus         string            // written as the status file; defaults to sampleDpkgStatus
+	extendedStates     string            // written as apt's extended_states; defaults to sampleExtendedStates
+	aptLists           map[string]string // written as the lists directory; defaults to sampleAptLists()
+	skipAptLists       bool              // leave no lists directory even when asked
+	skipExtendedStates bool              // leave no extended_states even when asked
+	skipTarball        bool
+	emptyTarball       bool // mmdebstrap creates its output file before it starts
 
 	runCount          int
 	lastSpec          BootstrapSpec
@@ -61,7 +72,7 @@ func (f *fakeBootstrapper) Run(_ context.Context, spec BootstrapSpec) error {
 	f.runCount++
 	f.lastSpec = spec
 	f.stageFilesPresent = map[string]bool{}
-	for _, stageFileName := range []string{"wsl.conf", "sudoers", "provision.sh", "sources.list"} {
+	for _, stageFileName := range []string{"wsl.conf", "sudoers", "provision.sh", "sources.list", "auto-marks"} {
 		_, err := os.Stat(filepath.Join(spec.WorkDir, "stage", stageFileName))
 		f.stageFilesPresent[stageFileName] = err == nil
 	}
@@ -84,6 +95,15 @@ func (f *fakeBootstrapper) Run(_ context.Context, spec BootstrapSpec) error {
 			aptLists = sampleAptLists()
 		}
 		if err := writeAptLists(filepath.Join(listsParent, "lists"), listsForSpec(aptLists, spec)); err != nil {
+			return err
+		}
+	}
+	if statesPath := hookArgument(spec.CustomizeHooks, "download /var/lib/apt/extended_states "); statesPath != "" && !f.skipExtendedStates {
+		extendedStates := f.extendedStates
+		if extendedStates == "" {
+			extendedStates = sampleExtendedStates
+		}
+		if err := os.WriteFile(statesPath, []byte(extendedStates), 0o644); err != nil {
 			return err
 		}
 	}
@@ -211,6 +231,7 @@ func assertNotCreated(t *testing.T, path string) {
 
 func TestBuildSuccessWritesLockAndTarball(t *testing.T) {
 	options, workRoot := newTestOptions(t)
+	options.Getenv = fakeEnvironment(map[string]string{"XDG_CACHE_HOME": filepath.Dir(workRoot), SourceDateEpochVariable: sampleEpoch})
 	bootstrapper := &fakeBootstrapper{}
 	result, err := buildWith(bootstrapper, options)
 	if err != nil {
@@ -220,6 +241,9 @@ func TestBuildSuccessWritesLockAndTarball(t *testing.T) {
 	spec := bootstrapper.lastSpec
 	if spec.Suite != "jammy" || spec.Arch != "amd64" || !spec.InstallRecommends {
 		t.Errorf("spec = %+v, want jammy, amd64 and Recommends", spec)
+	}
+	if spec.SourceDateEpoch != 1758067200 {
+		t.Errorf("SourceDateEpoch = %d, want the environment's %s", spec.SourceDateEpoch, sampleEpoch)
 	}
 	if spec.KeyringPath != "/usr/share/keyrings/ubuntu-archive-keyring.gpg" {
 		t.Errorf("KeyringPath = %q", spec.KeyringPath)
@@ -251,8 +275,8 @@ func TestBuildSuccessWritesLockAndTarball(t *testing.T) {
 	if !bootstrapper.stageFilesPresent["sources.list"] {
 		t.Error("every build uploads the image's sources.list, so the lines the image keeps are the archive's")
 	}
-	if len(spec.CustomizeHooks) != 6 {
-		t.Errorf("CustomizeHooks = %q, want upload, upload, upload sources.list, provision, copy-out, download", spec.CustomizeHooks)
+	if len(spec.CustomizeHooks) != 8 {
+		t.Errorf("CustomizeHooks = %q, want upload, upload, upload sources.list, provision, copy-out, ensure and download extended_states, download status", spec.CustomizeHooks)
 	}
 	if spec.Trusted || spec.KeyringPath == "" {
 		t.Errorf("an online build verifies the archive with a keyring: %+v", spec)
@@ -272,9 +296,10 @@ func TestBuildSuccessWritesLockAndTarball(t *testing.T) {
 		Sources:          wantSourceLines,
 		FrostrootVersion: Version,
 		Requested:        []string{"git", "build-essential", "cmake"},
-		Packages: []recipe.LockPackage{ // every installed package, sorted, with the checksums from the apt indexes
+		SourceDateEpoch:  1758067200,
+		Packages: []recipe.LockPackage{ // every installed package, sorted, with the checksums from the apt indexes and apt's auto marks
 			{Name: "git", Version: "1:2.34.1-1ubuntu1.11", Arch: "amd64", SHA256: sampleGitSHA256, Size: 3165964, Filename: "pool/main/g/git/git_1%3a2.34.1-1ubuntu1.11_amd64.deb"},
-			{Name: "libc6", Version: "2.35-0ubuntu3.8", Arch: "amd64", SHA256: sampleLibc6SHA256, Size: 3235712, Filename: "pool/main/g/glibc/libc6_2.35-0ubuntu3.8_amd64.deb"},
+			{Name: "libc6", Version: "2.35-0ubuntu3.8", Arch: "amd64", Auto: true, SHA256: sampleLibc6SHA256, Size: 3235712, Filename: "pool/main/g/glibc/libc6_2.35-0ubuntu3.8_amd64.deb"},
 		},
 	}
 	if !slices.Equal(lock.Sources, wantLock.Sources) || !slices.Equal(lock.Requested, wantLock.Requested) ||
@@ -283,7 +308,7 @@ func TestBuildSuccessWritesLockAndTarball(t *testing.T) {
 	}
 	if lock.Version != wantLock.Version || lock.Distro != wantLock.Distro || lock.Release != wantLock.Release ||
 		lock.Suite != wantLock.Suite || lock.Arch != wantLock.Arch || lock.Mirror != wantLock.Mirror ||
-		lock.FrostrootVersion != wantLock.FrostrootVersion {
+		lock.FrostrootVersion != wantLock.FrostrootVersion || lock.SourceDateEpoch != wantLock.SourceDateEpoch {
 		t.Errorf("lock header =\n%+v\nwant\n%+v", lock, wantLock)
 	}
 
@@ -298,12 +323,86 @@ func TestBuildSuccessWritesLockAndTarball(t *testing.T) {
 		LockPath:              filepath.Join(options.RecipeDir, "frostroot.lock"),
 		TarballPath:           expectedTarballPath(options),
 		InstalledPackageCount: 2,
+		SourceDateEpoch:       1758067200,
 	}
 	if result != wantResult {
 		t.Errorf("Result = %+v, want %+v", result, wantResult)
 	}
 	assertNotCreated(t, spec.WorkDir) // removed after success
 	assertNoTemporaryFiles(t, options.RecipeDir)
+}
+
+func TestBuildFreezesAtItsStartWithoutAnEpoch(t *testing.T) {
+	options, _ := newTestOptions(t)
+	bootstrapper := &fakeBootstrapper{}
+	before := time.Now().Unix()
+	result, err := buildWith(bootstrapper, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := time.Now().Unix()
+	if result.SourceDateEpoch < before || result.SourceDateEpoch > after {
+		t.Errorf("SourceDateEpoch = %d, want the build's start between %d and %d", result.SourceDateEpoch, before, after)
+	}
+	if bootstrapper.lastSpec.SourceDateEpoch != result.SourceDateEpoch {
+		t.Errorf("mmdebstrap got %d, want the result's %d", bootstrapper.lastSpec.SourceDateEpoch, result.SourceDateEpoch)
+	}
+	lock, err := recipe.LoadLock(result.LockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lock.SourceDateEpoch != result.SourceDateEpoch {
+		t.Errorf("the lock records %d, want %d", lock.SourceDateEpoch, result.SourceDateEpoch)
+	}
+	if result.Reproducible {
+		t.Error("an online build promises no byte identity: its install order differs from the offline rebuild's")
+	}
+}
+
+func TestBuildRefusesUnusableEpochBeforeAnyWork(t *testing.T) {
+	options, workRoot := newTestOptions(t)
+	options.Getenv = fakeEnvironment(map[string]string{"XDG_CACHE_HOME": filepath.Dir(workRoot), SourceDateEpochVariable: "yesterday"})
+	bootstrapper := &fakeBootstrapper{}
+	result, err := buildWith(bootstrapper, options)
+	if !errors.Is(err, ErrBadSourceDateEpoch) {
+		t.Fatalf("Build error = %v, want ErrBadSourceDateEpoch", err)
+	}
+	if bootstrapper.runCount != 0 || result.WorkDir != "" {
+		t.Errorf("runs = %d, Result = %+v; want no bootstrap and no work directory", bootstrapper.runCount, result)
+	}
+	assertNotCreated(t, workRoot)
+}
+
+func TestBuildRecordsAutoMarksAsAptWroteThem(t *testing.T) {
+	// apt records an "all" package under the native architecture, a mark
+	// taken back (Auto-Installed: 0) is no mark, and a mark for a package no
+	// longer installed is ignored.
+	options, _ := newTestOptions(t)
+	bootstrapper := &fakeBootstrapper{
+		dpkgStatus: sampleDpkgStatus + "\nPackage: git-man\nStatus: install ok installed\nArchitecture: all\nVersion: 1:2.34.1-1ubuntu1.11\n",
+		aptLists: map[string]string{
+			"archive.ubuntu.com_ubuntu_dists_jammy-updates_main_binary-amd64_Packages": sampleAptLists()["archive.ubuntu.com_ubuntu_dists_jammy-updates_main_binary-amd64_Packages"] +
+				"\nPackage: git-man\nArchitecture: all\nVersion: 1:2.34.1-1ubuntu1.11\nFilename: pool/main/g/git/git-man_1%3a2.34.1-1ubuntu1.11_all.deb\nSize: 950000\nSHA256: cc\n",
+			"archive.ubuntu.com_ubuntu_dists_jammy_main_binary-amd64_Packages": sampleAptLists()["archive.ubuntu.com_ubuntu_dists_jammy_main_binary-amd64_Packages"],
+		},
+		extendedStates: "Package: git-man\nArchitecture: amd64\nAuto-Installed: 1\n\n" +
+			"Package: libc6\nArchitecture: amd64\nAuto-Installed: 0\n\n" +
+			"Package: removed-since\nArchitecture: amd64\nAuto-Installed: 1\n\n",
+	}
+	if _, err := buildWith(bootstrapper, options); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := recipe.LoadLock(filepath.Join(options.RecipeDir, LockFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	autoByName := map[string]bool{}
+	for _, locked := range lock.Packages {
+		autoByName[locked.Name] = locked.Auto
+	}
+	if wantAuto := map[string]bool{"git": false, "git-man": true, "libc6": false}; !maps.Equal(autoByName, wantAuto) {
+		t.Errorf("auto marks = %v, want %v", autoByName, wantAuto)
+	}
 }
 
 func TestBuildsInOneDirectoryDoNotShareTemporaryFiles(t *testing.T) {
@@ -461,6 +560,13 @@ func TestBuildFailuresKeepWorkDirAndWriteNothing(t *testing.T) {
 			name:         "apt lists missing",
 			bootstrapper: &fakeBootstrapper{skipAptLists: true},
 			wantInError:  "apt indexes",
+		},
+		{
+			// The hooks make sure the file exists, so its absence means a
+			// hook did not run.
+			name:         "apt extended_states missing",
+			bootstrapper: &fakeBootstrapper{skipExtendedStates: true},
+			wantInError:  "extended_states",
 		},
 		{
 			name:         "installed package not in any index",
@@ -735,7 +841,7 @@ func (f *offlineFakeBootstrapper) Run(ctx context.Context, spec BootstrapSpec) e
 }
 
 func TestBuildOfflineRebuildsFromThePool(t *testing.T) {
-	options, _ := newTestOptions(t)
+	options, workRoot := newTestOptions(t)
 	lock := writeVendoredLock(t, options)
 	lockPath := filepath.Join(options.RecipeDir, LockFileName)
 	lockBefore, err := os.ReadFile(lockPath)
@@ -744,6 +850,8 @@ func TestBuildOfflineRebuildsFromThePool(t *testing.T) {
 	}
 
 	options.Offline = true
+	// The lock's instant is the input; the environment's is ignored.
+	options.Getenv = fakeEnvironment(map[string]string{"XDG_CACHE_HOME": filepath.Dir(workRoot), SourceDateEpochVariable: "1700000000"})
 	recorder := &recordingProgress{}
 	options.Progress = recorder
 	bootstrapper := &offlineFakeBootstrapper{}
@@ -754,6 +862,26 @@ func TestBuildOfflineRebuildsFromThePool(t *testing.T) {
 	spec := bootstrapper.lastSpec
 	if !spec.Trusted || spec.KeyringPath != "" {
 		t.Errorf("an offline build trusts its own verified repository, no keyring: %+v", spec)
+	}
+	if lock.SourceDateEpoch <= 0 || spec.SourceDateEpoch != lock.SourceDateEpoch {
+		t.Errorf("SourceDateEpoch = %d, want the lock's %d, whatever the environment says", spec.SourceDateEpoch, lock.SourceDateEpoch)
+	}
+	if !result.Reproducible || result.SourceDateEpoch != lock.SourceDateEpoch {
+		t.Errorf("Result = %+v, want a reproducible build frozen at the lock's instant", result)
+	}
+	if !bootstrapper.stageFilesPresent["auto-marks"] {
+		t.Error("an offline build must stage the lock's auto marks for the image")
+	}
+	autoMarks, err := os.ReadFile(filepath.Join(spec.WorkDir, "stage", "auto-marks"))
+	if err == nil && string(autoMarks) != sampleExtendedStates {
+		t.Errorf("staged auto marks = %q, want the lock's marks in apt's format", autoMarks)
+	}
+	hookCount := len(spec.CustomizeHooks)
+	if hookCount < 2 || spec.CustomizeHooks[hookCount-2] != "upload '"+filepath.Join(spec.WorkDir, "stage", "auto-marks")+"' /var/lib/apt/extended_states" {
+		t.Errorf("hooks = %q, want the auto marks uploaded right before the status download", spec.CustomizeHooks)
+	}
+	if strings.Contains(strings.Join(spec.CustomizeHooks, "\n"), "download /var/lib/apt/extended_states") {
+		t.Errorf("hooks = %q, want no download of apt's marks offline", spec.CustomizeHooks)
 	}
 	if len(spec.SourceLines) != 1 || !strings.HasPrefix(spec.SourceLines[0], "deb [trusted=yes] copy://"+spec.WorkDir+"/pool ./") {
 		t.Errorf("SourceLines = %q, want the local repository only", spec.SourceLines)
@@ -801,6 +929,38 @@ func TestBuildOfflineRebuildsFromThePool(t *testing.T) {
 		t.Errorf("phases started = %v, want %v", started, wantStarted)
 	}
 	assertNoTemporaryFiles(t, options.RecipeDir)
+}
+
+func TestBuildOfflineOldLockFreezesAtNowWithoutPromise(t *testing.T) {
+	// A lock from frostroot 0.4 or 0.5 records no instant and no auto marks.
+	// It still builds, frozen at the build's start like an online build, and
+	// the result says the tarball matches no other.
+	options, _ := newTestOptions(t)
+	lock := writeVendoredLock(t, options)
+	lock.FrostrootVersion = "0.5.0"
+	lock.SourceDateEpoch = 0
+	for index := range lock.Packages {
+		lock.Packages[index].Auto = false
+	}
+	if err := recipe.SaveLock(filepath.Join(options.RecipeDir, LockFileName), lock); err != nil {
+		t.Fatal(err)
+	}
+	options.Offline = true
+	bootstrapper := &offlineFakeBootstrapper{}
+	before := time.Now().Unix()
+	result, err := (&Builder{Bootstrapper: bootstrapper}).Build(context.Background(), sampleRecipe(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Reproducible {
+		t.Error("an old lock cannot promise byte identity")
+	}
+	if spec := bootstrapper.lastSpec; spec.SourceDateEpoch < before || spec.SourceDateEpoch > time.Now().Unix() || result.SourceDateEpoch != spec.SourceDateEpoch {
+		t.Errorf("SourceDateEpoch = %d (result %d), want the build's start", spec.SourceDateEpoch, result.SourceDateEpoch)
+	}
+	if bootstrapper.stageFilesPresent["auto-marks"] || strings.Contains(strings.Join(bootstrapper.lastSpec.CustomizeHooks, "\n"), "extended_states") {
+		t.Errorf("with no marks in the lock nothing is staged or uploaded: %q", bootstrapper.lastSpec.CustomizeHooks)
+	}
 }
 
 func TestBuildOfflineFailsWhenTheImageDiffersFromTheLock(t *testing.T) {

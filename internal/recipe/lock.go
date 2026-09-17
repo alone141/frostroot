@@ -20,6 +20,11 @@ type Lockfile struct {
 	Sources          []string `toml:"sources"` // the three deb lines actually used
 	FrostrootVersion string   `toml:"frostroot_version"`
 	Requested        []string `toml:"requested"` // the recipe's packages.include, as written
+	// SourceDateEpoch is the instant the image is frozen at, in seconds since
+	// 1970: no file in the tarball is dated later. An offline build freezes at
+	// the same instant, which is what makes two offline builds of one lock
+	// byte-identical. Locks written before frostroot 0.6 have none.
+	SourceDateEpoch int64 `toml:"source_date_epoch,omitempty"`
 	// Repositories are the recipe's extra sources as the build used them,
 	// with the checksum of each signing key file. Absent without sources.
 	Repositories []LockRepository `toml:"repositories,omitempty"`
@@ -50,9 +55,14 @@ func (l Lockfile) Repository(name string) (LockRepository, bool) {
 // installed from, so that vendor can fetch the very same file and check it.
 // Locks written before frostroot 0.4 have none of the three.
 type LockPackage struct {
-	Name     string `toml:"name"`
-	Version  string `toml:"version"`
-	Arch     string `toml:"arch"`
+	Name    string `toml:"name"`
+	Version string `toml:"version"`
+	Arch    string `toml:"arch"`
+	// Auto marks a package apt installed on its own to satisfy a dependency,
+	// as opposed to one the build asked for by name. An offline build
+	// restores the marks, so that apt autoremove and frostroot capture see
+	// the same image either way. Locks written before frostroot 0.6 have none.
+	Auto     bool   `toml:"auto,omitempty"`
 	SHA256   string `toml:"sha256,omitempty"`   // hex digest of the .deb file
 	Size     int64  `toml:"size,omitempty"`     // bytes of the .deb file
 	Filename string `toml:"filename,omitempty"` // path of the .deb below its source's base URL

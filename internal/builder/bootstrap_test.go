@@ -106,6 +106,7 @@ func TestMmdebstrapCommandLine(t *testing.T) {
 		Arch:              "amd64",
 		InstallRecommends: true,
 		KeyringPath:       "/k.gpg",
+		SourceDateEpoch:   1758067200,
 	})
 	wantArgs := []string{
 		"--verbose",
@@ -127,14 +128,14 @@ func TestMmdebstrapCommandLine(t *testing.T) {
 	if !slices.Equal(args, wantArgs) {
 		t.Errorf("args =\n%s\nwant\n%s", strings.Join(args, "\n"), strings.Join(wantArgs, "\n"))
 	}
-	if wantEnvironment := []string{"TMPDIR=/w/tmp"}; !slices.Equal(environment, wantEnvironment) {
-		t.Errorf("environment = %q, want TMPDIR inside the work directory", environment)
+	if wantEnvironment := []string{"TMPDIR=/w/tmp", "SOURCE_DATE_EPOCH=1758067200"}; !slices.Equal(environment, wantEnvironment) {
+		t.Errorf("environment = %q, want TMPDIR inside the work directory and the epoch", environment)
 	}
 }
 
 func TestMmdebstrapCommandLineDefaultsAndOptionalFlags(t *testing.T) {
 	minimalSpec := BootstrapSpec{Suite: "noble", TarballPath: "/t", WorkDir: "/w", Arch: "amd64"}
-	args, _ := (&Mmdebstrap{CurrentUID: uidFunc(1000)}).commandLine(minimalSpec)
+	args, environment := (&Mmdebstrap{CurrentUID: uidFunc(1000)}).commandLine(minimalSpec)
 	if !slices.Contains(args, "--keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg") {
 		t.Errorf("args = %q, want the Ubuntu archive keyring by default", args)
 	}
@@ -144,6 +145,9 @@ func TestMmdebstrapCommandLineDefaultsAndOptionalFlags(t *testing.T) {
 	}
 	if strings.Contains(joinedArgs, "--include") {
 		t.Errorf("args = %q, want no --include when there is nothing to include", joinedArgs)
+	}
+	if wantEnvironment := []string{"TMPDIR=/w/tmp"}; !slices.Equal(environment, wantEnvironment) {
+		t.Errorf("environment = %q, want no SOURCE_DATE_EPOCH when the spec sets none", environment)
 	}
 }
 
