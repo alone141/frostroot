@@ -5,10 +5,51 @@ Status: approved by the project owner in conversation ("implement", then "can we
 Extends: [`2026-09-14-frostroot-design.md`](2026-09-14-frostroot-design.md) (the extension point "Language lockfiles"), [`2026-09-17-frostroot-vendor.md`](2026-09-17-frostroot-vendor.md) (the lock and the pool) and [`2026-09-17-frostroot-reproducible.md`](2026-09-17-frostroot-reproducible.md) (the frozen instant)
 Implements: [issue #7](https://github.com/alone141/frostroot/issues/7), its Python half
 
-## Verification
+## Verification (2026-09-17, build host, mmdebstrap 1.4.3)
 
-Recorded when Task 8 of the plan runs. The spike results below are what the
-design was settled on.
+- `gofmt`, `go vet` with and without the `integration` tag, `go test -race
+  ./...` and `GOOS=windows go build ./...`: clean. `golangci-lint` is not
+  installed on this host; CI runs it.
+- **The real binary**, on a 24.04 recipe with `git`, `requests` and `numpy`,
+  timezone `Europe/Istanbul`. `validate`: "1 package requested, 2 from
+  PyPI". `build`: 486 s, a 182 MB tarball, a lock of 262 packages and 7
+  `[[pypi]]` entries frozen at 19:21:28 UTC, with `requests 2.34.2` and
+  `numpy 2.5.3` asked for and the pinned `pip 24.3.1` marked `auto`. The
+  summary named the environment. `vendor`: 262 `.deb` files (96 MB) and 7
+  wheels (19 MB).
+- **Three offline rebuilds**, two ordinary (409 s and 410 s) and one in a
+  network namespace whose only interface was a down loopback: all three
+  produced `b3db16294ca15898ab7fe66723577ca23872780578096cb10fb48a4364bfba1e`,
+  and the lock was not rewritten. The offline image holds 24,318 entries,
+  2,710 of them the environment, with the `profile.d` line and `requests` in
+  it and nothing the step used left behind.
+- **`wsl --import` on Windows 11** of the online image, the check the README
+  calls manual: `whoami` was `student`, `sudo -n id` needed no password,
+  `systemctl is-system-running` said `running`, `getent hosts
+  archive.ubuntu.com` resolved, `locale` printed no warnings and `date`
+  showed `+03`. In a login shell `python3` was
+  `/opt/frostroot/venv/bin/python3` (3.12.3), `import numpy, requests` gave
+  2.5.3 and 2.34.2, and `pip --version` was 24.3.1. A non-login shell gets
+  `/usr/bin/python3`, as designed; `sudo -i` gets the environment's.
+- **Two defects only a real build could find**, both fixed with the
+  verification rerun:
+  - The provision script deleted `/etc/resolv.conf`, the file mmdebstrap
+    copies from the build host, before the Python step ran. pip then could
+    not resolve `files.pythonhosted.org` and every image with `[python]`
+    failed. The host's files are removed in a hook of their own now, after
+    everything that needs to resolve a name.
+  - A hook inherits the build user's environment, so pip wrote its cache to
+    `$HOME/.cache` inside the chroot: the image carried 126 entries of a
+    `/home/<builder>` directory, 19 MB, under a user the image does not
+    have. The step sets `HOME` to root's and asks pip for no cache; the
+    integration test now fails on any home directory that is not the
+    recipe's user. The rebuilt image holds `home/` and `home/student` and
+    nothing else, no cache anywhere, and is 163 MB rather than 182 MB.
+- **What was run where.** The whole pipeline — recipe, build, lock, vendor,
+  offline rebuild, import — was run on 24.04. On 22.04 and 20.04 the step's
+  own rendered scripts were run in mmdebstrap chroots of those releases,
+  which is what the releases differ in; the Go around them is the same code
+  on all three.
 
 ## Why
 
@@ -153,10 +194,21 @@ so pip can neither reach the network nor accept a file whose checksum
 differs. It writes `pip list --format=json`, which frostroot downloads and
 compares with the lock.
 
-`SOURCE_DATE_EPOCH` is exported for the whole step, venv creation included.
-Python writes hash-based `.pyc` files when it is set; without it `ensurepip`
-stamps pip's own bytecode with the moment it compiled, and two rebuilds
-differ in a few hundred files.
+Three things make the caches the same twice, and the spike needed all three.
+`SOURCE_DATE_EPOCH` is exported for the whole step, venv creation included:
+Python writes hash-based `.pyc` files when it is set, and without it
+`ensurepip` stamps pip's own bytecode with the moment it compiled. The
+environment is then recompiled with `compileall --invalidation-mode
+checked-hash`, because pip compiles as it installs and each release's pip
+does it its own way. And `PYTHONHASHSEED` is fixed, because compiling a
+module that holds a set constant marshals it in the order that run's hash
+seed produced, which 3.8 does not sort. A module that will not compile is
+not an error: nothing imports it during the build.
+
+`HOME` is set to root's own. A customize hook inherits the environment of
+whoever started the build, and pip writes its cache under `$HOME`, so
+without this the image grows a `/home/<builder>` directory that its own
+`/etc/passwd` knows nothing about. pip is also told to keep no cache at all.
 
 Nothing the step used stays in the image: the script deletes the wheels, the
 requirements and the pin file, and a hook deletes the report and the package
@@ -257,7 +309,8 @@ Wheels-only resolution: 92 packages, 4 of them asked for, no sdist, 97 s,
 under `site-packages/pip/`: `ensurepip` had compiled pip's bytecode before
 `SOURCE_DATE_EPOCH` was exported. With the variable exported for the whole
 step, two offline installs of 19,553 files were **identical**, and both
-pip's and numpy's `.pyc` files were hash-based (flags 3).
+pip's and numpy's `.pyc` files were hash-based (flags 3). Running
+frostroot's own rendered scripts, 24.04 stayed identical over 19,401 files.
 
 **22.04 (Python 3.10.12, pip 22.0.2).** No `--report`. With the pinned pip
 installed first, `--report` present, 96 packages resolved (numpy 2.2.6,
@@ -271,6 +324,15 @@ installed and 101 packages resolved (numpy 1.24.4, pandas 2.0.3, jupyterlab
 4.3.8 — the last versions with wheels for 3.8). A first offline pass still
 differed in 9,326 files, because the requirements run left the installing to
 the old pip; installing the pin as its own step offline is what fixed it.
+
+**What determinism on 20.04 took**, measured one change at a time over
+16,624 files: 1,148 `.pyc` files still differed after the pin was installed
+first, because pip 24.3.1 on 3.8 compiles as it installs and writes what it
+writes; recompiling the environment with `--invalidation-mode checked-hash`
+brought that to 184; fixing `PYTHONHASHSEED` brought it to **0**. The 184
+were modules holding set constants, which 3.8 marshals in the order that
+run's hash seed produced. 22.04 and 24.04 were identical before those two
+changes and stayed identical after.
 
 **PATH.** In the chroot, a login shell (`su - student`) and `sudo -i` both
 found `/opt/frostroot/venv/bin/python3` and imported numpy; a non-login

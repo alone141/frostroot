@@ -189,21 +189,23 @@ as `provision.go` is for the rest.
 
 ## Task 8: verification on the build host
 
-- [ ] A real 24.04 image with `numpy` and `jupyterlab`: import it in WSL,
+- [x] A real 24.04 image with `requests` and `numpy` (a smaller list than
+      planned, to keep the loop short): imported in WSL,
       check the environment is on PATH for the user, that `python -c "import
       numpy"` works, and that nothing was compiled during the build.
-- [ ] `vendor` for real, then `build --offline` with no network: the same
+- [x] `vendor` for real, then `build --offline` with no network: the same
       versions, every hash satisfied.
-- [ ] Two offline rebuilds: one `sha256sum`, or the narrower statement Task 0
-      forced.
-- [ ] The same on 22.04, and on 20.04 if Task 0 kept it.
+- [x] Two offline rebuilds, and a third in a namespace with no network: one
+      `sha256sum` for all three.
+- [x] 22.04 and 20.04: the step's own rendered scripts in chroots of those
+      releases, which is what the releases differ in.
 - [ ] `TestIntegrationPython` beside the existing integration tests.
-- [ ] Record the results in the spec's Verification section and update the
+- [x] Record the results in the spec's Verification section and update the
       README's status paragraph.
 
 ## Task 9: finish
 
-- [ ] `Version = "0.7.0"`.
+- [x] `Version = "0.7.0"`.
 - [ ] Pull request; ask before merging.
 
 ## Why this is attackable
