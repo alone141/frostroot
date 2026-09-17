@@ -83,7 +83,7 @@ func (f *fakeBootstrapper) Run(_ context.Context, spec BootstrapSpec) error {
 		if aptLists == nil {
 			aptLists = sampleAptLists()
 		}
-		if err := writeAptLists(filepath.Join(listsParent, "lists"), aptLists); err != nil {
+		if err := writeAptLists(filepath.Join(listsParent, "lists"), listsForSpec(aptLists, spec)); err != nil {
 			return err
 		}
 	}
@@ -92,6 +92,25 @@ func (f *fakeBootstrapper) Run(_ context.Context, spec BootstrapSpec) error {
 		dpkgStatus = sampleDpkgStatus
 	}
 	return os.WriteFile(hookArgument(spec.CustomizeHooks, "download /var/lib/dpkg/status "), []byte(dpkgStatus), 0o644)
+}
+
+// listsForSpec renames the sample indexes, which are named for jammy on the
+// archive, to the archive and suite of spec's first source line, as apt
+// would name them for that build (a --mirror build, a focal build).
+func listsForSpec(lists map[string]string, spec BootstrapSpec) map[string]string {
+	if len(spec.SourceLines) == 0 {
+		return lists
+	}
+	fields := strings.Fields(spec.SourceLines[0]) // deb URL suite components...
+	if len(fields) < 3 || strings.HasPrefix(fields[1], "[") {
+		return lists
+	}
+	prefix, suite := aptListPrefix(fields[1]), fields[2]
+	renamed := map[string]string{}
+	for name, content := range lists {
+		renamed[strings.Replace(name, "archive.ubuntu.com_ubuntu_dists_jammy", prefix+"_dists_"+suite, 1)] = content
+	}
+	return renamed
 }
 
 // writeAptLists writes index files by name into listsDir, as copy-out would.
@@ -229,11 +248,11 @@ func TestBuildSuccessWritesLockAndTarball(t *testing.T) {
 			t.Errorf("stage file %s must exist before the bootstrap runs", stageFileName)
 		}
 	}
-	if bootstrapper.stageFilesPresent["sources.list"] {
-		t.Error("an online build must not upload its own sources.list; mmdebstrap writes it")
+	if !bootstrapper.stageFilesPresent["sources.list"] {
+		t.Error("every build uploads the image's sources.list, so the lines the image keeps are the archive's")
 	}
-	if len(spec.CustomizeHooks) != 5 {
-		t.Errorf("CustomizeHooks = %q, want upload, upload, provision, copy-out, download", spec.CustomizeHooks)
+	if len(spec.CustomizeHooks) != 6 {
+		t.Errorf("CustomizeHooks = %q, want upload, upload, upload sources.list, provision, copy-out, download", spec.CustomizeHooks)
 	}
 	if spec.Trusted || spec.KeyringPath == "" {
 		t.Errorf("an online build verifies the archive with a keyring: %+v", spec)
@@ -451,10 +470,20 @@ func TestBuildFailuresKeepWorkDirAndWriteNothing(t *testing.T) {
 		{
 			name: "indexes disagree about a checksum",
 			bootstrapper: &fakeBootstrapper{aptLists: map[string]string{
-				"m_dists_jammy_main_binary-amd64_Packages":          "Package: libc6\nArchitecture: amd64\nVersion: 2.35-0ubuntu3.8\nFilename: pool/main/g/glibc/a.deb\nSize: 1\nSHA256: aa\n\nPackage: git\nArchitecture: amd64\nVersion: 1:2.34.1-1ubuntu1.11\nFilename: pool/main/g/git/g.deb\nSize: 2\nSHA256: bb\n",
-				"m_dists_jammy-security_main_binary-amd64_Packages": "Package: libc6\nArchitecture: amd64\nVersion: 2.35-0ubuntu3.8\nFilename: pool/main/g/glibc/a.deb\nSize: 1\nSHA256: cc\n",
+				"archive.ubuntu.com_ubuntu_dists_jammy_main_binary-amd64_Packages":          "Package: libc6\nArchitecture: amd64\nVersion: 2.35-0ubuntu3.8\nFilename: pool/main/g/glibc/a.deb\nSize: 1\nSHA256: aa\n\nPackage: git\nArchitecture: amd64\nVersion: 1:2.34.1-1ubuntu1.11\nFilename: pool/main/g/git/g.deb\nSize: 2\nSHA256: bb\n",
+				"archive.ubuntu.com_ubuntu_dists_jammy-security_main_binary-amd64_Packages": "Package: libc6\nArchitecture: amd64\nVersion: 2.35-0ubuntu3.8\nFilename: pool/main/g/glibc/a.deb\nSize: 1\nSHA256: cc\n",
 			}},
 			wantInError: "disagree about libc6",
+		},
+		{
+			// An index from nowhere would give a package a checksum with no
+			// known origin.
+			name: "index from an unknown source",
+			bootstrapper: &fakeBootstrapper{aptLists: map[string]string{
+				"archive.ubuntu.com_ubuntu_dists_jammy_main_binary-amd64_Packages": sampleAptLists()["archive.ubuntu.com_ubuntu_dists_jammy_main_binary-amd64_Packages"],
+				"evil.example_repo_dists_jammy_main_binary-amd64_Packages":         "Package: git\nArchitecture: amd64\nVersion: 1:2.34.1-1ubuntu1.11\nFilename: pool/g.deb\nSize: 2\nSHA256: bb\n",
+			}},
+			wantInError: "evil.example_repo_dists_jammy_main_binary-amd64_Packages belongs to no source",
 		},
 	}
 	for _, testCase := range testCases {
@@ -631,8 +660,8 @@ func TestBuildRecordsFileNameFromTheNewestPocket(t *testing.T) {
 	bootstrapper := &fakeBootstrapper{
 		dpkgStatus: "Package: ocl-icd-dev\nStatus: install ok installed\nArchitecture: amd64\nVersion: 2.3.2-1build1\n",
 		aptLists: map[string]string{
-			"m_dists_jammy-updates_main_binary-amd64_Packages": "Package: ocl-icd-dev\nArchitecture: amd64\nVersion: 2.3.2-1build1\nFilename: pool/main/o/ocl-icd/ocl-icd-dev_2.3.2-1build1_amd64.deb\nSize: 10118\nSHA256: 66e9\n",
-			"m_dists_jammy_universe_binary-amd64_Packages":     "Package: ocl-icd-dev\nArchitecture: amd64\nVersion: 2.3.2-1build1\nFilename: pool/universe/o/ocl-icd/ocl-icd-dev_2.3.2-1build1_amd64.deb\nSize: 10118\nSHA256: 66E9\n",
+			"archive.ubuntu.com_ubuntu_dists_jammy-updates_main_binary-amd64_Packages": "Package: ocl-icd-dev\nArchitecture: amd64\nVersion: 2.3.2-1build1\nFilename: pool/main/o/ocl-icd/ocl-icd-dev_2.3.2-1build1_amd64.deb\nSize: 10118\nSHA256: 66e9\n",
+			"archive.ubuntu.com_ubuntu_dists_jammy_universe_binary-amd64_Packages":     "Package: ocl-icd-dev\nArchitecture: amd64\nVersion: 2.3.2-1build1\nFilename: pool/universe/o/ocl-icd/ocl-icd-dev_2.3.2-1build1_amd64.deb\nSize: 10118\nSHA256: 66E9\n",
 		},
 	}
 	if _, err := buildWith(bootstrapper, options); err != nil {
@@ -932,12 +961,6 @@ func TestCompareWithLock(t *testing.T) {
 	err := compareWithLock(lock, []recipe.LockPackage{{Name: "a", Version: "1", Arch: "amd64"}, {Name: "c", Version: "3", Arch: "amd64"}})
 	if !errors.Is(err, ErrImageDiffersFromLock) || !strings.Contains(err.Error(), "not in the image: b 2 all") || !strings.Contains(err.Error(), "not in the lock: c 3 amd64") {
 		t.Errorf("error = %v", err)
-	}
-}
-
-func TestPocketRank(t *testing.T) {
-	if pocketRank("noble") != 0 || pocketRank("noble-updates") != 1 || pocketRank("noble-backports") != 1 || pocketRank("noble-security") != 2 {
-		t.Error("pockets must rank release < updates < security")
 	}
 }
 

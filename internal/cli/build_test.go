@@ -59,7 +59,11 @@ func (f *fakeBootstrapper) Run(_ context.Context, spec builder.BootstrapSpec) er
 			if err := os.MkdirAll(listsDir, 0o755); err != nil {
 				return err
 			}
-			if err := os.WriteFile(filepath.Join(listsDir, "archive.ubuntu.com_ubuntu_dists_jammy_main_binary-amd64_Packages"), []byte(fakeAptIndex), 0o644); err != nil {
+			// Named for the archive and suite of this build, as apt would.
+			fields := strings.Fields(spec.SourceLines[0])
+			_, archive, _ := strings.Cut(fields[1], "://")
+			indexName := strings.ReplaceAll(archive, "/", "_") + "_dists_" + fields[2] + "_main_binary-amd64_Packages"
+			if err := os.WriteFile(filepath.Join(listsDir, indexName), []byte(fakeAptIndex), 0o644); err != nil {
 				return err
 			}
 		}

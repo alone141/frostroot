@@ -103,10 +103,36 @@ func planOffline(recipeDir string, imageRecipe recipe.Recipe, release distro.Rel
 			differences = append(differences, "packages removed from the recipe: "+strings.Join(removed, ", "))
 		}
 	}
+	differences = append(differences, repositoryDifferences(lock, imageRecipe.Sources, release)...)
 	if len(differences) > 0 {
 		return nil, fmt.Errorf("%w: %s; run frostroot build online, then frostroot vendor", ErrLockMismatch, strings.Join(differences, "; "))
 	}
 	return &offlinePlan{lockPath: lockPath, lock: lock, entries: entries, poolDir: filepath.Join(recipeDir, filepath.FromSlash(pool.DebsDirName))}, nil
+}
+
+// repositoryDifferences says how the recipe's sources differ from the lock's
+// repositories: a source added, removed, or with another URL, suite or
+// components changes which packages a build installs. The key file may
+// change (it is only trust) and is not compared.
+func repositoryDifferences(lock recipe.Lockfile, sources []recipe.Source, release distro.Release) []string {
+	var differences []string
+	inRecipe := map[string]bool{}
+	for _, source := range sources {
+		inRecipe[source.Name] = true
+		locked, found := lock.Repository(source.Name)
+		switch {
+		case !found:
+			differences = append(differences, "source added to the recipe: "+source.Name)
+		case locked.URL != strings.TrimRight(source.URL, "/") || locked.Suite != source.SuiteFor(release.Suite) || !slices.Equal(locked.Components, source.ComponentsOrDefault()):
+			differences = append(differences, "source changed in the recipe: "+source.Name)
+		}
+	}
+	for _, locked := range lock.Repositories {
+		if !inRecipe[locked.Name] {
+			differences = append(differences, "source removed from the recipe: "+locked.Name)
+		}
+	}
+	return differences
 }
 
 // setDifferences returns what is only in current and what is only in
@@ -168,32 +194,26 @@ func compareWithLock(lock recipe.Lockfile, installed []recipe.LockPackage) error
 }
 
 // packagesIndexPattern matches the file names apt gives Packages indexes in
-// /var/lib/apt/lists, uncompressed or gzip-compressed, and captures the
-// suite: archive.ubuntu.com_ubuntu_dists_noble-updates_main_binary-amd64_Packages.
-var packagesIndexPattern = regexp.MustCompile(`_dists_([^_]+)_.*_Packages(\.gz)?$`)
+// /var/lib/apt/lists, uncompressed or gzip-compressed:
+// archive.ubuntu.com_ubuntu_dists_noble-updates_main_binary-amd64_Packages.
+var packagesIndexPattern = regexp.MustCompile(`_dists_[^_]+_.*_Packages(\.gz)?$`)
 
-// pocketRank orders the indexes a version may appear in, so that the file
-// name recorded is the one from the most recent pocket: a package moved
-// between components after release is listed at two pool paths, and the
-// -updates or -security index has the current one.
-func pocketRank(suite string) int {
-	switch {
-	case strings.HasSuffix(suite, "-security"):
-		return 2
-	case strings.Contains(suite, "-"):
-		return 1
-	default:
-		return 0
-	}
+// indexedEntry is what an index says about a package, and whose index it
+// was.
+type indexedEntry struct {
+	deb.IndexEntry
+	source string
 }
 
-// recordChecksums fills SHA256, Size and Filename of every installed package
-// from the Packages indexes in listsDir, the copy of the image's
-// /var/lib/apt/lists. Every installed package must be listed, and every index
-// listing a version must agree on its checksum; otherwise the build fails,
-// because a lock without a checksum is one vendor cannot act on.
-func recordChecksums(listsDir string, installed []recipe.LockPackage) error {
-	indexFiles, err := packagesIndexFiles(listsDir)
+// recordChecksums fills SHA256, Size, Filename and Source of every installed
+// package from the Packages indexes in listsDir, the copy of the image's
+// /var/lib/apt/lists, attributing each index to an origin by its name. Every
+// installed package must be listed, every index must belong to a known
+// origin, and every index listing a version must agree on its checksum;
+// otherwise the build fails, because a lock without a checksum, or with one
+// from nowhere, is one vendor cannot act on.
+func recordChecksums(listsDir string, installed []recipe.LockPackage, origins []indexOrigin) error {
+	indexFiles, err := packagesIndexFiles(listsDir, origins)
 	if err != nil {
 		return err
 	}
@@ -201,7 +221,7 @@ func recordChecksums(listsDir string, installed []recipe.LockPackage) error {
 	for index, installedPackage := range installed {
 		wanted[keyOf(installedPackage)] = index
 	}
-	found := map[packageKey]deb.IndexEntry{}
+	found := map[packageKey]indexedEntry{}
 	for _, indexFile := range indexFiles {
 		if err := readIndexFile(indexFile.path, func(entry deb.IndexEntry) error {
 			key := packageKey{name: entry.Package, version: entry.Version, arch: entry.Architecture}
@@ -212,7 +232,7 @@ func recordChecksums(listsDir string, installed []recipe.LockPackage) error {
 			if earlier, seen := found[key]; seen && (earlier.SHA256 != entry.SHA256 || earlier.Size != entry.Size) {
 				return fmt.Errorf("the apt indexes disagree about %s: %s (%d bytes) and %s (%d bytes)", key, earlier.SHA256, earlier.Size, entry.SHA256, entry.Size)
 			}
-			found[key] = entry // later files come from more recent pockets
+			found[key] = indexedEntry{IndexEntry: entry, source: indexFile.origin.source} // later files rank higher
 			return nil
 		}); err != nil {
 			return err
@@ -231,6 +251,7 @@ func recordChecksums(listsDir string, installed []recipe.LockPackage) error {
 			installed[index].SHA256 = entry.SHA256
 			installed[index].Size = entry.Size
 			installed[index].Filename = entry.Filename
+			installed[index].Source = entry.source
 		}
 	}
 	if len(unlisted) > 0 {
@@ -240,34 +261,36 @@ func recordChecksums(listsDir string, installed []recipe.LockPackage) error {
 	return nil
 }
 
-// indexFile is one Packages index in the lists directory, with the rank of
-// its pocket.
+// indexFile is one Packages index in the lists directory and its origin.
 type indexFile struct {
-	path string
-	rank int
+	path   string
+	origin indexOrigin
 }
 
-// packagesIndexFiles lists the Packages indexes in listsDir, oldest pocket
-// first, then by name.
-func packagesIndexFiles(listsDir string) ([]indexFile, error) {
+// packagesIndexFiles lists the Packages indexes in listsDir, lowest-ranked
+// origin first, then by name. An index from no known origin is an error.
+func packagesIndexFiles(listsDir string, origins []indexOrigin) ([]indexFile, error) {
 	directoryEntries, err := os.ReadDir(listsDir)
 	if err != nil {
 		return nil, fmt.Errorf("the bootstrap did not copy out the image's apt indexes: %w", err)
 	}
 	var indexFiles []indexFile
 	for _, directoryEntry := range directoryEntries {
-		match := packagesIndexPattern.FindStringSubmatch(directoryEntry.Name())
-		if match == nil || directoryEntry.IsDir() {
+		if directoryEntry.IsDir() || !packagesIndexPattern.MatchString(directoryEntry.Name()) {
 			continue
 		}
-		indexFiles = append(indexFiles, indexFile{path: filepath.Join(listsDir, directoryEntry.Name()), rank: pocketRank(match[1])})
+		origin, known := originOf(directoryEntry.Name(), origins)
+		if !known {
+			return nil, fmt.Errorf("the apt index %s belongs to no source of this build", directoryEntry.Name())
+		}
+		indexFiles = append(indexFiles, indexFile{path: filepath.Join(listsDir, directoryEntry.Name()), origin: origin})
 	}
 	if len(indexFiles) == 0 {
 		return nil, fmt.Errorf("no Packages index in %s", listsDir)
 	}
 	slices.SortStableFunc(indexFiles, func(left, right indexFile) int {
-		if left.rank != right.rank {
-			return left.rank - right.rank
+		if left.origin.rank != right.origin.rank {
+			return left.origin.rank - right.origin.rank
 		}
 		return strings.Compare(left.path, right.path)
 	})
