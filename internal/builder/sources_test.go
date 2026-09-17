@@ -117,8 +117,9 @@ func TestIndexOrigins(t *testing.T) {
 	for _, origin := range origins {
 		ranks[origin.source+"|"+origin.suite] = origin.rank
 	}
-	if !(ranks["|jammy-security"] > ranks["|jammy-updates"] && ranks["|jammy-updates"] > ranks["|jammy"] && ranks["|jammy"] > ranks["docker|jammy"] && ranks["docker|jammy"] > ranks["ppa-git-core-ppa|jammy"]) {
-		t.Errorf("ranks = %v", ranks)
+	order := []int{ranks["ppa-git-core-ppa|jammy"], ranks["docker|jammy"], ranks["|jammy"], ranks["|jammy-updates"], ranks["|jammy-security"]}
+	if !slices.IsSorted(order) || slices.Compact(slices.Clone(order))[0] != order[0] || len(slices.Compact(slices.Clone(order))) != len(order) {
+		t.Errorf("ranks = %v, want strictly increasing from the last source to the security pocket", ranks)
 	}
 }
 

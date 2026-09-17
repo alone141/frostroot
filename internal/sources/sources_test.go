@@ -186,13 +186,13 @@ func TestFetchKeyFailures(t *testing.T) {
 			name:     "Launchpad without a key",
 			source:   PPA("nobody", "empty"),
 			answers:  map[string][]byte{"https://api.launchpad.net/1.0/~nobody/+archive/ubuntu/empty": []byte(`{"signing_key_fingerprint": null}`)},
-			wantText: "names no signing key",
+			wantText: "no signing key is published",
 		},
 		{
 			name:     "Launchpad answers garbage",
 			source:   PPA("nobody", "broken"),
 			answers:  map[string][]byte{"https://api.launchpad.net/1.0/~nobody/+archive/ubuntu/broken": []byte(`<html>`)},
-			wantText: "Launchpad's answer",
+			wantText: "answer of Launchpad",
 		},
 	}
 	for _, testCase := range testCases {

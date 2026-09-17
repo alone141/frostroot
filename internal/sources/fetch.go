@@ -126,11 +126,11 @@ func launchpadFingerprint(ctx context.Context, client Client, owner, name string
 		Fingerprint string `json:"signing_key_fingerprint"`
 	}
 	if err := json.Unmarshal(body, &archive); err != nil {
-		return "", fmt.Errorf("Launchpad's answer about PPA %s/%s: %w", owner, name, err)
+		return "", fmt.Errorf("the answer of Launchpad about PPA %s/%s is not what was expected: %w", owner, name, err)
 	}
 	fingerprint := strings.ToUpper(strings.TrimSpace(archive.Fingerprint))
 	if len(fingerprint) < 40 {
-		return "", fmt.Errorf("Launchpad names no signing key for PPA %s/%s", owner, name)
+		return "", fmt.Errorf("no signing key is published by Launchpad for PPA %s/%s", owner, name)
 	}
 	return fingerprint, nil
 }
