@@ -1,8 +1,40 @@
 # frostroot v0.4: vendoring, offline rebuilds and releases
 
 Date: 2026-09-17
-Status: approved by the project owner in conversation ("first capture, then vendoring/offline builds, with releases folded in"); implementation on branch `feature/vendor`
+Status: approved by the project owner in conversation ("first capture, then vendoring/offline builds, with releases folded in"); implemented on branch `feature/vendor`
 Extends: [`2026-09-14-frostroot-design.md`](2026-09-14-frostroot-design.md) (the extension point "Vendoring `.deb`s") and [`2026-09-17-frostroot-tui.md`](2026-09-17-frostroot-tui.md) (the progress screen it reuses)
+
+## Verification (2026-09-17, build host)
+
+- `gofmt`, `go vet` with and without the `integration` tag, `go test -race
+  ./...`, `GOOS=windows go build ./...` and `golangci-lint`: clean. Every
+  `go.sum` line, the two new modules included, matches `sum.golang.org`.
+- **Real binary, plain interface.** A 24.04 recipe with `curl` and `git`:
+  `build` in 169 s wrote a 137 MB tarball and a lock of 260 packages, every
+  one with `sha256`, `size` and `filename`. `vendor` fetched all 260
+  (98.2 MB) in 54 s; run again it downloaded nothing ("260 already there").
+  With one file overwritten with garbage and a stale `.deb` added,
+  `vendor --prune` replaced the one and removed the other. The lock was
+  byte-identical before and after.
+- **Offline, for real.** As root, `ip netns add`, then `build --offline`
+  as `builder` inside that namespace, where `curl http://archive.ubuntu.com`
+  fails to resolve: 87 s, "260 packages, every one as locked"; the
+  image's dpkg status has exactly the lock's 260 (name, version, arch);
+  its `/etc/apt/sources.list` holds the three archive lines; the lock was
+  not rewritten.
+- `TestIntegrationOfflineRebuild`: an online build of a minimal image,
+  `pool.Fetch` from the archive, an offline rebuild with a changed user
+  name, then checks on the phases reported (the eleven offline phases in
+  order, a real copy total), the `sources.list`, the new user in `passwd`,
+  and the absence of any `copy://` line. Passes in 306 s beside the
+  existing `TestIntegrationNobleTiny`.
+- **The vendor screen under a pty** (`script`, 100x40): the three phases
+  drawn, percentages from 0% to 100%, one log line per file with its size
+  and source URL, and the summary printed after the screen closed.
+- **Release build:** `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w"`
+  yields a 10.7 MB statically linked, stripped ELF that prints
+  `frostroot 0.4.0`. The workflow itself runs on the first pushed tag,
+  which is the owner's call.
 
 ## Why
 
