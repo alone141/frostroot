@@ -513,7 +513,7 @@ func assertEnvironmentInImage(t *testing.T, image tarballContents) {
 	if profile := image.fileContent(t, strings.TrimPrefix(PythonProfilePath, "/")); !strings.Contains(profile, PythonVenvPath+"/bin") {
 		t.Errorf("%s = %q, want the environment on PATH", PythonProfilePath, profile)
 	}
-	var installed, leftBehind []string
+	var installed, leftBehind, strayHomes []string
 	for name := range image.entries {
 		if strings.Contains(name, "/site-packages/requests/") {
 			installed = append(installed, name)
@@ -521,12 +521,20 @@ func assertEnvironmentInImage(t *testing.T, image tarballContents) {
 		if strings.HasPrefix(name, "frostroot-") {
 			leftBehind = append(leftBehind, name)
 		}
+		// The hooks inherit the build user's environment, and a tool that
+		// writes under $HOME would put the builder's own home in the image.
+		if home, _, _ := strings.Cut(strings.TrimPrefix(name, "home/"), "/"); strings.HasPrefix(name, "home/") && home != "" && home != "student" && home != "teacher" {
+			strayHomes = append(strayHomes, name)
+		}
 	}
 	if len(installed) == 0 {
 		t.Error("the environment does not hold requests")
 	}
 	if len(leftBehind) > 0 {
 		t.Errorf("the Python step left %v in the image", leftBehind)
+	}
+	if len(strayHomes) > 0 {
+		t.Errorf("the image holds a home directory of its own build host: %v", strayHomes)
 	}
 }
 

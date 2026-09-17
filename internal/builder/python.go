@@ -96,6 +96,12 @@ export SOURCE_DATE_EPOCH
 # written depend on the sources alone.
 PYTHONHASHSEED=0
 export PYTHONHASHSEED
+# The hook inherits the build user's environment, and pip writes under $HOME:
+# a real build left the builder's own /home/<name>/.cache inside the image.
+# Root's home is where a root process belongs, and the cache is refused
+# outright, since nothing in the image will install from it again.
+HOME=/root
+export HOME
 
 venv={{shellQuote .VenvPath}}
 
@@ -111,12 +117,12 @@ python3 -m venv "$venv"
 # no hash, and goes on to install everything itself.
 {{if .Offline -}}
 printf 'pip==%s --hash=sha256:%s\n' {{shellQuote .PipVersion}} {{shellQuote .PipSHA256}} > {{shellQuote .PinPath}}
-"$venv"/bin/python -m pip install --no-input --disable-pip-version-check --upgrade \
+"$venv"/bin/python -m pip install --no-input --disable-pip-version-check --no-cache-dir --upgrade \
 	--no-index --find-links {{shellQuote .WheelsPath}} \
 	--require-hashes --requirement {{shellQuote .PinPath}}
 {{- else -}}
 printf 'pip @ %s --hash=sha256:%s\n' {{shellQuote .PipURL}} {{shellQuote .PipSHA256}} > {{shellQuote .PinPath}}
-"$venv"/bin/python -m pip install --no-input --disable-pip-version-check --upgrade \
+"$venv"/bin/python -m pip install --no-input --disable-pip-version-check --no-cache-dir --upgrade \
 	--require-hashes --requirement {{shellQuote .PinPath}}
 {{- end}}
 rm -f {{shellQuote .PinPath}}
@@ -132,7 +138,7 @@ pip\ {{.PipVersion}}\ *) ;;
 esac
 
 {{if .Offline -}}
-"$venv"/bin/python -m pip install --no-input --disable-pip-version-check \
+"$venv"/bin/python -m pip install --no-input --disable-pip-version-check --no-cache-dir \
 	--no-index --find-links {{shellQuote .WheelsPath}} \
 	--require-hashes --requirement {{shellQuote .RequirementsPath}}
 rm -rf {{shellQuote .WheelsPath}} {{shellQuote .RequirementsPath}}
@@ -140,7 +146,7 @@ rm -rf {{shellQuote .WheelsPath}} {{shellQuote .RequirementsPath}}
 # What the environment ended up with, for frostroot to compare with the lock.
 "$venv"/bin/python -m pip list --format=json --disable-pip-version-check > {{shellQuote .ListPath}}
 {{- else -}}
-"$venv"/bin/python -m pip install --no-input --disable-pip-version-check \
+"$venv"/bin/python -m pip install --no-input --disable-pip-version-check --no-cache-dir \
 	--only-binary=:all: --report {{shellQuote .ReportPath}} \
 	{{range .Packages}}{{shellQuote .}} {{end}}
 {{- end}}

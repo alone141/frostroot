@@ -2,16 +2,18 @@
 
 **Freeze an Ubuntu root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
 
-> **Status: v0.6.0.** `init`, `edit`, `capture`, `validate`, `build`,
+> **Status: v0.7.0.** `init`, `edit`, `capture`, `validate`, `build`,
 > `vendor` and `build --offline` work, a recipe can add third-party apt
-> sources (PPAs, Docker, Node.js, VS Code...), and two offline rebuilds of
-> one lock produce the same bytes. In a terminal, `init`, `edit` and
-> `capture` are a full-screen form driven with the arrow keys; `build` and
-> `vendor` are a progress screen with bars. Every path in this README was
-> run for real: images for Ubuntu 20.04, 22.04 and 24.04 were built with
-> `frostroot build`, imported with `wsl --import` on Windows 11, and logged
-> into; a lock was vendored and rebuilt offline twice, to one `sha256sum`.
-> See [Verification](#verification).
+> sources (PPAs, Docker, Node.js, VS Code...) and Python packages from PyPI,
+> and two offline rebuilds of one lock produce the same bytes. In a terminal,
+> `init`, `edit` and `capture` are a full-screen form driven with the arrow
+> keys; `build` and `vendor` are a progress screen with bars. Every path in
+> this README was run for real: images for Ubuntu 20.04, 22.04 and 24.04 were
+> built with `frostroot build`, imported with `wsl --import` on Windows 11,
+> and logged into; a lock was vendored and rebuilt offline twice, to one
+> `sha256sum`; and a 24.04 image with `requests` and `numpy` imported both
+> from its own environment on the first login. See
+> [Verification](#verification).
 
 ---
 
@@ -646,7 +648,13 @@ server (fresh, resumed, corrupt, dropped from the mirror, mismatched,
 interrupted), offline builds against the fake bootstrapper, including every
 refusal and the final comparison with the lock, and the frozen instant: taken
 from the environment or the clock online, from the lock offline, refused
-when unusable, with apt's marks parsed and rendered in its own format.
+when unusable, with apt's marks parsed and rendered in its own format. For
+the Python step it covers pip's own installation report parsed into lock
+entries, every refusal (a source distribution, a missing checksum, a report
+version frostroot does not know, a requested package the report never
+mentions), the two rendered scripts through a real shell with a hostile
+package name, the hook order online and offline, and the comparison of an
+image's environment with the lock.
 
 ```sh
 go test -tags=integration -run TestIntegration -v -timeout 30m ./...
@@ -660,8 +668,12 @@ phase in order with a real download total, and that every package in the
 `init` catalog exists in all three releases. A second test builds an image
 online, vendors it, rebuilds it offline twice and requires one SHA-256, no
 entry dated after the lock's instant, and the online image's apt marks in
-the offline one. It needs Linux, mmdebstrap, ubuntu-keyring, network, and
-user namespaces or root, and takes about ten minutes.
+the offline one. A third does the same for a recipe with Python packages: it
+checks the lock's `[python]` table and `[[pypi]]` entries, that the
+environment and its `profile.d` line are in the tarball, that nothing the
+Python step used was left in the image, and that two offline rebuilds have
+one SHA-256. They need Linux, mmdebstrap, ubuntu-keyring, network, and user
+namespaces or root, and take about twenty minutes.
 
 **The WSL boot check is manual**, because no CI runner can run `wsl --import`.
 For every release you ship, import the tarball and check: `whoami` is your
@@ -671,6 +683,14 @@ has no warnings, and `date` shows the recipe's timezone. For v0.1.0 this was
 done on Windows 11 with WSL 2.6.3 for all three releases, along with the
 failure paths; the results are recorded in the
 [feasibility analysis](docs/superpowers/reviews/2026-09-15-frostroot-feasibility.md#release-verification-v010-2026-09-16).
+
+For v0.7.0 a 24.04 image with `requests` and `numpy` was imported the same
+way: every check above passed, `systemctl is-system-running` said `running`,
+and in a login shell `python3` was the environment's
+(`/opt/frostroot/venv/bin/python3`, 3.12.3), `import numpy, requests` gave
+the locked 2.5.3 and 2.34.2, and `pip --version` was the pinned 24.3.1. The
+[Python spec](docs/superpowers/specs/2026-09-17-frostroot-python.md#verification)
+records it.
 
 ## Documentation
 
