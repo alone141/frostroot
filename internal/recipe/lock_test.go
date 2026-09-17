@@ -108,6 +108,79 @@ func TestSaveLockRecordsEmptyRequestedExplicitly(t *testing.T) {
 	}
 }
 
+// sampleLockWithChecksums returns sampleLock with the fields a frostroot 0.4
+// build records for vendoring.
+func sampleLockWithChecksums() Lockfile {
+	lock := sampleLock()
+	lock.FrostrootVersion = "0.4.0"
+	lock.Packages[0].SHA256 = "af7af42226d21bcbf87cf62a9e158bd5dfbd051ebbde8818ca441dc8085f67af"
+	lock.Packages[0].Size = 4_000_000
+	lock.Packages[0].Filename = "pool/main/g/git/git_1%3a2.34.1-1ubuntu1.11_amd64.deb"
+	lock.Packages[1].SHA256 = "af36c7ac770770fe3d3c10e85d6bc538e76e57570ba7db7d397fb9f654783ef3"
+	lock.Packages[1].Size = 3_264_806
+	lock.Packages[1].Filename = "pool/main/g/glibc/libc6_2.35-0ubuntu3.8_amd64.deb"
+	return lock
+}
+
+func TestLockChecksumsRoundTrip(t *testing.T) {
+	original := sampleLockWithChecksums()
+	path, content := saveAndRead(t, original)
+	for _, wantLine := range []string{"sha256 = 'af7af42226d21bcbf87cf62a9e158bd5dfbd051ebbde8818ca441dc8085f67af'", "size = 3264806", "filename = 'pool/main/g/glibc/libc6_2.35-0ubuntu3.8_amd64.deb'"} {
+		if !strings.Contains(content, wantLine) {
+			t.Errorf("saved lock lacks %q:\n%s", wantLine, content)
+		}
+	}
+	reloaded, err := LoadLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(reloaded, original) {
+		t.Fatalf("round trip =\n%+v\nwant\n%+v", reloaded, original)
+	}
+}
+
+func TestLockHasChecksums(t *testing.T) {
+	withoutSize := sampleLockWithChecksums()
+	withoutSize.Packages[1].Size = 0
+	withoutFilename := sampleLockWithChecksums()
+	withoutFilename.Packages[0].Filename = ""
+	testCases := []struct {
+		name string
+		lock Lockfile
+		want bool
+	}{
+		{name: "frostroot 0.4 lock", lock: sampleLockWithChecksums(), want: true},
+		{name: "frostroot 0.3 lock", lock: sampleLock(), want: false},
+		{name: "one package without a size", lock: withoutSize, want: false},
+		{name: "one package without a file name", lock: withoutFilename, want: false},
+		{name: "no packages", lock: Lockfile{Version: 1}, want: false},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := testCase.lock.HasChecksums(); got != testCase.want {
+				t.Errorf("HasChecksums() = %v, want %v", got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestLoadLockAcceptsOlderLockWithoutChecksums(t *testing.T) {
+	// A lock written by frostroot 0.3 has name, version and arch only. It
+	// must still load, so validate and tests keep working on it; vendor is
+	// what refuses it.
+	path, _ := saveAndRead(t, sampleLock())
+	reloaded, err := LoadLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.HasChecksums() {
+		t.Fatal("an old lock must not claim checksums")
+	}
+	if !reflect.DeepEqual(reloaded, sampleLock()) {
+		t.Fatalf("round trip of an old lock =\n%+v", reloaded)
+	}
+}
+
 func TestLoadLockRejectsUnknownField(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "frostroot.lock")
 	if err := os.WriteFile(path, []byte("version = 1\nsurprise = true\n"), 0o644); err != nil {
