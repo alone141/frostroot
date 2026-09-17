@@ -11,8 +11,14 @@ func (a *App) runValidate(args []string) int {
 	if !ok {
 		return exitUserError
 	}
-	a.stdoutf("%s: ok (%s, Ubuntu %s %s, %s requested)\n", recipeFileName,
-		imageRecipe.Image.Name, imageRecipe.Image.Release, imageRecipe.Image.Arch, packageCount(len(imageRecipe.Packages.Include)))
+	sourcesNote := ""
+	if count := len(imageRecipe.Sources); count == 1 {
+		sourcesNote = ", 1 extra source"
+	} else if count > 1 {
+		sourcesNote = fmt.Sprintf(", %d extra sources", count)
+	}
+	a.stdoutf("%s: ok (%s, Ubuntu %s %s, %s requested%s)\n", recipeFileName,
+		imageRecipe.Image.Name, imageRecipe.Image.Release, imageRecipe.Image.Arch, packageCount(len(imageRecipe.Packages.Include)), sourcesNote)
 	return exitSuccess
 }
 

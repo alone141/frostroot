@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 
 	"frostroot/internal/form"
+	"frostroot/internal/pgp"
 	"frostroot/internal/recipe"
+	"frostroot/internal/sources"
 	"frostroot/internal/tui"
 )
 
@@ -86,9 +89,50 @@ func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath 
 		a.stderrf("frostroot: %v\n", err)
 		return exitUserError
 	}
-	a.stdoutf("\nWrote %s. Next: frostroot validate, then frostroot build.\n", recipeFileName)
+	a.stdoutf("\nWrote %s.\n", recipeFileName)
+	if exitCode := a.fetchMissingKeys(commandName, imageRecipe.Sources); exitCode != exitSuccess {
+		return exitCode
+	}
+	a.stdoutf("Next: frostroot validate, then frostroot build.\n")
 	if slices.Contains(imageRecipe.Packages.Include, "python3-pip") && imageRecipe.Image.Release == "24.04" {
 		a.stdoutf("Note: Ubuntu 24.04 enforces PEP 668, so pip install outside a virtual environment fails by design. Use: python3 -m venv .venv\n")
+	}
+	return exitSuccess
+}
+
+// fetchMissingKeys fetches and checks the signing key of every source whose
+// key file is not there yet, and writes it. Keys already present are left
+// alone. Every source is tried; any failure ends in exitUserError with the
+// recipe already written, so that fixing the network or saving a key by
+// hand is all that is left to do.
+func (a *App) fetchMissingKeys(commandName string, recipeSources []recipe.Source) int {
+	failed := false
+	for _, source := range recipeSources {
+		keyPath := recipe.KeyPath(a.RecipeDir, source)
+		if _, err := os.Stat(keyPath); err == nil {
+			continue
+		}
+		fetched, err := sources.FetchKey(context.Background(), a.KeyClient, source)
+		if err != nil {
+			a.stderrf("frostroot %s: %v\n", commandName, err)
+			failed = true
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(keyPath), 0o755); err != nil {
+			a.stderrf("frostroot %s: %v\n", commandName, err)
+			failed = true
+			continue
+		}
+		if err := writeFileAtomically(keyPath, string(fetched.Armored)); err != nil {
+			a.stderrf("frostroot %s: writing %s: %v\n", commandName, source.Key, err)
+			failed = true
+			continue
+		}
+		a.stdoutf("Fetched the signing key of %s into %s (fingerprint %s)\n", source.Name, source.Key, pgp.FormatFingerprint(fetched.Fingerprint))
+	}
+	if failed {
+		a.stderrf("frostroot %s: %s is written, but frostroot validate will refuse it until every key is in place; frostroot edit fetches them again\n", commandName, recipeFileName)
+		return exitUserError
 	}
 	return exitSuccess
 }

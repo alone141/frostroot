@@ -15,6 +15,7 @@ import (
 	"frostroot/internal/builder"
 	"frostroot/internal/pool"
 	"frostroot/internal/recipe"
+	"frostroot/internal/sources"
 )
 
 // recipeFileName is the recipe every command works on, in App.RecipeDir.
@@ -57,9 +58,12 @@ type App struct {
 	// command; defaults to debug.ReadBuildInfo.
 	BuildInfo func() (*debug.BuildInfo, bool)
 	// VendorFallback returns where to fetch a package the mirror no longer
-	// has, or "" for nowhere; nil means Launchpad for Ubuntu locks. Tests
-	// point it at their own server.
+	// has, or "" for nowhere; nil means Launchpad for the archive and PPAs.
+	// Tests point it at their own server.
 	VendorFallback func(pool.Entry) string
+	// KeyClient fetches the signing keys of extra sources; defaults to the
+	// network. Tests answer from a map.
+	KeyClient sources.Client
 }
 
 // New returns an App wired to the real process.
@@ -103,6 +107,9 @@ func (a *App) withDefaults() *App {
 	}
 	if a.BuildInfo == nil {
 		a.BuildInfo = debug.ReadBuildInfo
+	}
+	if a.KeyClient == nil {
+		a.KeyClient = sources.HTTPClient{UserAgent: "frostroot/" + builder.Version}
 	}
 	if a.Builder == nil {
 		a.Builder = &builder.Builder{Bootstrapper: &builder.Mmdebstrap{}}
@@ -213,7 +220,15 @@ func (a *App) loadRecipe() (imageRecipe recipe.Recipe, ok bool) {
 		}
 		return recipe.Recipe{}, false
 	}
-	if problems := recipe.Validate(imageRecipe); len(problems) > 0 {
+	problems := recipe.Validate(imageRecipe)
+	if len(problems) == 0 {
+		// Only once the fields are right: a bad key path is reported above.
+		problems = recipe.CheckSourceKeys(a.RecipeDir, imageRecipe.Sources)
+		if len(problems) > 0 {
+			problems = append(problems, "frostroot edit fetches the keys of the sources it knows; for others, save the source's public key at the path the recipe names")
+		}
+	}
+	if len(problems) > 0 {
 		for _, problem := range problems {
 			a.stderrf("%s: %s\n", recipeFileName, problem)
 		}
