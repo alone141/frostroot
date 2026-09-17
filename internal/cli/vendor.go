@@ -141,9 +141,30 @@ func (a *App) runVendorFullScreen(ctx context.Context, run *vendorRun, screen tu
 	return outcome
 }
 
-// reportVendorSuccess prints what the pool now holds and the next step.
+// reportVendorSuccess prints what each pool now holds and the next step.
 func (a *App) reportVendorSuccess(run *vendorRun) {
-	summary := run.summary
+	a.stdoutf("\nVendored %s (%s) into %s: %s.\n", packageCount(len(run.entries)),
+		builder.FormatBytes(pool.TotalSize(run.entries)), pool.DebsDirName, fetchDetails(run.summaryByPool[pool.DebsDirName]))
+	if len(run.wheelEntries) > 0 {
+		a.stdoutf("Vendored %s (%s) into %s: %s.\n", wheelCount(len(run.wheelEntries)),
+			builder.FormatBytes(pool.TotalSize(run.wheelEntries)), pool.WheelsDirName, fetchDetails(run.summaryByPool[pool.WheelsDirName]))
+	}
+	if len(run.pruned) > 0 {
+		a.stdoutf("Removed %d file(s) the lock does not name: %s\n", len(run.pruned), strings.Join(run.pruned, ", "))
+	} else {
+		if extra := run.summaryByPool[pool.DebsDirName].Extra; len(extra) > 0 {
+			a.stdoutf("%d .deb file(s) in %s are not in the lock; remove them with: frostroot vendor --prune\n", len(extra), pool.DebsDirName)
+		}
+		if extra := run.summaryByPool[pool.WheelsDirName].Extra; len(extra) > 0 {
+			a.stdoutf("%d wheel file(s) in %s are not in the lock; remove them with: frostroot vendor --prune\n", len(extra), pool.WheelsDirName)
+		}
+	}
+	a.stdoutf("\nRebuild the exact image without the archive:\n  frostroot build --offline\n")
+}
+
+// fetchDetails describes one pool's fetch: what was downloaded, what was
+// already there, and what had to be replaced.
+func fetchDetails(summary pool.Summary) string {
 	details := []string{fmt.Sprintf("%d downloaded", summary.Fetched)}
 	if summary.Present > 0 {
 		details = append(details, fmt.Sprintf("%d already there", summary.Present))
@@ -151,21 +172,7 @@ func (a *App) reportVendorSuccess(run *vendorRun) {
 	if summary.Replaced > 0 {
 		details = append(details, fmt.Sprintf("%d replaced", summary.Replaced))
 	}
-	a.stdoutf("\nVendored %s (%s) into %s: %s.\n", packageCount(len(run.entries)), builder.FormatBytes(pool.TotalSize(run.entries)), pool.DebsDirName, strings.Join(details, ", "))
-	if len(run.wheelEntries) > 0 {
-		a.stdoutf("Vendored %s into %s.\n", wheelCount(len(run.wheelEntries)), pool.WheelsDirName)
-	}
-	if len(run.pruned) > 0 {
-		a.stdoutf("Removed %d file(s) the lock does not name: %s\n", len(run.pruned), strings.Join(run.pruned, ", "))
-	} else {
-		if extra := run.extraByPool[pool.DebsDirName]; len(extra) > 0 {
-			a.stdoutf("%d .deb file(s) in %s are not in the lock; remove them with: frostroot vendor --prune\n", len(extra), pool.DebsDirName)
-		}
-		if extra := run.extraByPool[pool.WheelsDirName]; len(extra) > 0 {
-			a.stdoutf("%d wheel file(s) in %s are not in the lock; remove them with: frostroot vendor --prune\n", len(extra), pool.WheelsDirName)
-		}
-	}
-	a.stdoutf("\nRebuild the exact image without the archive:\n  frostroot build --offline\n")
+	return strings.Join(details, ", ")
 }
 
 // vendorRun is one run of the vendor command: the fetch, the optional prune,
@@ -184,11 +191,10 @@ type vendorRun struct {
 	fallback     func(pool.Entry) string
 	progress     builder.Progress
 
-	summary pool.Summary
-	// extraByPool holds, per pool directory name, the files there that the
-	// lock does not name, so a message can say where they are.
-	extraByPool map[string][]string
-	pruned      []string
+	// summaryByPool holds what each pool directory ended up with, so that a
+	// message can report the packages and the wheels apart.
+	summaryByPool map[string]pool.Summary
+	pruned        []string
 }
 
 // allEntries returns both pools' entries, for the counts and sizes messages
@@ -209,7 +215,7 @@ func (r *vendorRun) do(ctx context.Context) error {
 	report(builder.ProgressEvent{Phase: builder.PhaseVendorRead, Kind: builder.EventPhaseFinished})
 	report(builder.ProgressEvent{Phase: builder.PhaseVendorCheck, Kind: builder.EventPhaseStarted})
 	downloading := false
-	r.extraByPool = map[string][]string{}
+	r.summaryByPool = map[string]pool.Summary{}
 	if err := r.fetchPool(ctx, report, &downloading, pool.DebsDirName, r.poolDir, r.entries, r.mirrorURL, r.fallback); err != nil {
 		return err
 	}
@@ -282,13 +288,6 @@ func (r *vendorRun) fetchPool(ctx context.Context, report func(builder.ProgressE
 			report(builder.ProgressEvent{Phase: builder.PhaseVendorDownload, Kind: builder.EventLogLine, Line: fmt.Sprintf("%s (%s) from %s", entry.FileName, builder.FormatBytes(entry.Size), sourceURL)})
 		},
 	})
-	r.summary.Present += summary.Present
-	r.summary.Fetched += summary.Fetched
-	r.summary.Replaced += summary.Replaced
-	r.summary.FetchedBytes += summary.FetchedBytes
-	r.summary.Extra = append(r.summary.Extra, summary.Extra...)
-	if len(summary.Extra) > 0 {
-		r.extraByPool[poolName] = summary.Extra
-	}
+	r.summaryByPool[poolName] = summary
 	return err
 }
