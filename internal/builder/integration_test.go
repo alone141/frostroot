@@ -453,21 +453,33 @@ func TestIntegrationPython(t *testing.T) {
 		t.Errorf("Result.PythonPackageCount = %d, want %d", online.PythonPackageCount, len(lock.PyPI))
 	}
 
-	onlineImage := readTarball(t, online.TarballPath)
-	assertEnvironmentInImage(t, onlineImage)
-	entries, err := pool.WheelManifest(lock)
-	if err != nil {
-		t.Fatal(err)
-	}
+	assertEnvironmentInImage(t, readTarball(t, online.TarballPath))
 
-	t.Log("vendor the wheels")
-	wheelDir := filepath.Join(recipeDir, "vendor", "wheels")
-	summary, err := pool.Fetch(context.Background(), pool.FetchOptions{Dir: wheelDir, Entries: entries})
+	t.Log("vendor both pools")
+	packageEntries, err := pool.Manifest(lock)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Fetched != len(entries) {
-		t.Errorf("fetched %d of %d wheels", summary.Fetched, len(entries))
+	if _, err := pool.Fetch(context.Background(), pool.FetchOptions{
+		Dir:      filepath.Join(recipeDir, "vendor", "debs"),
+		Entries:  packageEntries,
+		Fallback: pool.FallbackURL(lock),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wheelEntries, err := pool.WheelManifest(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, err := pool.Fetch(context.Background(), pool.FetchOptions{
+		Dir:     filepath.Join(recipeDir, "vendor", "wheels"),
+		Entries: wheelEntries,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Fetched != len(wheelEntries) {
+		t.Errorf("fetched %d of %d wheels", summary.Fetched, len(wheelEntries))
 	}
 
 	t.Log("offline build")
