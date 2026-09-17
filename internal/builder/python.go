@@ -90,6 +90,12 @@ export PATH
 SOURCE_DATE_EPOCH={{.SourceDateEpoch}}
 export SOURCE_DATE_EPOCH
 {{- end}}
+# Compiling a module that holds a set constant marshals it in the order that
+# run's hash seed produced, and 3.8 does not sort it, so two rebuilds of one
+# lock differed in a couple of hundred caches. A fixed seed makes what is
+# written depend on the sources alone.
+PYTHONHASHSEED=0
+export PYTHONHASHSEED
 
 venv={{shellQuote .VenvPath}}
 

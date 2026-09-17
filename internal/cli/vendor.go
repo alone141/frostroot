@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -193,7 +194,7 @@ type vendorRun struct {
 // allEntries returns both pools' entries, for the counts and sizes messages
 // show.
 func (r *vendorRun) allEntries() []pool.Entry {
-	return append(append([]pool.Entry{}, r.entries...), r.wheelEntries...)
+	return slices.Concat(r.entries, r.wheelEntries)
 }
 
 // do fetches both pools and, if asked, prunes them, reporting phases as it

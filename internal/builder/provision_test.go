@@ -268,6 +268,9 @@ func TestCustomizeHooksOrderAndContent(t *testing.T) {
 		"upload '/w/stage/wsl.conf' /etc/wsl.conf",
 		"upload '/w/stage/sudoers' /etc/sudoers.d/90-frostroot",
 		`chroot "$1" /bin/sh -c "$(cat '/w/stage/provision.sh')" frostroot-provision`,
+		// The host's files go after everything that needs the network:
+		// resolv.conf is how a hook resolves a name.
+		`rm -f "$1/etc/resolv.conf" "$1/etc/hostname"`,
 		// copy-out puts "lists" inside its destination, so the stage
 		// directory is named, not the lists directory.
 		"copy-out /var/lib/apt/lists '/w/stage'",
@@ -281,7 +284,7 @@ func TestCustomizeHooksOrderAndContent(t *testing.T) {
 	if !slices.Equal(hooks, wantHooks) {
 		t.Fatalf("CustomizeHooks =\n%s\nwant\n%s", strings.Join(hooks, "\n"), strings.Join(wantHooks, "\n"))
 	}
-	if without := CustomizeHooks(sampleStage("/w/stage")); len(without) != 4 || strings.Contains(strings.Join(without, "\n"), "/var/lib/apt/") {
+	if without := CustomizeHooks(sampleStage("/w/stage")); len(without) != 5 || strings.Contains(strings.Join(without, "\n"), "/var/lib/apt/") {
 		t.Errorf("without AptListsDir and ExtendedStatesPath the hooks must not copy the lists out or touch apt's marks: %q", without)
 	}
 }
@@ -358,7 +361,6 @@ func TestRenderProvisionScriptContent(t *testing.T) {
 		">> /etc/locale.gen",
 		"locale-gen",
 		`update-locale "LANG=$lang"`,
-		"rm -f /etc/resolv.conf /etc/hostname",
 	}
 	for _, wantLine := range wantLines {
 		if !strings.Contains(script, wantLine) {
