@@ -21,6 +21,7 @@ type Recipe struct {
 	Locale   Locale   `toml:"locale"`
 	Packages Packages `toml:"packages"`
 	Sources  []Source `toml:"sources,omitempty"`
+	Python   *Python  `toml:"python,omitempty"`
 }
 
 // Source is one [[sources]] table: an apt repository besides the Ubuntu
@@ -83,6 +84,25 @@ type Locale struct {
 // Packages is the [packages] table.
 type Packages struct {
 	Include []string `toml:"include"` // apt package names, without versions
+}
+
+// Python is the [python] table: packages installed from PyPI into the
+// image's virtual environment, after apt has installed everything else. As
+// with apt packages, versions never appear here; the lock records the wheel
+// each name resolved to. The table is a pointer so that a recipe without one
+// stays as it was written, and is absent from a recipe Save writes.
+type Python struct {
+	Include []string `toml:"include"` // PyPI distribution names, without versions
+}
+
+// PythonPackages returns the PyPI names the recipe asks for, or nil when it
+// asks for none. It is the only way the rest of frostroot reads [python], so
+// an absent table and an empty list behave the same everywhere.
+func (r Recipe) PythonPackages() []string {
+	if r.Python == nil {
+		return nil
+	}
+	return r.Python.Include
 }
 
 // utf8ByteOrderMark is what editors such as Notepad write at the start of a
