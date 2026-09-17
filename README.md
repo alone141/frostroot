@@ -335,7 +335,7 @@ apt ones:
 include = ["python3", "git"]
 
 [python]
-include = ["numpy", "pandas", "jupyterlab"]
+include = ["numpy", "pandas", "jupyterlab", "requests"]
 ```
 
 `build` creates one virtual environment in the image, at
@@ -350,7 +350,7 @@ records every `.deb`:
 
 ```toml
 [python]
-requested = ['numpy', 'pandas', 'jupyterlab']
+requested = ['numpy', 'pandas', 'jupyterlab', 'requests']
 venv = '/opt/frostroot/venv'
 interpreter = '3.12.3'
 pip_version = '24.3.1'
@@ -363,11 +363,11 @@ filename = 'numpy-2.5.3-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.
 url = 'https://files.pythonhosted.org/packages/65/af/aa78d1a88805456e212b65461354cd943197fb9acecc4c90fd12295123a3/numpy-2.5.3-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl'
 ```
 
-Those three names pulled in 92 packages on 24.04, and `numpy` is one of the
-three the recipe asked for, so the other 89 carry `auto = true`, as
-dependencies do on the apt side. `vendor` downloads every one of those wheels
-into `vendor/wheels/`, checked against these checksums, and `build --offline`
-reinstalls exactly them.
+Those four names pulled in 93 entries on 24.04: the four themselves, the 88
+packages they depend on, and the pip below. Everything the recipe did not
+ask for carries `auto = true`, as dependencies do on the apt side. `vendor`
+downloads every one of those wheels into `vendor/wheels/`, checked against
+these checksums, and `build --offline` reinstalls exactly them.
 
 Three rules, each for a reason:
 
@@ -513,8 +513,12 @@ tarball or in an archive; add it to `.gitignore` unless you use git LFS.
   `useWindowsTimezone=false` so the recipe's timezone sticks (WSL otherwise
   resets it to the Windows zone at every start).
 - Your locale and timezone.
-- No `/etc/resolv.conf` or `/etc/hostname` from the build machine, and an empty
-  `/etc/machine-id`, so every import gets its own.
+- With `[python]`: a virtual environment at `/opt/frostroot/venv`, root-owned
+  and readable by everyone, with your packages and a pinned pip in it, and
+  one line in `/etc/profile.d` that puts it on `PATH`.
+- No `/etc/resolv.conf` or `/etc/hostname` from the build machine, an empty
+  `/etc/machine-id` so every import gets its own, and no home directory but
+  your user's.
 
 ## Pipeline
 
@@ -533,9 +537,13 @@ sudoers drop-in and run one generated provisioning script (user, sudo,
 locale, timezone, cleanup), copy out the apt indexes the chroot verified
 (the lock's checksums come from them), download apt's `extended_states`
 (the lock's `auto` marks come from it), then download the image's dpkg
-status, which frostroot parses into the lock. The tarball is moved into
-`dist/` first and the lock renamed into place second, so a lock never
-describes an image that does not exist. A failed build writes neither.
+status, which frostroot parses into the lock. A recipe with `[python]` gets
+one more hook in between, which creates the environment and installs into
+it, and whose report becomes the lock's `[[pypi]]` entries; the build host's
+`/etc/resolv.conf` is removed after it, since that hook is the one that
+needs to resolve a name. The tarball is moved into `dist/` first and the
+lock renamed into place second, so a lock never describes an image that does
+not exist. A failed build writes neither.
 
 Offline, the three `deb http://…` lines become one
 `deb [trusted=yes] copy://<work>/pool ./` pointing at a flat repository
@@ -543,7 +551,10 @@ frostroot writes in the work directory from the vendored files (their own
 control files, plus a `Release` naming the suite, which mmdebstrap needs to
 find the essential set), every locked package goes into `--include`, and
 hooks restore the archive's lines in the image's `sources.list` and the
-lock's `auto` marks in its `extended_states`.
+lock's `auto` marks in its `extended_states`. The Python step works the same
+way: the wheels are copied in, pip installs from that directory with every
+checksum pinned and no index to reach, and the environment is compared with
+the lock before anything is placed.
 
 Work happens in `$XDG_CACHE_HOME/frostroot` if that is set, otherwise in
 `/var/tmp/frostroot-<uid>` (one per user, so a `sudo` build cannot leave a
