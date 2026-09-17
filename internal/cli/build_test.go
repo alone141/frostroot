@@ -67,6 +67,12 @@ func (f *fakeBootstrapper) Run(_ context.Context, spec builder.BootstrapSpec) er
 				return err
 			}
 		}
+		if statesDestination, isDownload := strings.CutPrefix(hook, "download /var/lib/apt/extended_states "); isDownload {
+			// git was asked for, so apt marked nothing: an empty file.
+			if err := os.WriteFile(strings.Trim(statesDestination, "'"), nil, 0o644); err != nil {
+				return err
+			}
+		}
 		if statusDestination, isDownload := strings.CutPrefix(hook, "download /var/lib/dpkg/status "); isDownload {
 			if err := os.WriteFile(strings.Trim(statusDestination, "'"), []byte(dpkgStatus), 0o644); err != nil {
 				return err
@@ -131,10 +137,23 @@ func assertNoLock(t *testing.T, recipeDir string) {
 	}
 }
 
+// withEnvironment makes app's environment answer name with value, on top of
+// what newBuildApp set up.
+func withEnvironment(app *App, name, value string) {
+	previous := app.Getenv
+	app.Getenv = func(variable string) string {
+		if variable == name {
+			return value
+		}
+		return previous(variable)
+	}
+}
+
 func TestBuildSuccess(t *testing.T) {
 	recipeDir := newRecipeDir(t, "valid.toml")
 	var stdout, stderr bytes.Buffer
 	app := newBuildApp(t, recipeDir, &fakeBootstrapper{}, &stdout, &stderr)
+	withEnvironment(app, "SOURCE_DATE_EPOCH", "1758067200")
 	if exitCode := app.Run([]string{"build"}); exitCode != exitSuccess {
 		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr.String())
 	}
@@ -145,7 +164,7 @@ func TestBuildSuccess(t *testing.T) {
 	}
 	for _, wantText := range []string{
 		"wsl --import cpp-lab <install-dir> dist/cpp-lab-ubuntu-22.04-amd64.tar.gz",
-		"frostroot.lock (1 package)",
+		"frostroot.lock (1 package), frozen at 2025-09-17 00:00:00 UTC\n",
 		"frostroot vendor",
 	} {
 		if !strings.Contains(stdout.String(), wantText) {
@@ -167,6 +186,28 @@ func TestBuildSuccess(t *testing.T) {
 	}
 	if !lock.HasChecksums() {
 		t.Errorf("the lock must record checksums for vendoring: %+v", lock.Packages)
+	}
+	if lock.SourceDateEpoch != 1758067200 {
+		t.Errorf("the lock records source_date_epoch %d, want the environment's", lock.SourceDateEpoch)
+	}
+	if strings.Contains(stderr.String(), "SOURCE_DATE_EPOCH") {
+		t.Errorf("an online build honors the variable and has nothing to note:\n%s", stderr.String())
+	}
+}
+
+func TestBuildRefusesUnusableSourceDateEpoch(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	bootstrapper := &fakeBootstrapper{}
+	app := newBuildApp(t, newRecipeDir(t, "valid.toml"), bootstrapper, &stdout, &stderr)
+	withEnvironment(app, "SOURCE_DATE_EPOCH", "yesterday")
+	if exitCode := app.Run([]string{"build"}); exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d; stderr %s", exitCode, exitUserError, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), `"yesterday"`) || !strings.Contains(stderr.String(), "offline build ignores it") {
+		t.Errorf("stderr should name the value and say offline builds ignore it:\n%s", stderr.String())
+	}
+	if bootstrapper.bootstrapRan() {
+		t.Error("the bootstrap must not run")
 	}
 }
 
@@ -213,19 +254,38 @@ func TestBuildOffline(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	bootstrapper := &fakeBootstrapper{}
-	if exitCode := newBuildApp(t, recipeDir, bootstrapper, &stdout, &stderr).Run([]string{"build", "--offline"}); exitCode != exitSuccess {
+	app := newBuildApp(t, recipeDir, bootstrapper, &stdout, &stderr)
+	withEnvironment(app, "SOURCE_DATE_EPOCH", "1700000000") // ignored: the lock's instant is the input
+	if exitCode := app.Run([]string{"build", "--offline"}); exitCode != exitSuccess {
 		t.Fatalf("offline build: exit code = %d, stderr %s", exitCode, stderr.String())
 	}
 	if !bootstrapper.lastSpec.Trusted || len(bootstrapper.lastSpec.SourceLines) != 1 || !strings.HasPrefix(bootstrapper.lastSpec.SourceLines[0], "deb [trusted=yes] copy://") {
 		t.Errorf("spec = %+v, want a trusted local repository", bootstrapper.lastSpec)
 	}
-	for _, wantText := range []string{"rebuilt from frostroot.lock: 1 package, every one as locked", "wsl --import cpp-lab"} {
+	lock, err := recipe.LoadLock(filepath.Join(recipeDir, "frostroot.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bootstrapper.lastSpec.SourceDateEpoch != lock.SourceDateEpoch {
+		t.Errorf("mmdebstrap got epoch %d, want the lock's %d", bootstrapper.lastSpec.SourceDateEpoch, lock.SourceDateEpoch)
+	}
+	for _, wantText := range []string{
+		"rebuilt from frostroot.lock: 1 package, every one as locked",
+		"Frozen at " + formatInstant(lock.SourceDateEpoch) + ": every offline build of this lock produces this tarball, byte for byte.\n",
+		"wsl --import cpp-lab",
+	} {
 		if !strings.Contains(stdout.String(), wantText) {
 			t.Errorf("stdout lacks %q:\n%s", wantText, stdout.String())
 		}
 	}
 	if strings.Contains(stdout.String(), "Wrote frostroot.lock") || strings.Contains(stdout.String(), "frostroot vendor\n") {
 		t.Errorf("an offline build writes no lock and needs no vendoring hint:\n%s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "note: SOURCE_DATE_EPOCH is set, but an offline build freezes at the lock's instant and ignores it\n") {
+		t.Errorf("stderr should note the ignored variable:\n%s", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "warning") {
+		t.Errorf("a lock with an instant deserves no warning:\n%s", stderr.String())
 	}
 	for _, wantLine := range []string{"frostroot: building cpp-lab · Ubuntu 22.04 (jammy, amd64) · vendor/debs\n", "frostroot: Check vendor/debs against frostroot.lock\n", "frostroot: Prepare the local package repository\n", "frostroot: Check the image against frostroot.lock\n"} {
 		if !strings.Contains(stderr.String(), wantLine) {
@@ -241,6 +301,34 @@ func TestBuildOffline(t *testing.T) {
 	}
 	if string(lockAfter) != string(lockBefore) {
 		t.Error("the lock must not change")
+	}
+}
+
+func TestBuildOfflineFromAnOldLockWarns(t *testing.T) {
+	recipeDir := newRecipeDir(t, "valid.toml")
+	var stdout, stderr bytes.Buffer
+	if exitCode := newBuildApp(t, recipeDir, &fakeBootstrapper{}, &stdout, &stderr).Run([]string{"build"}); exitCode != exitSuccess {
+		t.Fatalf("online build: exit code = %d, stderr %s", exitCode, stderr.String())
+	}
+	lock := vendorFakePool(t, recipeDir)
+	lock.FrostrootVersion = "0.5.0" // a lock from before 0.6 records no instant
+	lock.SourceDateEpoch = 0
+	if err := recipe.SaveLock(filepath.Join(recipeDir, "frostroot.lock"), lock); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if exitCode := newBuildApp(t, recipeDir, &fakeBootstrapper{}, &stdout, &stderr).Run([]string{"build", "--offline"}); exitCode != exitSuccess {
+		t.Fatalf("offline build: exit code = %d, stderr %s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "every one as locked") || strings.Contains(stdout.String(), "byte for byte") {
+		t.Errorf("stdout should report the rebuild and promise no byte identity:\n%s", stdout.String())
+	}
+	for _, wantText := range []string{"warning: frostroot.lock was written before frostroot 0.6", "not byte-identical", "frostroot build online once more, then frostroot vendor"} {
+		if !strings.Contains(stderr.String(), wantText) {
+			t.Errorf("stderr lacks %q:\n%s", wantText, stderr.String())
+		}
 	}
 }
 

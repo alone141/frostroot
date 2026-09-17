@@ -117,7 +117,7 @@ func TestRenderSudoers(t *testing.T) {
 func TestWriteStageWritesRenderedFiles(t *testing.T) {
 	stageDir := filepath.Join(t.TempDir(), "stage")
 	imageRecipe := sampleRecipe()
-	stage, err := WriteStage(stageDir, imageRecipe, StageOptions{CopyAptLists: true})
+	stage, err := WriteStage(stageDir, imageRecipe, StageOptions{RecordForLock: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,6 +141,9 @@ func TestWriteStageWritesRenderedFiles(t *testing.T) {
 	if stage.AptListsDir != filepath.Join(stageDir, "lists") || stage.SourcesListPath != "" {
 		t.Errorf("AptListsDir = %q, SourcesListPath = %q; want the lists inside the stage and no sources.list", stage.AptListsDir, stage.SourcesListPath)
 	}
+	if stage.ExtendedStatesPath != filepath.Join(stageDir, "extended-states") || stage.AutoMarksPath != "" {
+		t.Errorf("ExtendedStatesPath = %q, AutoMarksPath = %q; want the image's marks downloaded into the stage and none uploaded", stage.ExtendedStatesPath, stage.AutoMarksPath)
+	}
 }
 
 func TestWriteStageWithoutSudo(t *testing.T) {
@@ -153,8 +156,41 @@ func TestWriteStageWithoutSudo(t *testing.T) {
 	if stage.SudoersPath != "" {
 		t.Fatalf("SudoersPath = %q, want no sudoers file staged", stage.SudoersPath)
 	}
-	if stage.AptListsDir != "" {
-		t.Fatalf("AptListsDir = %q, want none when not asked for", stage.AptListsDir)
+	if stage.AptListsDir != "" || stage.ExtendedStatesPath != "" {
+		t.Fatalf("AptListsDir = %q, ExtendedStatesPath = %q; want neither when not recording for a lock", stage.AptListsDir, stage.ExtendedStatesPath)
+	}
+}
+
+func TestWriteStageAutoMarksForOfflineBuilds(t *testing.T) {
+	// An offline build restores apt's auto marks from the lock: the rendered
+	// extended_states is staged and uploaded right before the status
+	// download, after everything else has been installed and provisioned.
+	autoMarks := "Package: libc6\nArchitecture: amd64\nAuto-Installed: 1\n\n"
+	stage, err := WriteStage(t.TempDir(), sampleRecipe(), StageOptions{AutoMarks: autoMarks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(stage.AutoMarksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != autoMarks {
+		t.Errorf("staged auto marks = %q, want the rendered file as given", content)
+	}
+	hooks := CustomizeHooks(stage)
+	if len(hooks) < 2 || hooks[len(hooks)-2] != "upload "+shellQuote(stage.AutoMarksPath)+" /var/lib/apt/extended_states" || !strings.HasPrefix(hooks[len(hooks)-1], "download /var/lib/dpkg/status ") {
+		t.Errorf("hooks = %q, want the upload of the auto marks right before the status download", hooks)
+	}
+	if strings.Contains(strings.Join(hooks, "\n"), "download /var/lib/apt/extended_states") {
+		t.Errorf("hooks = %q, want no download of the marks offline: the lock has them", hooks)
+	}
+
+	without, err := WriteStage(t.TempDir(), sampleRecipe(), StageOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if without.AutoMarksPath != "" || strings.Contains(strings.Join(CustomizeHooks(without), "\n"), "extended_states") {
+		t.Errorf("with no marks to restore nothing is staged or uploaded: %+v", without)
 	}
 }
 
@@ -199,6 +235,7 @@ func TestShellQuoteSurvivesTheShell(t *testing.T) {
 func TestCustomizeHooksOrderAndContent(t *testing.T) {
 	stage := sampleStage("/w/stage")
 	stage.AptListsDir = "/w/stage/lists"
+	stage.ExtendedStatesPath = "/w/stage/extended-states"
 	hooks := CustomizeHooks(stage)
 	wantHooks := []string{
 		"upload '/w/stage/wsl.conf' /etc/wsl.conf",
@@ -207,14 +244,18 @@ func TestCustomizeHooksOrderAndContent(t *testing.T) {
 		// copy-out puts "lists" inside its destination, so the stage
 		// directory is named, not the lists directory.
 		"copy-out /var/lib/apt/lists '/w/stage'",
+		// apt writes extended_states only once it has marked something, and
+		// download fails on a missing file.
+		`test -e "$1/var/lib/apt/extended_states" || touch "$1/var/lib/apt/extended_states"`,
+		"download /var/lib/apt/extended_states '/w/stage/extended-states'",
 		// Last, so that the status reflects everything installed.
 		"download /var/lib/dpkg/status '/w/stage/dpkg-status'",
 	}
 	if !slices.Equal(hooks, wantHooks) {
 		t.Fatalf("CustomizeHooks =\n%s\nwant\n%s", strings.Join(hooks, "\n"), strings.Join(wantHooks, "\n"))
 	}
-	if without := CustomizeHooks(sampleStage("/w/stage")); len(without) != 4 || strings.Contains(strings.Join(without, "\n"), "copy-out") {
-		t.Errorf("without AptListsDir the hooks must not copy the lists out: %q", without)
+	if without := CustomizeHooks(sampleStage("/w/stage")); len(without) != 4 || strings.Contains(strings.Join(without, "\n"), "/var/lib/apt/") {
+		t.Errorf("without AptListsDir and ExtendedStatesPath the hooks must not copy the lists out or touch apt's marks: %q", without)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"frostroot/internal/builder"
 	"frostroot/internal/distro"
@@ -34,10 +35,13 @@ const buildUsageText = `usage: frostroot build [--mirror URL | --offline] [--kee
 
 Build frostroot.lock and dist/<name>-ubuntu-<release>-amd64.tar.gz from frostroot.toml.
 Needs Linux, mmdebstrap, network, and user namespaces or root. Never prompts.
+The image is frozen at the instant the build starts, or at SOURCE_DATE_EPOCH
+when that is set: no file in it is dated later, and the lock records the instant.
 
 With --offline, rebuild the image from frostroot.lock and vendor/debs (see
 frostroot vendor) without the archive: the same packages at the same versions,
-verified against the lock. The lock is read, not written.
+verified against the lock, frozen at the lock's instant, so that every offline
+build of one lock produces the same bytes. The lock is read, not written.
 
 `
 
@@ -194,7 +198,8 @@ func (a *App) reportBuildFailure(err error, interrupted bool, archiveURL, keptWo
 		errors.Is(err, builder.ErrNoKeyring), errors.Is(err, builder.ErrBadWorkRoot),
 		errors.Is(err, builder.ErrUnwritableOutput), errors.Is(err, builder.ErrNoLock),
 		errors.Is(err, builder.ErrLockMismatch), errors.Is(err, builder.ErrPoolIncomplete),
-		errors.Is(err, builder.ErrSourceKey), errors.Is(err, pool.ErrNoChecksums), errors.Is(err, pool.ErrBadLock):
+		errors.Is(err, builder.ErrSourceKey), errors.Is(err, builder.ErrBadSourceDateEpoch),
+		errors.Is(err, pool.ErrNoChecksums), errors.Is(err, pool.ErrBadLock):
 		a.stderrf("frostroot: %v\n", err)
 		return exitUserError
 	default:
@@ -218,10 +223,20 @@ func (a *App) reportBuildSuccess(imageRecipe recipe.Recipe, result builder.Resul
 	if tarballInfo, err := os.Stat(result.TarballPath); err == nil {
 		sizeSuffix = " (" + formatMegabytes(tarballInfo.Size()) + ")"
 	}
-	if result.Offline {
+	frozenAt := formatInstant(result.SourceDateEpoch)
+	switch {
+	case result.Offline && result.Reproducible:
 		a.stdoutf("\nWrote %s%s, rebuilt from frostroot.lock: %s, every one as locked.\n", relativeTarballPath, sizeSuffix, packageCount(result.InstalledPackageCount))
-	} else {
-		a.stdoutf("\nWrote %s%s\nWrote frostroot.lock (%s)\n", relativeTarballPath, sizeSuffix, packageCount(result.InstalledPackageCount))
+		a.stdoutf("Frozen at %s: every offline build of this lock produces this tarball, byte for byte.\n", frozenAt)
+	case result.Offline:
+		a.stdoutf("\nWrote %s%s, rebuilt from frostroot.lock: %s, every one as locked.\n", relativeTarballPath, sizeSuffix, packageCount(result.InstalledPackageCount))
+		a.stderrf("warning: frostroot.lock was written before frostroot 0.6 and records no instant to freeze at, so this tarball\n" +
+			"is not byte-identical with other builds. Run frostroot build online once more, then frostroot vendor, and it will be.\n")
+	default:
+		a.stdoutf("\nWrote %s%s\nWrote frostroot.lock (%s), frozen at %s\n", relativeTarballPath, sizeSuffix, packageCount(result.InstalledPackageCount), frozenAt)
+	}
+	if result.Offline && a.Getenv(builder.SourceDateEpochVariable) != "" {
+		a.stderrf("note: %s is set, but an offline build freezes at the lock's instant and ignores it\n", builder.SourceDateEpochVariable)
 	}
 	a.stdoutf("\nImport it on Windows:\n  wsl --import %s <install-dir> %s\n", imageName, relativeTarballPath)
 	if windowsPath, err := a.WSLPath(result.TarballPath); err == nil && windowsPath != "" {
@@ -241,6 +256,12 @@ func (a *App) reportBuildSuccess(imageRecipe recipe.Recipe, result builder.Resul
 // formatMegabytes formats a size in bytes as whole megabytes, rounded.
 func formatMegabytes(sizeInBytes int64) string {
 	return fmt.Sprintf("%d MB", (sizeInBytes+megabyte/2)/megabyte)
+}
+
+// formatInstant formats seconds since 1970 as a UTC date and time, the way
+// the reproducible-builds convention reads.
+func formatInstant(epoch int64) string {
+	return time.Unix(epoch, 0).UTC().Format("2006-01-02 15:04:05 UTC")
 }
 
 // reportKeptWorkDir tells the user where a kept work directory and its

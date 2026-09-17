@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -151,7 +152,15 @@ func (m *Mmdebstrap) commandLine(spec BootstrapSpec) (args, environment []string
 	args = append(args, spec.SourceLines...)
 	// mmdebstrap assembles the root filesystem in TMPDIR before packing it,
 	// and /tmp may be small or a tmpfs.
-	return args, []string{"TMPDIR=" + temporaryDirFor(spec)}
+	environment = []string{"TMPDIR=" + temporaryDirFor(spec)}
+	if spec.SourceDateEpoch > 0 {
+		// The reproducible-builds convention. mmdebstrap dates no tarball
+		// entry later than this, sorts the entries, writes a gzip header
+		// without a timestamp and removes the files that would carry the
+		// build time; shadow dates /etc/shadow by it too.
+		environment = append(environment, "SOURCE_DATE_EPOCH="+strconv.FormatInt(spec.SourceDateEpoch, 10))
+	}
+	return args, environment
 }
 
 // temporaryDirFor returns the TMPDIR mmdebstrap uses for spec.
