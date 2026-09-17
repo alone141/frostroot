@@ -236,6 +236,10 @@ func (a *App) reportBuildSuccess(imageRecipe recipe.Recipe, result builder.Resul
 	default:
 		a.stdoutf("\nWrote %s%s\nWrote frostroot.lock (%s), frozen at %s\n", relativeTarballPath, sizeSuffix, packageCount(result.InstalledPackageCount), frozenAt)
 	}
+	if result.PythonPackageCount > 0 {
+		a.stdoutf("The image's virtual environment holds %s, on PATH for every login shell: %s\n",
+			packageCount(result.PythonPackageCount), builder.PythonVenvPath)
+	}
 	if result.Offline && a.Getenv(builder.SourceDateEpochVariable) != "" {
 		a.stderrf("note: %s is set, but an offline build freezes at the lock's instant and ignores it\n", builder.SourceDateEpochVariable)
 	}

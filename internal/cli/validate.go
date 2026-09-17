@@ -17,8 +17,12 @@ func (a *App) runValidate(args []string) int {
 	} else if count > 1 {
 		sourcesNote = fmt.Sprintf(", %d extra sources", count)
 	}
-	a.stdoutf("%s: ok (%s, Ubuntu %s %s, %s requested%s)\n", recipeFileName,
-		imageRecipe.Image.Name, imageRecipe.Image.Release, imageRecipe.Image.Arch, packageCount(len(imageRecipe.Packages.Include)), sourcesNote)
+	pythonNote := ""
+	if count := len(imageRecipe.PythonPackages()); count > 0 {
+		pythonNote = fmt.Sprintf(", %d from PyPI", count)
+	}
+	a.stdoutf("%s: ok (%s, Ubuntu %s %s, %s requested%s%s)\n", recipeFileName,
+		imageRecipe.Image.Name, imageRecipe.Image.Release, imageRecipe.Image.Arch, packageCount(len(imageRecipe.Packages.Include)), pythonNote, sourcesNote)
 	return exitSuccess
 }
 

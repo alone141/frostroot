@@ -139,6 +139,14 @@ rm -rf {{shellQuote .WheelsPath}} {{shellQuote .RequirementsPath}}
 	{{range .Packages}}{{shellQuote .}} {{end}}
 {{- end}}
 
+# pip compiles as it installs, and what it writes depends on the pip and the
+# Python of the release: on 20.04 a few hundred caches came out different
+# between two rebuilds of one lock. Recompiling every module with hash-based
+# invalidation makes the caches depend on their sources alone. A module that
+# cannot be compiled is not an error here: nothing imports it during the
+# build, and Python compiles what it needs at import time anyway.
+"$venv"/bin/python -m compileall -q --invalidation-mode checked-hash "$venv" || true
+
 # Every login shell finds the environment, so "python" is the image's python.
 printf 'PATH="%s/bin:$PATH"\n' "$venv" > {{shellQuote .ProfilePath}}
 chmod 0644 {{shellQuote .ProfilePath}}

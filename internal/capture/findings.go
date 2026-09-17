@@ -175,7 +175,7 @@ func (root systemRoot) outsideAptFinding(homeDir string) Finding {
 	items = slices.Compact(items)
 	return Finding{
 		Area: AreaOutsideApt, Count: len(items), Examples: items,
-		Advice: "Not installed by apt, so not in the recipe; reinstall after import, or wait for post-install hooks (roadmap).",
+		Advice: "Not installed by apt, so not in the recipe. Python packages can be named in the recipe's [python] table, which installs them from PyPI into the image's virtual environment; the rest must be reinstalled after import.",
 	}
 }
 
