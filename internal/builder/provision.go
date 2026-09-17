@@ -177,6 +177,15 @@ type Stage struct {
 	// them. mmdebstrap's copy-out puts the directory inside its destination,
 	// so this is <stage>/lists and the hook names the stage directory.
 	AptListsDir string
+	// ExtendedStatesPath is where the image's /var/lib/apt/extended_states,
+	// apt's record of the packages it installed on its own, is downloaded
+	// to, for the auto marks the lock records; empty when the build does not
+	// need them.
+	ExtendedStatesPath string
+	// AutoMarksPath is a rendered extended_states that restores the lock's
+	// auto marks in an offline image, uploaded into it; empty when there is
+	// nothing to restore.
+	AutoMarksPath string
 	// KeyringDir holds the binary signing keys of the recipe's extra
 	// sources, one KeyringFileName each, for mmdebstrap's signed-by on the
 	// host and for upload into the image. KeyNames lists them in order.
@@ -191,9 +200,15 @@ type StageOptions struct {
 	// leave the lines it was given, which name host paths (or, offline, the
 	// local repository).
 	SourceLines []string
-	// CopyAptLists asks for the image's apt indexes to be copied out, which
-	// an online build reads for the lock's checksums.
-	CopyAptLists bool
+	// RecordForLock asks for what an online build reads to write the lock:
+	// the image's apt indexes, copied out for the checksums, and its
+	// extended_states, downloaded for the auto marks.
+	RecordForLock bool
+	// AutoMarks is the extended_states an offline build uploads into the
+	// image, rendered from the lock with RenderExtendedStates; "" uploads
+	// nothing. apt marks no package on its own offline, because every locked
+	// package is asked for by name.
+	AutoMarks string
 	// Keys are the extra sources' signing keys in binary form, by source
 	// name, to stage for apt and upload into the image.
 	Keys map[string][]byte
@@ -209,8 +224,9 @@ func WriteStage(stageDir string, imageRecipe recipe.Recipe, options StageOptions
 		ProvisionScriptPath: filepath.Join(stageDir, "provision.sh"),
 		DpkgStatusPath:      filepath.Join(stageDir, "dpkg-status"),
 	}
-	if options.CopyAptLists {
+	if options.RecordForLock {
 		stage.AptListsDir = filepath.Join(stageDir, "lists")
+		stage.ExtendedStatesPath = filepath.Join(stageDir, "extended-states")
 	}
 	if err := makeDirectoriesWithMode(stageDir, 0o755); err != nil {
 		return Stage{}, err
@@ -230,6 +246,10 @@ func WriteStage(stageDir string, imageRecipe recipe.Recipe, options StageOptions
 	if len(options.SourceLines) > 0 {
 		stage.SourcesListPath = filepath.Join(stageDir, "sources.list")
 		contentByPath[stage.SourcesListPath] = strings.Join(options.SourceLines, "\n") + "\n"
+	}
+	if options.AutoMarks != "" {
+		stage.AutoMarksPath = filepath.Join(stageDir, "auto-marks")
+		contentByPath[stage.AutoMarksPath] = options.AutoMarks
 	}
 	for path, content := range contentByPath {
 		if err := writeStageFile(path, []byte(content)); err != nil {
@@ -291,10 +311,22 @@ func CustomizeHooks(stage Stage) []string {
 		hooks = append(hooks, "upload "+shellQuote(stage.SourcesListPath)+" /etc/apt/sources.list")
 	}
 	hooks = append(hooks, `chroot "$1" /bin/sh -c "$(cat `+shellQuote(stage.ProvisionScriptPath)+`)" `+provisionScriptName)
+	if stage.AutoMarksPath != "" {
+		// upload makes the file root's, mode 0644, as apt's own would be.
+		hooks = append(hooks, "upload "+shellQuote(stage.AutoMarksPath)+" "+aptExtendedStatesPath)
+	}
 	if stage.AptListsDir != "" {
 		// The indexes apt verified; mmdebstrap deletes them in its cleanup,
 		// after the hooks. copy-out puts "lists" inside the destination.
 		hooks = append(hooks, "copy-out /var/lib/apt/lists "+shellQuote(filepath.Dir(stage.AptListsDir)))
+	}
+	if stage.ExtendedStatesPath != "" {
+		// apt writes the file only once it has marked something, and
+		// download fails on a missing file, so an image with no marks gets an
+		// empty one first.
+		hooks = append(hooks,
+			`test -e "$1`+aptExtendedStatesPath+`" || touch "$1`+aptExtendedStatesPath+`"`,
+			"download "+aptExtendedStatesPath+" "+shellQuote(stage.ExtendedStatesPath))
 	}
 	// Last, so that the status reflects everything installed.
 	return append(hooks, "download /var/lib/dpkg/status "+shellQuote(stage.DpkgStatusPath))

@@ -18,14 +18,17 @@ build uses both; two offline builds have one SHA-256.
 
 ## Task 2: builder
 
-- [ ] `Options.SourceDateEpoch`; `chooseEpoch(options, getenv, now,
-      offline lock)`; `Result.SourceDateEpoch`, `Result.Reproducible`.
-- [ ] `extendedstates.go`: `ParseExtendedStates`, `RenderExtendedStates`;
-      the stage's `ExtendedStatesPath`; online hooks (ensure, download) and
-      the `auto` marks in the lock; offline hook (upload the rendered file).
-- [ ] Tests with the fake bootstrapper for every bullet; the fake records
-      its environment and writes an `extended_states`.
-- [ ] `Version = "0.6.0"`.
+- [x] `chooseFrozenInstant(getenv, offline plan, now)` in `epoch.go`;
+      `Result.SourceDateEpoch`, `Result.Reproducible`. No
+      `Options.SourceDateEpoch`: the environment variable is the
+      convention, and nothing else would set it.
+- [x] `extendedstates.go`: `ParseExtendedStates`, `RenderExtendedStates`;
+      the stage's `ExtendedStatesPath` (download) and `AutoMarksPath`
+      (upload); online hooks (ensure, download) and the `auto` marks in the
+      lock; offline hook (upload the rendered file).
+- [x] Tests with the fake bootstrapper for every bullet; the fake writes an
+      `extended_states` and records the spec's epoch.
+- [x] `Version = "0.6.0"`.
 
 ## Task 3: CLI and docs
 
