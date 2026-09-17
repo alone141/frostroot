@@ -44,7 +44,7 @@ func TestEditPreselectsCurrentValues(t *testing.T) {
 	wantDefaults := map[int]string{
 		answerImageName: "cpp-lab", answerRelease: "22.04", answerUserName: "student", answerSudo: "y",
 		answerTimezone: "UTC", answerLocale: "en_US.UTF-8", answerSystemd: "y",
-		answerPackages: "git build-essential cmake", answerOtherPackages: "",
+		answerPackages: "git build-essential cmake", answerOtherPackages: "", answerSources: "", answerPPAs: "",
 	}
 	for position, wantDefault := range wantDefaults {
 		if position >= len(prompt.defaultsOffered) {

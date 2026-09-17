@@ -43,6 +43,8 @@ const (
 	answerSystemd
 	answerPackages
 	answerOtherPackages
+	answerSources
+	answerPPAs
 	answerWrite
 	answerCount
 )
@@ -132,7 +134,7 @@ func TestInitAsksInOrder(t *testing.T) {
 	if exitCode := app.Run([]string{"init"}); exitCode != exitSuccess {
 		t.Fatalf("exit code = %d", exitCode)
 	}
-	wantTopics := []string{"image name", "release", "user name", "sudo", "timezone", "locale", "systemd", "packages", "other packages", "write frostroot.toml"}
+	wantTopics := []string{"image name", "release", "user name", "sudo", "timezone", "locale", "systemd", "packages", "other packages", "apt sources", "other ppas", "write frostroot.toml"}
 	if len(prompt.questionsAsked) != len(wantTopics) {
 		t.Fatalf("questions asked = %q, want one about each of %q", prompt.questionsAsked, wantTopics)
 	}
