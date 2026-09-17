@@ -147,6 +147,33 @@ offline still differ in that file's bytes, not in its meaning.
   a few minutes apart with `sha256sum` agreeing, and the diff against the
   online image reduced to the two cosmetic differences.
 
+## Verification (2026-09-17, build host, mmdebstrap 1.4.3)
+
+The real binary, with the README's own recipe (`cpp-lab`, Ubuntu 22.04,
+`git`, `build-essential`, `cmake`, `Europe/Istanbul`):
+
+- `build`: 208 s, 341 packages, 123 of them `auto = true`,
+  `source_date_epoch = 1789662022` (16:20:22 UTC); the README's lock
+  excerpt is copied from this lock. `vendor`: 74 s, 341 files, 173 MB.
+- `build --offline` at 16:26:51 and again at 16:30:11 (107 s and 110 s):
+  one SHA-256, `86b9e446…318d0`. gzip header `1f8b 0800 0000 0000 0003`.
+  The newest tarball entry is dated the epoch; `/etc/shadow` reads
+  `student:!:20713`, the epoch's day. The image's `extended_states` lists
+  the lock's 123 marks and no others.
+- `SOURCE_DATE_EPOCH=1700000000 frostroot build --offline`: the note about
+  the ignored variable, and the same SHA-256 once more.
+- The lock stripped to its 0.5 shape (no `source_date_epoch`, no `auto`):
+  the warning, a tarball dated the build's own start, another SHA-256.
+- The online image against an offline one: 31394 entries each with an
+  identical listing (names, modes, owners, sizes, dates; on jammy no
+  directory keeps an older date, unlike noble's `lib.usr-is-merged/` in the
+  spike), and two files with other bytes: `/var/lib/apt/extended_states`
+  (the same 123 paragraphs, apt's order online, the lock's offline) and
+  `/var/lib/dpkg/triggers/File` (the same lines, two of them elsewhere).
+- `TestIntegrationOfflineRebuild` with its second offline build, `go test
+  -race ./...`, `go vet` with the integration tag, the Windows cross-build
+  and `golangci-lint`: all clean.
+
 ## Spike results (2026-09-17, build host, mmdebstrap 1.4.3, gzip 1.12)
 
 - Two `build --offline` runs of the v0.4 lock (260 packages) with
