@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"frostroot/internal/deb"
@@ -21,7 +22,7 @@ import (
 )
 
 // Version is the frostroot version recorded in every lockfile.
-const Version = "0.4.0"
+const Version = "0.5.0"
 
 // UbuntuArchiveKeyring is the keyring that verifies the Ubuntu archive's
 // Release files.
@@ -141,15 +142,26 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 			return Result{}, err
 		}
 	}
+	// The keys a build will trust are read before anything else is done.
+	sourceKeys, err := readSourceKeys(options.RecipeDir, imageRecipe.Sources)
+	if err != nil {
+		return Result{}, err
+	}
 	currentUID := os.Getuid()
 	workRoot, err := WorkRoot(getenv, currentUID)
 	if err != nil {
 		return Result{}, err
 	}
+	if len(imageRecipe.Sources) > 0 && strings.ContainsAny(workRoot, " \t[]") {
+		return Result{}, fmt.Errorf("%w: %s contains a space or a bracket, which an apt signed-by path cannot; set XDG_CACHE_HOME to another directory", ErrBadWorkRoot, workRoot)
+	}
 	progress := progressOrDiscard(options.Progress)
+	// The lines the image keeps: keys under /etc/apt/keyrings. The lines
+	// mmdebstrap gets name the staged keys instead, once the stage exists.
+	imageSourceLines := SourceLines(release, options.MirrorURL, imageRecipe.Sources, ImageKeyringDir)
 	bootstrapSpec := BootstrapSpec{
 		Suite:             release.Suite,
-		SourceLines:       release.SourceLines(options.MirrorURL),
+		SourceLines:       imageSourceLines,
 		Include:           PackagesToInstall(imageRecipe.Packages.Include),
 		Arch:              imageRecipe.Image.Arch,
 		InstallRecommends: true,
@@ -199,20 +211,31 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		return result, err
 	}
 
-	stageOptions := StageOptions{CopyAptLists: offline == nil}
+	stageOptions := StageOptions{CopyAptLists: offline == nil, SourceLines: imageSourceLines}
 	if offline != nil {
 		stageOptions.SourceLines = offline.lock.Sources
+	}
+	if len(sourceKeys) > 0 {
+		stageOptions.Keys = map[string][]byte{}
+		for name, key := range sourceKeys {
+			stageOptions.Keys[name] = key.binary
+		}
 	}
 	stage, err := WriteStage(filepath.Join(workDir, "stage"), imageRecipe, stageOptions)
 	if err != nil {
 		return failBuild(err)
 	}
-	if offline != nil {
+	switch {
+	case offline != nil:
 		repositoryDir := filepath.Join(workDir, "pool")
 		if err := stageRepository(offline, repositoryDir, progress); err != nil {
 			return failBuild(err)
 		}
 		bootstrapSpec.SourceLines = []string{"deb [trusted=yes] copy://" + repositoryDir + " ./"}
+	case len(imageRecipe.Sources) > 0:
+		// apt run by mmdebstrap resolves signed-by on the host (see the v0.5
+		// spec's spike), so the lines it gets name the staged keys.
+		bootstrapSpec.SourceLines = SourceLines(release, options.MirrorURL, imageRecipe.Sources, stage.KeyringDir)
 	}
 	bootstrapSpec.CustomizeHooks = CustomizeHooks(stage)
 	bootstrapSpec.TarballPath = filepath.Join(workDir, "image.tar.gz")
@@ -234,7 +257,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		progress.Report(ProgressEvent{Phase: PhaseCheckLock, Kind: EventPhaseFinished})
 	} else {
 		progress.Report(ProgressEvent{Phase: PhaseWriteLock, Kind: EventPhaseStarted})
-		if err := recordChecksums(stage.AptListsDir, installedPackages); err != nil {
+		if err := recordChecksums(stage.AptListsDir, installedPackages, indexOrigins(release, archiveURL, imageRecipe.Sources)); err != nil {
 			return failBuild(err)
 		}
 		requestedPackages := imageRecipe.Packages.Include
@@ -248,9 +271,10 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 			Suite:            release.Suite,
 			Arch:             imageRecipe.Image.Arch,
 			Mirror:           archiveURL,
-			Sources:          bootstrapSpec.SourceLines,
+			Sources:          imageSourceLines,
 			FrostrootVersion: Version,
 			Requested:        requestedPackages,
+			Repositories:     lockRepositories(release, imageRecipe.Sources, sourceKeys),
 			Packages:         installedPackages,
 		}
 		temporaryLockPath, err = writeTemporaryLock(options.RecipeDir, lock)

@@ -63,15 +63,19 @@ func (a *App) runVendor(args []string) int {
 	if *mirrorURL != "" {
 		source = *mirrorURL
 	}
+	if len(lock.Repositories) > 0 {
+		source += fmt.Sprintf(" and %d more", len(lock.Repositories))
+	}
 	run := &vendorRun{
 		poolDir:   filepath.Join(a.RecipeDir, filepath.FromSlash(pool.DebsDirName)),
 		entries:   entries,
-		mirrorURL: source,
+		mirrorURL: *mirrorURL,
+		source:    source,
 		prune:     *prune,
 		fallback:  a.VendorFallback,
 	}
-	if lock.Distro == "ubuntu" && run.fallback == nil {
-		run.fallback = pool.LaunchpadURL
+	if run.fallback == nil {
+		run.fallback = pool.FallbackURL(lock)
 	}
 
 	ctx, stopSignalHandling := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
@@ -154,7 +158,8 @@ func (a *App) reportVendorSuccess(run *vendorRun) {
 type vendorRun struct {
 	poolDir   string
 	entries   []pool.Entry
-	mirrorURL string
+	mirrorURL string // --mirror, or "" for the base URLs the lock records
+	source    string // where the packages come from, for messages
 	prune     bool
 	fallback  func(pool.Entry) string
 	progress  builder.Progress
@@ -167,7 +172,7 @@ type vendorRun struct {
 func (r *vendorRun) do(ctx context.Context) error {
 	report := func(event builder.ProgressEvent) { r.progress.Report(event) }
 	report(builder.ProgressEvent{Phase: builder.PhaseVendorRead, Kind: builder.EventPhaseStarted})
-	report(builder.ProgressEvent{Phase: builder.PhaseVendorRead, Kind: builder.EventLogLine, Line: fmt.Sprintf("%s: %s, %s, from %s", builder.LockFileName, packageCount(len(r.entries)), builder.FormatBytes(pool.TotalSize(r.entries)), r.mirrorURL)})
+	report(builder.ProgressEvent{Phase: builder.PhaseVendorRead, Kind: builder.EventLogLine, Line: fmt.Sprintf("%s: %s, %s, from %s", builder.LockFileName, packageCount(len(r.entries)), builder.FormatBytes(pool.TotalSize(r.entries)), r.source)})
 	report(builder.ProgressEvent{Phase: builder.PhaseVendorRead, Kind: builder.EventPhaseFinished})
 	report(builder.ProgressEvent{Phase: builder.PhaseVendorCheck, Kind: builder.EventPhaseStarted})
 	downloading := false

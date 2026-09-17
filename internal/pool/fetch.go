@@ -52,9 +52,11 @@ func (e *FetchError) Unwrap() error { return e.Err }
 // FetchOptions configure Fetch. Callbacks may be nil; they are called from
 // several goroutines but never concurrently with each other.
 type FetchOptions struct {
-	Dir       string  // the pool directory; created if missing
-	Entries   []Entry // what the pool must hold
-	MirrorURL string  // base URL the entries' URL paths are relative to
+	Dir     string  // the pool directory; created if missing
+	Entries []Entry // what the pool must hold
+	// MirrorURL, when set, replaces the base URL of the archive's entries
+	// (those without a Source); other entries keep their own base URL.
+	MirrorURL string
 	// Fallback returns another URL to try for an entry the mirror does not
 	// have (404), or "" for none. nil means no fallback.
 	Fallback  func(Entry) string
@@ -200,7 +202,11 @@ func (f *fetcher) addProgress(bytesWritten int64) {
 // fetchOne downloads one entry from the mirror, or from the fallback when
 // the mirror has dropped it, and puts it in place.
 func (f *fetcher) fetchOne(ctx context.Context, entry Entry) error {
-	mirrorURL := strings.TrimRight(f.options.MirrorURL, "/") + "/" + entry.URLPath
+	baseURL := entry.BaseURL
+	if entry.Source == "" && f.options.MirrorURL != "" {
+		baseURL = f.options.MirrorURL
+	}
+	mirrorURL := strings.TrimRight(baseURL, "/") + "/" + entry.URLPath
 	sourceURL := mirrorURL
 	err := f.downloadWithRetry(ctx, entry, mirrorURL)
 	if errors.Is(err, ErrNotFound) && f.options.Fallback != nil {

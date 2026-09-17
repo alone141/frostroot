@@ -37,10 +37,14 @@ func entryFor(packageName, version string) Entry {
 		Arch:     "amd64",
 		FileName: fileName,
 		URLPath:  "pool/main/" + packageName[:1] + "/" + packageName + "/" + fileName,
+		BaseURL:  sampleMirror,
 		Size:     int64(len(content)),
 		SHA256:   hex.EncodeToString(digest[:]),
 	}
 }
+
+// sampleMirror is the archive URL sample locks record.
+const sampleMirror = "http://archive.ubuntu.com/ubuntu"
 
 // writeEntry puts the correct file for entry into dir.
 func writeEntry(t *testing.T, dir string, entry Entry) {
@@ -55,11 +59,61 @@ func writeEntry(t *testing.T, dir string, entry Entry) {
 
 // lockFor returns a lock with checksums naming entries.
 func lockFor(entries ...Entry) recipe.Lockfile {
-	lock := recipe.Lockfile{Version: 1, Distro: "ubuntu", Release: "24.04", Suite: "noble", Arch: "amd64", Mirror: "http://archive.ubuntu.com/ubuntu"}
+	lock := recipe.Lockfile{Version: 1, Distro: "ubuntu", Release: "24.04", Suite: "noble", Arch: "amd64", Mirror: sampleMirror}
 	for _, entry := range entries {
-		lock.Packages = append(lock.Packages, recipe.LockPackage{Name: entry.Package, Version: entry.Version, Arch: entry.Arch, SHA256: entry.SHA256, Size: entry.Size, Filename: entry.URLPath})
+		lock.Packages = append(lock.Packages, recipe.LockPackage{Name: entry.Package, Version: entry.Version, Arch: entry.Arch, SHA256: entry.SHA256, Size: entry.Size, Filename: entry.URLPath, Source: entry.Source})
 	}
 	return lock
+}
+
+func TestManifestWithSources(t *testing.T) {
+	fromPPA := entryFor("git", "2")
+	fromPPA.Source, fromPPA.BaseURL = "ppa-git-core-ppa", "https://ppa.launchpadcontent.net/git-core/ppa/ubuntu"
+	fromDocker := entryFor("docker-ce", "3")
+	fromDocker.Source, fromDocker.BaseURL = "docker", "https://download.docker.com/linux/ubuntu"
+	archive := entryFor("curl", "1")
+	lock := lockFor(archive, fromPPA, fromDocker)
+	lock.Repositories = []recipe.LockRepository{
+		{Name: "docker", URL: "https://download.docker.com/linux/ubuntu", Suite: "noble", Components: []string{"stable"}},
+		{Name: "ppa-git-core-ppa", URL: "https://ppa.launchpadcontent.net/git-core/ppa/ubuntu", Suite: "noble", Components: []string{"main"}},
+	}
+	entries, err := Manifest(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(entries, []Entry{archive, fromPPA, fromDocker}) {
+		t.Errorf("Manifest =\n%+v\nwant\n%+v", entries, []Entry{archive, fromPPA, fromDocker})
+	}
+	fallback := FallbackURL(lock)
+	if got := fallback(archive); !strings.HasPrefix(got, "https://launchpad.net/ubuntu/+archive/primary/+files/") {
+		t.Errorf("archive fallback = %q", got)
+	}
+	if got := fallback(fromPPA); got != "https://launchpad.net/~git-core/+archive/ubuntu/ppa/+files/git_2_amd64.deb" {
+		t.Errorf("PPA fallback = %q", got)
+	}
+	if got := fallback(fromDocker); got != "" {
+		t.Errorf("Docker has no fallback, got %q", got)
+	}
+
+	lock.Repositories = lock.Repositories[:1]
+	if _, err := Manifest(lock); !errors.Is(err, ErrBadLock) || !strings.Contains(err.Error(), "ppa-git-core-ppa") {
+		t.Errorf("a package from an undescribed source: %v", err)
+	}
+}
+
+func TestFetchUsesEachEntrysBaseURL(t *testing.T) {
+	archive, fromSource := entryFor("curl", "1"), entryFor("docker-ce", "3")
+	mirror := newFakeMirror(t, archive)
+	vendorServer := newFakeMirror(t, fromSource)
+	fromSource.Source, fromSource.BaseURL = "docker", vendorServer.server.URL
+	options := fetchOptions(t, mirror, archive, fromSource)
+	if _, err := Fetch(context.Background(), options); err != nil {
+		t.Fatal(err)
+	}
+	assertPoolHolds(t, options.Dir, archive, fromSource)
+	if mirror.requestCount() != 1 || vendorServer.requestCount() != 1 {
+		t.Errorf("requests: mirror %d, source %d; want one each: --mirror must not redirect a source's packages", mirror.requestCount(), vendorServer.requestCount())
+	}
 }
 
 // fakeMirror serves fake .deb files by URL path and counts requests.
@@ -112,7 +166,8 @@ func (m *fakeMirror) requestCount() int {
 func noSleep(ctx context.Context, _ time.Duration) bool { return ctx.Err() == nil }
 
 // fetchOptions returns options fetching entries from mirror into a new pool
-// directory.
+// directory. The mirror stands in for the archive, so it overrides the
+// entries' recorded archive URL.
 func fetchOptions(t *testing.T, mirror *fakeMirror, entries ...Entry) FetchOptions {
 	t.Helper()
 	return FetchOptions{Dir: filepath.Join(t.TempDir(), "vendor", "debs"), Entries: entries, MirrorURL: mirror.server.URL, Sleep: noSleep}
