@@ -73,7 +73,7 @@ func Verify(dir string, entries []Entry, onChecked func(checked, total int)) (St
 	}
 	for _, directoryEntry := range directoryEntries {
 		name := directoryEntry.Name()
-		if !directoryEntry.IsDir() && strings.HasSuffix(name, ".deb") && !listed[name] {
+		if !directoryEntry.IsDir() && (strings.HasSuffix(name, ".deb") || strings.HasSuffix(name, ".whl")) && !listed[name] {
 			status.Extra = append(status.Extra, name)
 		}
 	}
@@ -100,7 +100,7 @@ func checkFile(path string, entry Entry) (fileState, error) {
 	if err != nil {
 		return 0, err
 	}
-	if !info.Mode().IsRegular() || info.Size() != entry.Size {
+	if !info.Mode().IsRegular() || (entry.Size > 0 && info.Size() != entry.Size) {
 		return fileCorrupt, nil
 	}
 	_, digest, err := deb.SHA256File(path)
@@ -113,8 +113,9 @@ func checkFile(path string, entry Entry) (fileState, error) {
 	return filePresent, nil
 }
 
-// Prune removes the .deb files in dir that entries do not name and returns
-// their names, sorted. Nothing else in the directory is touched.
+// Prune removes the package files in dir, .deb or .whl, that entries do not
+// name and returns their names, sorted. Nothing else in the directory is
+// touched.
 func Prune(dir string, entries []Entry) ([]string, error) {
 	status, err := Verify(dir, entries, nil)
 	if err != nil {
