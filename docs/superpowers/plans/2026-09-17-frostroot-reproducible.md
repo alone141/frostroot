@@ -11,9 +11,9 @@ build uses both; two offline builds have one SHA-256.
 
 ## Task 1: lock and bootstrap
 
-- [ ] `recipe.Lockfile.SourceDateEpoch`, `recipe.LockPackage.Auto`;
+- [x] `recipe.Lockfile.SourceDateEpoch`, `recipe.LockPackage.Auto`;
       round-trip tests.
-- [ ] `BootstrapSpec.SourceDateEpoch`; `commandLine` adds
+- [x] `BootstrapSpec.SourceDateEpoch`; `commandLine` adds
       `SOURCE_DATE_EPOCH=<n>` to the environment; test.
 
 ## Task 2: builder
