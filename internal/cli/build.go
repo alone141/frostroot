@@ -110,9 +110,10 @@ func (a *App) runBuild(args []string) int {
 		Getenv:    a.Getenv,
 		Offline:   *offline,
 	}
-	phases := builder.Phases()
+	hasPython := len(imageRecipe.PythonPackages()) > 0
+	phases := builder.Phases(hasPython)
 	if *offline {
-		phases = builder.OfflinePhases()
+		phases = builder.OfflinePhases(hasPython)
 	}
 	screen := tui.BuildScreen(imageRecipe.Image.Name, imageRecipe.Image.Release, release.Suite, imageRecipe.Image.Arch, archiveURL, phases)
 	if a.useFullScreen(*plain) {

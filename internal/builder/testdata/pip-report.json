@@ -1,0 +1,79 @@
+{
+ "environment": {
+  "implementation_name": "cpython",
+  "implementation_version": "3.12.3",
+  "os_name": "posix",
+  "platform_machine": "x86_64",
+  "platform_python_implementation": "CPython",
+  "platform_release": "6.18.33.2-microsoft-standard-WSL2",
+  "platform_system": "Linux",
+  "platform_version": "#1 SMP PREEMPT_DYNAMIC Thu Jun 18 21:54:43 UTC 2026",
+  "python_full_version": "3.12.3",
+  "python_version": "3.12",
+  "sys_platform": "linux"
+ },
+ "install": [
+  {
+   "download_info": {
+    "archive_info": {
+     "hash": "sha256=b7e18c623bb5c95acb3b3328861272816ba199fb531921c5d6d0b675f1fde9e3",
+     "hashes": {
+      "sha256": "b7e18c623bb5c95acb3b3328861272816ba199fb531921c5d6d0b675f1fde9e3"
+     }
+    },
+    "url": "https://files.pythonhosted.org/packages/65/af/aa78d1a88805456e212b65461354cd943197fb9acecc4c90fd12295123a3/numpy-2.5.3-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+   },
+   "is_direct": false,
+   "is_yanked": false,
+   "metadata": {
+    "metadata_version": "2.4",
+    "name": "numpy",
+    "requires_python": ">=3.12",
+    "version": "2.5.3"
+   },
+   "requested": true
+  },
+  {
+   "download_info": {
+    "archive_info": {
+     "hash": "sha256=a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427",
+     "hashes": {
+      "sha256": "a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427"
+     }
+    },
+    "url": "https://files.pythonhosted.org/packages/ec/57/56b9bcc3c9c6a792fcbaf139543cee77261f3651ca9da0c93f5c1221264b/python_dateutil-2.9.0.post0-py2.py3-none-any.whl"
+   },
+   "is_direct": false,
+   "is_yanked": false,
+   "metadata": {
+    "metadata_version": "2.1",
+    "name": "python-dateutil",
+    "requires_python": "!=3.0.*,!=3.1.*,!=3.2.*,>=2.7",
+    "version": "2.9.0.post0"
+   },
+   "requested": false
+  },
+  {
+   "download_info": {
+    "archive_info": {
+     "hash": "sha256=4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274",
+     "hashes": {
+      "sha256": "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274"
+     }
+    },
+    "url": "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl"
+   },
+   "is_direct": false,
+   "is_yanked": false,
+   "metadata": {
+    "metadata_version": "2.1",
+    "name": "six",
+    "requires_python": ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*",
+    "version": "1.17.0"
+   },
+   "requested": false
+  }
+ ],
+ "pip_version": "24.0",
+ "version": "1"
+}

@@ -45,7 +45,7 @@ func renderProvisionScript(t *testing.T, imageRecipe recipe.Recipe) string {
 }
 
 func TestPackagesToInstallAddsEssentialsOnce(t *testing.T) {
-	packages := PackagesToInstall([]string{"git", "sudo"})
+	packages := PackagesToInstall(recipe.Recipe{Packages: recipe.Packages{Include: []string{"git", "sudo"}}})
 	for _, wantPackage := range []string{"git", "sudo", "systemd", "systemd-sysv", "dbus", "locales", "tzdata", "passwd", "ca-certificates"} {
 		if !slices.Contains(packages, wantPackage) {
 			t.Errorf("PackagesToInstall = %q, missing %s", packages, wantPackage)
@@ -58,12 +58,39 @@ func TestPackagesToInstallAddsEssentialsOnce(t *testing.T) {
 }
 
 func TestPackagesToInstallKeepsRequestedOrderFirst(t *testing.T) {
-	packages := PackagesToInstall([]string{"cmake", "git", "cmake"})
+	packages := PackagesToInstall(recipe.Recipe{Packages: recipe.Packages{Include: []string{"cmake", "git", "cmake"}}})
 	if len(packages) < 2 || packages[0] != "cmake" || packages[1] != "git" || slices.Contains(packages[2:], "cmake") {
 		t.Errorf("PackagesToInstall = %q, want cmake, git, then the essentials", packages)
 	}
-	if got := PackagesToInstall(nil); !slices.Equal(got, EssentialPackages) {
-		t.Errorf("PackagesToInstall(nil) = %q, want exactly the essential packages", got)
+	if got := PackagesToInstall(recipe.Recipe{}); !slices.Equal(got, EssentialPackages) {
+		t.Errorf("PackagesToInstall(empty recipe) = %q, want exactly the essential packages", got)
+	}
+}
+
+func TestPackagesToInstallAddsWhatAVirtualEnvironmentNeeds(t *testing.T) {
+	withoutPython := PackagesToInstall(recipe.Recipe{Packages: recipe.Packages{Include: []string{"git"}}})
+	for _, unwanted := range PythonPackages {
+		if slices.Contains(withoutPython, unwanted) {
+			t.Errorf("PackagesToInstall = %q, want no %s for a recipe without python packages", withoutPython, unwanted)
+		}
+	}
+
+	imageRecipe := recipe.Recipe{
+		Packages: recipe.Packages{Include: []string{"git"}},
+		Python:   &recipe.Python{Include: []string{"numpy"}},
+	}
+	packages := PackagesToInstall(imageRecipe)
+	for _, wantPackage := range PythonPackages {
+		if !slices.Contains(packages, wantPackage) {
+			t.Errorf("PackagesToInstall = %q, missing %s", packages, wantPackage)
+		}
+	}
+	if packages[0] != "git" {
+		t.Errorf("PackagesToInstall = %q, want the requested packages first", packages)
+	}
+	// numpy is not an apt package: it must never reach mmdebstrap.
+	if slices.Contains(packages, "numpy") {
+		t.Errorf("PackagesToInstall = %q, want no PyPI name in the apt list", packages)
 	}
 }
 
