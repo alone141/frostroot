@@ -164,6 +164,38 @@ func TestLockHasChecksums(t *testing.T) {
 	}
 }
 
+func TestLockRecordsTheFrozenInstantAndAutoMarks(t *testing.T) {
+	// frostroot 0.6 records the instant the image is frozen at and which
+	// packages apt installed on its own; an offline build reuses both.
+	original := sampleLockWithChecksums()
+	original.FrostrootVersion = "0.6.0"
+	original.SourceDateEpoch = 1758067200
+	original.Packages[1].Auto = true
+	path, content := saveAndRead(t, original)
+	if strings.Count(content, "source_date_epoch = 1758067200\n") != 1 || strings.Count(content, "auto = true\n") != 1 {
+		t.Errorf("saved lock should record the instant once and one auto mark:\n%s", content)
+	}
+	if !strings.Contains(content, "name = 'libc6'\nversion = '2.35-0ubuntu3.8'\narch = 'amd64'\nauto = true\n") {
+		t.Errorf("auto should follow the package's arch line:\n%s", content)
+	}
+	reloaded, err := LoadLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(reloaded, original) {
+		t.Fatalf("round trip =\n%+v\nwant\n%+v", reloaded, original)
+	}
+
+	// Without them, neither key is written, so older locks and newer ones
+	// differ only where they must.
+	_, without := saveAndRead(t, sampleLockWithChecksums())
+	for _, unwantedKey := range []string{"source_date_epoch", "auto"} {
+		if strings.Contains(without, unwantedKey) {
+			t.Errorf("a lock without %s should not mention it:\n%s", unwantedKey, without)
+		}
+	}
+}
+
 func TestLoadLockAcceptsOlderLockWithoutChecksums(t *testing.T) {
 	// A lock written by frostroot 0.3 has name, version and arch only. It
 	// must still load, so validate and tests keep working on it; vendor is

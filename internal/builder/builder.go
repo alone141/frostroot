@@ -57,8 +57,12 @@ type BootstrapSpec struct {
 	// Trusted means the source lines carry [trusted=yes] and no keyring is
 	// involved: an offline build's local repository, whose files frostroot
 	// verified against the lock itself.
-	Trusted  bool
-	Progress Progress // receives phases and output lines; nil discards them
+	Trusted bool
+	// SourceDateEpoch is the instant, in seconds since 1970, that every
+	// timestamp in the image is clamped to, passed to mmdebstrap as
+	// SOURCE_DATE_EPOCH; 0 leaves its environment alone.
+	SourceDateEpoch int64
+	Progress        Progress // receives phases and output lines; nil discards them
 }
 
 // Bootstrapper builds an image tarball. Implementations write the tarball to
