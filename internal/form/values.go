@@ -7,6 +7,7 @@ import (
 
 	"frostroot/internal/distro"
 	"frostroot/internal/recipe"
+	"frostroot/internal/sources"
 )
 
 // Values are the answers, by field key. Input and Select answers are strings,
@@ -31,13 +32,22 @@ func (v Values) Strings(key string) []string {
 	return list
 }
 
+// Sources returns the source list stored under key, or nil.
+func (v Values) Sources(key string) []recipe.Source {
+	list, _ := v[key].([]recipe.Source)
+	return list
+}
+
 // Clone returns a copy that shares no lists with v.
 func (v Values) Clone() Values {
 	cloned := make(Values, len(v))
 	for key, value := range v {
-		if list, isList := value.([]string); isList {
+		switch list := value.(type) {
+		case []string:
 			cloned[key] = slices.Clone(list)
-		} else {
+		case []recipe.Source:
+			cloned[key] = slices.Clone(list)
+		default:
 			cloned[key] = value
 		}
 	}
@@ -46,7 +56,7 @@ func (v Values) Clone() Values {
 
 // Defaults returns the answers init starts from: a lab image on the newest
 // release, a student user with sudo, the host's timezone, systemd on, no
-// packages.
+// packages, no extra sources.
 func Defaults(host Host) Values {
 	return Values{
 		KeyImageName:     "lab",
@@ -58,14 +68,19 @@ func Defaults(host Host) Values {
 		KeySystemd:       true,
 		KeyPackages:      []string{},
 		KeyOtherPackages: "",
+		KeySources:       []string{},
+		KeyPPAs:          "",
 	}
 }
 
 // FromRecipe returns the answers that describe imageRecipe, for edit.
 // Packages in the catalog become selections; the rest go to the free-text
-// field. The recipe's own package order is remembered so ToRecipe can keep it.
+// field. Sources likewise: catalog entries become selections, PPAs go to
+// the PPA field, and anything else is kept as it is. The recipe's own order
+// is remembered so ToRecipe can keep it.
 func FromRecipe(imageRecipe recipe.Recipe) Values {
 	catalogNames, otherNames := SplitPackages(imageRecipe.Packages.Include)
+	catalogSources, ppas := SplitSources(imageRecipe.Sources)
 	timezone := imageRecipe.Locale.Timezone
 	if timezone == "" {
 		timezone = "UTC"
@@ -84,7 +99,10 @@ func FromRecipe(imageRecipe recipe.Recipe) Values {
 		KeySystemd:         imageRecipe.WSL.Systemd,
 		KeyPackages:        catalogNames,
 		KeyOtherPackages:   strings.Join(otherNames, " "),
+		KeySources:         catalogSources,
+		KeyPPAs:            strings.Join(ppas, " "),
 		keyOriginalInclude: slices.Clone(imageRecipe.Packages.Include),
+		keyOriginalSources: slices.Clone(imageRecipe.Sources),
 	}
 }
 
@@ -104,10 +122,20 @@ func ToRecipe(values Values) recipe.Recipe {
 		Packages: recipe.Packages{
 			Include: MergePackages(values.Strings(KeyPackages), values.String(KeyOtherPackages), values.Strings(keyOriginalInclude)),
 		},
+		Sources: MergeSources(values.Strings(KeySources), values.String(KeyPPAs), values.Sources(keyOriginalSources), releaseSuite(values.String(KeyRelease))),
 	}
 }
 
-// Summary describes the answers in four lines, for the page before the
+// releaseSuite returns the code name of a release, or the release text
+// itself when it is not one frostroot knows; Validate reports that.
+func releaseSuite(release string) string {
+	if known, err := distro.Lookup(release, distro.SupportedArch); err == nil {
+		return known.Suite
+	}
+	return release
+}
+
+// Summary describes the answers in a few lines, for the page before the
 // recipe is written.
 func Summary(values Values) string {
 	sudo := "no sudo"
@@ -123,12 +151,77 @@ func Summary(values Values) string {
 	if len(packages) > 0 {
 		packagesText = strings.Join(packages, " ")
 	}
+	sourcesText := "Ubuntu's archive only"
+	if extra := MergeSources(values.Strings(KeySources), values.String(KeyPPAs), values.Sources(keyOriginalSources), releaseSuite(values.String(KeyRelease))); len(extra) > 0 {
+		var names []string
+		for _, source := range extra {
+			names = append(names, sources.Describe(source))
+		}
+		sourcesText = strings.Join(names, ", ")
+	}
 	return strings.Join([]string{
 		fmt.Sprintf("Image     %s, Ubuntu %s %s", values.String(KeyImageName), values.String(KeyRelease), distro.SupportedArch),
 		fmt.Sprintf("User      %s, %s", values.String(KeyUserName), sudo),
 		fmt.Sprintf("System    %s, %s, %s", values.String(KeyTimezone), values.String(KeyLocale), systemd),
 		fmt.Sprintf("Packages  %s", packagesText),
+		fmt.Sprintf("Sources   %s", sourcesText),
 	}, "\n")
+}
+
+// SplitSources divides a recipe's sources into catalog entry names, PPAs
+// as "owner/name", and the rest (hand-written sources), each in recipe
+// order.
+func SplitSources(recipeSources []recipe.Source) (catalogNames, ppas []string) {
+	for _, source := range recipeSources {
+		if _, isCatalog := sources.Lookup(source.Name); isCatalog {
+			catalogNames = append(catalogNames, source.Name)
+		} else if owner, name, isPPA := sources.PPAOf(source.URL); isPPA && source.Name == sources.PPA(owner, name).Name {
+			ppas = append(ppas, owner+"/"+name)
+		}
+	}
+	return catalogNames, ppas
+}
+
+// MergeSources returns the source list a recipe should carry: the
+// hand-written sources of the original recipe, the selected catalog entries
+// resolved for the release, and the PPAs typed, once each by name. Sources
+// that were in the original recipe keep their place and their fields (a
+// catalog entry the user edited by hand stays as edited); new ones follow.
+func MergeSources(selected []string, ppasText string, original []recipe.Source, releaseSuite string) []recipe.Source {
+	var wanted []recipe.Source
+	for _, name := range selected {
+		if entry, isCatalog := sources.Lookup(name); isCatalog {
+			wanted = append(wanted, entry.Source(releaseSuite))
+		}
+	}
+	for _, ppa := range splitPackageList(ppasText) {
+		if owner, name, err := sources.ParsePPA(ppa); err == nil {
+			wanted = append(wanted, sources.PPA(owner, name))
+		}
+	}
+	wantedByName := map[string]bool{}
+	for _, source := range wanted {
+		wantedByName[source.Name] = true
+	}
+	var merged []recipe.Source
+	listed := map[string]bool{}
+	for _, source := range original {
+		_, isCatalog := sources.Lookup(source.Name)
+		owner, name, isPPA := sources.PPAOf(source.URL)
+		isRecognized := isCatalog || (isPPA && source.Name == sources.PPA(owner, name).Name)
+		if (isRecognized && !wantedByName[source.Name]) || listed[source.Name] {
+			continue // deselected, or a duplicate
+		}
+		listed[source.Name] = true
+		merged = append(merged, source)
+	}
+	for _, source := range wanted {
+		if !listed[source.Name] {
+			listed[source.Name] = true
+			merged = append(merged, source)
+		}
+	}
+	return merged
 }
 
 // MergePackages returns the package list a recipe should carry: every

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"frostroot/internal/recipe"
+	"frostroot/internal/sources"
 )
 
 // fakeHost returns a Host whose files are the given map; anything else does
@@ -204,6 +205,96 @@ func TestMergePackages(t *testing.T) {
 				t.Errorf("MergePackages = %q, want %q", got, testCase.want)
 			}
 		})
+	}
+}
+
+func TestSourcesFieldsAndValidators(t *testing.T) {
+	fieldsByKey := map[string]Field{}
+	for _, field := range Fields(noHost) {
+		fieldsByKey[field.Key] = field
+	}
+	if fieldsByKey[KeySources].Page != PageSources || fieldsByKey[KeyPPAs].Page != PageSources {
+		t.Error("the source fields belong on the Sources page")
+	}
+	if len(fieldsByKey[KeySources].Options) != len(sources.Catalog()) {
+		t.Errorf("the sources field offers %d options, want the whole catalog", len(fieldsByKey[KeySources].Options))
+	}
+	for value, valid := range map[string]bool{"": true, "deadsnakes/ppa git-core/ppa": true, "ppa:deadsnakes/ppa, x/y": true, "deadsnakes": false, "Dead/ppa": false} {
+		if err := fieldsByKey[KeyPPAs].Validate(value); (err == nil) != valid {
+			t.Errorf("ppas.Validate(%q) = %v, want valid=%v", value, err, valid)
+		}
+	}
+}
+
+func TestFromRecipeSplitsSources(t *testing.T) {
+	custom := recipe.Source{Name: "corp", URL: "https://apt.corp.example/ubuntu", Key: "keys/corp.asc"}
+	imageRecipe := recipe.Recipe{Sources: []recipe.Source{
+		sources.PPA("deadsnakes", "ppa"), custom, {Name: "docker", URL: "https://download.docker.com/linux/ubuntu", Components: []string{"stable"}, Key: "keys/docker.asc"},
+	}}
+	values := FromRecipe(imageRecipe)
+	if got := values.Strings(KeySources); !slices.Equal(got, []string{"docker"}) {
+		t.Errorf("catalog selections = %q", got)
+	}
+	if got := values.String(KeyPPAs); got != "deadsnakes/ppa" {
+		t.Errorf("ppas = %q", got)
+	}
+	if got := values.Sources(keyOriginalSources); !reflect.DeepEqual(got, imageRecipe.Sources) {
+		t.Errorf("original sources = %+v", got)
+	}
+	cloned := values.Clone()
+	cloned.Sources(keyOriginalSources)[0].Name = "changed"
+	if values.Sources(keyOriginalSources)[0].Name != "ppa-deadsnakes-ppa" {
+		t.Error("Clone must copy source lists")
+	}
+}
+
+func TestMergeSources(t *testing.T) {
+	docker, _ := sources.Lookup("docker")
+	llvm, _ := sources.Lookup("llvm")
+	custom := recipe.Source{Name: "corp", URL: "https://apt.corp.example/ubuntu", Key: "keys/corp.asc"}
+	editedDocker := recipe.Source{Name: "docker", URL: "https://mirror.example/docker", Components: []string{"stable"}, Key: "keys/docker.asc"}
+	testCases := []struct {
+		name     string
+		selected []string
+		ppas     string
+		original []recipe.Source
+		want     []recipe.Source
+	}{
+		{name: "nothing", want: nil},
+		{name: "catalog entries resolved for the release", selected: []string{"llvm", "docker"}, want: []recipe.Source{llvm.Source("jammy"), docker.Source("jammy")}},
+		{name: "ppas parsed and deduplicated", ppas: "deadsnakes/ppa, ppa:deadsnakes/ppa git-core/ppa", want: []recipe.Source{sources.PPA("deadsnakes", "ppa"), sources.PPA("git-core", "ppa")}},
+		{name: "custom sources kept, deselected dropped, order kept", selected: []string{"docker"}, original: []recipe.Source{llvm.Source("jammy"), custom, editedDocker}, want: []recipe.Source{custom, editedDocker}},
+		{name: "new selections follow the originals", selected: []string{"docker", "llvm"}, ppas: "git-core/ppa", original: []recipe.Source{custom, docker.Source("jammy")}, want: []recipe.Source{custom, docker.Source("jammy"), llvm.Source("jammy"), sources.PPA("git-core", "ppa")}},
+		{name: "unknown selection ignored", selected: []string{"nope"}, want: nil},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := MergeSources(testCase.selected, testCase.ppas, testCase.original, "jammy")
+			if !reflect.DeepEqual(got, testCase.want) {
+				t.Errorf("MergeSources =\n%+v\nwant\n%+v", got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestToRecipeResolvesSourcesForTheRelease(t *testing.T) {
+	values := Defaults(noHost)
+	values[KeyRelease] = "22.04"
+	values[KeySources] = []string{"llvm"}
+	values[KeyPPAs] = "deadsnakes/ppa"
+	imageRecipe := ToRecipe(values)
+	if len(imageRecipe.Sources) != 2 || imageRecipe.Sources[0].URL != "https://apt.llvm.org/jammy" || imageRecipe.Sources[0].Suite != "llvm-toolchain-jammy" || imageRecipe.Sources[1].Name != "ppa-deadsnakes-ppa" {
+		t.Errorf("Sources = %+v", imageRecipe.Sources)
+	}
+	if problems := recipe.Validate(imageRecipe); len(problems) != 0 {
+		t.Errorf("Validate = %q", problems)
+	}
+	summary := Summary(values)
+	if !strings.Contains(summary, "Sources   LLVM, PPA deadsnakes/ppa") {
+		t.Errorf("summary lacks the sources line:\n%s", summary)
+	}
+	if plain := Summary(Defaults(noHost)); !strings.Contains(plain, "Sources   Ubuntu's archive only") {
+		t.Errorf("summary without sources:\n%s", plain)
 	}
 }
 
