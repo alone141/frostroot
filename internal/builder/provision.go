@@ -168,19 +168,39 @@ func RenderProvisionScript(imageRecipe recipe.Recipe) (string, error) {
 type Stage struct {
 	WSLConfPath         string // rendered /etc/wsl.conf, uploaded into the image
 	SudoersPath         string // rendered sudoers drop-in; empty when the user gets no sudo
+	SourcesListPath     string // rendered /etc/apt/sources.list; only an offline build uploads one
 	ProvisionScriptPath string // rendered provision script, run inside the image
 	DpkgStatusPath      string // where the image's dpkg status file is downloaded to
+	// AptListsDir is where the image's /var/lib/apt/lists is copied to, for
+	// the checksums the lock records; empty when the build does not need
+	// them. mmdebstrap's copy-out puts the directory inside its destination,
+	// so this is <stage>/lists and the hook names the stage directory.
+	AptListsDir string
+}
+
+// StageOptions say what WriteStage renders besides the provisioning files.
+type StageOptions struct {
+	// SourceLines, when set, are written as /etc/apt/sources.list for the
+	// image. An offline build needs this: mmdebstrap would otherwise leave
+	// the local repository's line in the image.
+	SourceLines []string
+	// CopyAptLists asks for the image's apt indexes to be copied out, which
+	// an online build reads for the lock's checksums.
+	CopyAptLists bool
 }
 
 // WriteStage renders every provisioning file for imageRecipe into stageDir.
 // This is the only code that produces them; the hooks only place and run
 // them. Modes are set explicitly because the provision hook reads its script
 // from inside mmdebstrap's user namespace, where it is "other" to these files.
-func WriteStage(stageDir string, imageRecipe recipe.Recipe) (Stage, error) {
+func WriteStage(stageDir string, imageRecipe recipe.Recipe, options StageOptions) (Stage, error) {
 	stage := Stage{
 		WSLConfPath:         filepath.Join(stageDir, "wsl.conf"),
 		ProvisionScriptPath: filepath.Join(stageDir, "provision.sh"),
 		DpkgStatusPath:      filepath.Join(stageDir, "dpkg-status"),
+	}
+	if options.CopyAptLists {
+		stage.AptListsDir = filepath.Join(stageDir, "lists")
 	}
 	if err := makeDirectoriesWithMode(stageDir, 0o755); err != nil {
 		return Stage{}, err
@@ -196,6 +216,10 @@ func WriteStage(stageDir string, imageRecipe recipe.Recipe) (Stage, error) {
 	if sudoers := RenderSudoers(imageRecipe); sudoers != "" {
 		stage.SudoersPath = filepath.Join(stageDir, "sudoers")
 		contentByPath[stage.SudoersPath] = sudoers
+	}
+	if len(options.SourceLines) > 0 {
+		stage.SourcesListPath = filepath.Join(stageDir, "sources.list")
+		contentByPath[stage.SourcesListPath] = strings.Join(options.SourceLines, "\n") + "\n"
 	}
 	for path, content := range contentByPath {
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -218,17 +242,23 @@ func shellQuote(value string) string {
 
 // CustomizeHooks returns the mmdebstrap --customize-hook arguments for stage,
 // in order. Every hook fails the build on error. mmdebstrap splits the
-// arguments of upload and download with shellwords, so quoting host paths is
-// correct there too. The provision script is read from the stage directory
-// rather than copied into the image, so nothing is left behind.
+// arguments of upload, download and copy-out with shellwords, so quoting host
+// paths is correct there too. The provision script is read from the stage
+// directory rather than copied into the image, so nothing is left behind.
 func CustomizeHooks(stage Stage) []string {
 	hooks := []string{"upload " + shellQuote(stage.WSLConfPath) + " /etc/wsl.conf"}
 	if stage.SudoersPath != "" {
 		hooks = append(hooks, "upload "+shellQuote(stage.SudoersPath)+" "+sudoersDropInPath)
 	}
-	return append(hooks,
-		`chroot "$1" /bin/sh -c "$(cat `+shellQuote(stage.ProvisionScriptPath)+`)" `+provisionScriptName,
-		// Last, so that the status reflects everything installed.
-		"download /var/lib/dpkg/status "+shellQuote(stage.DpkgStatusPath),
-	)
+	if stage.SourcesListPath != "" {
+		hooks = append(hooks, "upload "+shellQuote(stage.SourcesListPath)+" /etc/apt/sources.list")
+	}
+	hooks = append(hooks, `chroot "$1" /bin/sh -c "$(cat `+shellQuote(stage.ProvisionScriptPath)+`)" `+provisionScriptName)
+	if stage.AptListsDir != "" {
+		// The indexes apt verified; mmdebstrap deletes them in its cleanup,
+		// after the hooks. copy-out puts "lists" inside the destination.
+		hooks = append(hooks, "copy-out /var/lib/apt/lists "+shellQuote(filepath.Dir(stage.AptListsDir)))
+	}
+	// Last, so that the status reflects everything installed.
+	return append(hooks, "download /var/lib/dpkg/status "+shellQuote(stage.DpkgStatusPath))
 }

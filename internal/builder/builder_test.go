@@ -10,6 +10,9 @@ import (
 	"syscall"
 	"testing"
 
+	"frostroot/internal/deb"
+	"frostroot/internal/deb/debtest"
+	"frostroot/internal/pool"
 	"frostroot/internal/recipe"
 )
 
@@ -17,12 +20,35 @@ import (
 const sampleDpkgStatus = "Package: libc6\nStatus: install ok installed\nArchitecture: amd64\nVersion: 2.35-0ubuntu3.8\n\n" +
 	"Package: git\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1:2.34.1-1ubuntu1.11\n"
 
-// fakeBootstrapper produces the same two files the real bootstrapper does: a
-// tarball at TarballPath and a dpkg status file wherever the download hook
-// says. It does not run hooks.
+// Checksums the sample apt indexes record for the sample packages.
+const (
+	sampleGitSHA256   = "af7af42226d21bcbf87cf62a9e158bd5dfbd051ebbde8818ca441dc8085f67af"
+	sampleLibc6SHA256 = "af36c7ac770770fe3d3c10e85d6bc538e76e57570ba7db7d397fb9f654783ef3"
+)
+
+// sampleAptLists returns the Packages indexes a jammy bootstrap leaves in
+// /var/lib/apt/lists, by file name, for the sample packages: git in the
+// -updates pocket, libc6 in the release pocket.
+func sampleAptLists() map[string]string {
+	return map[string]string{
+		"archive.ubuntu.com_ubuntu_dists_jammy_main_binary-amd64_Packages": "Package: libc6\nArchitecture: amd64\nVersion: 2.35-0ubuntu3.8\nPriority: required\n" +
+			"Filename: pool/main/g/glibc/libc6_2.35-0ubuntu3.8_amd64.deb\nSize: 3235712\nSHA256: " + sampleLibc6SHA256 + "\n\n" +
+			"Package: git\nArchitecture: amd64\nVersion: 1:2.34.1-1ubuntu1\nFilename: pool/main/g/git/git_1%3a2.34.1-1ubuntu1_amd64.deb\nSize: 3100000\nSHA256: 0000000000000000000000000000000000000000000000000000000000000000\n",
+		"archive.ubuntu.com_ubuntu_dists_jammy-updates_main_binary-amd64_Packages": "Package: git\nArchitecture: amd64\nVersion: 1:2.34.1-1ubuntu1.11\n" +
+			"Filename: pool/main/g/git/git_1%3a2.34.1-1ubuntu1.11_amd64.deb\nSize: 3165964\nSHA256: " + sampleGitSHA256 + "\n",
+		"archive.ubuntu.com_ubuntu_dists_jammy-updates_InRelease": "Origin: Ubuntu\n",
+	}
+}
+
+// fakeBootstrapper produces the files the real bootstrapper does: a tarball
+// at TarballPath, a dpkg status file where the download hook says, and, when
+// a copy-out hook asks for the apt lists, a lists directory. It does not run
+// hooks.
 type fakeBootstrapper struct {
-	runErr       error  // returned by Run instead of producing files
-	dpkgStatus   string // written as the status file; defaults to sampleDpkgStatus
+	runErr       error             // returned by Run instead of producing files
+	dpkgStatus   string            // written as the status file; defaults to sampleDpkgStatus
+	aptLists     map[string]string // written as the lists directory; defaults to sampleAptLists()
+	skipAptLists bool              // leave no lists directory even when asked
 	skipTarball  bool
 	emptyTarball bool // mmdebstrap creates its output file before it starts
 
@@ -35,7 +61,7 @@ func (f *fakeBootstrapper) Run(_ context.Context, spec BootstrapSpec) error {
 	f.runCount++
 	f.lastSpec = spec
 	f.stageFilesPresent = map[string]bool{}
-	for _, stageFileName := range []string{"wsl.conf", "sudoers", "provision.sh"} {
+	for _, stageFileName := range []string{"wsl.conf", "sudoers", "provision.sh", "sources.list"} {
 		_, err := os.Stat(filepath.Join(spec.WorkDir, "stage", stageFileName))
 		f.stageFilesPresent[stageFileName] = err == nil
 	}
@@ -52,19 +78,40 @@ func (f *fakeBootstrapper) Run(_ context.Context, spec BootstrapSpec) error {
 			return err
 		}
 	}
+	if listsParent := hookArgument(spec.CustomizeHooks, "copy-out /var/lib/apt/lists "); listsParent != "" && !f.skipAptLists {
+		aptLists := f.aptLists
+		if aptLists == nil {
+			aptLists = sampleAptLists()
+		}
+		if err := writeAptLists(filepath.Join(listsParent, "lists"), aptLists); err != nil {
+			return err
+		}
+	}
 	dpkgStatus := f.dpkgStatus
 	if dpkgStatus == "" {
 		dpkgStatus = sampleDpkgStatus
 	}
-	return os.WriteFile(dpkgStatusPathFromHooks(spec.CustomizeHooks), []byte(dpkgStatus), 0o644)
+	return os.WriteFile(hookArgument(spec.CustomizeHooks, "download /var/lib/dpkg/status "), []byte(dpkgStatus), 0o644)
 }
 
-// dpkgStatusPathFromHooks finds where the download hook writes the status
-// file, the way mmdebstrap would.
-func dpkgStatusPathFromHooks(hooks []string) string {
-	const downloadPrefix = "download /var/lib/dpkg/status "
+// writeAptLists writes index files by name into listsDir, as copy-out would.
+func writeAptLists(listsDir string, filesByName map[string]string) error {
+	if err := os.MkdirAll(listsDir, 0o755); err != nil {
+		return err
+	}
+	for name, content := range filesByName {
+		if err := os.WriteFile(filepath.Join(listsDir, name), []byte(content), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// hookArgument finds the single-quoted host path following prefix in one of
+// the hooks, the way mmdebstrap's shellwords would read it, or "".
+func hookArgument(hooks []string, prefix string) string {
 	for _, hook := range hooks {
-		if quotedPath, isDownload := strings.CutPrefix(hook, downloadPrefix); isDownload {
+		if quotedPath, found := strings.CutPrefix(hook, prefix); found {
 			return strings.Trim(quotedPath, "'")
 		}
 	}
@@ -177,13 +224,19 @@ func TestBuildSuccessWritesLockAndTarball(t *testing.T) {
 	if spec.TarballPath != filepath.Join(spec.WorkDir, "image.tar.gz") {
 		t.Errorf("TarballPath = %q, want image.tar.gz in the work directory", spec.TarballPath)
 	}
-	for stageFileName, present := range bootstrapper.stageFilesPresent {
-		if !present {
+	for _, stageFileName := range []string{"wsl.conf", "sudoers", "provision.sh"} {
+		if !bootstrapper.stageFilesPresent[stageFileName] {
 			t.Errorf("stage file %s must exist before the bootstrap runs", stageFileName)
 		}
 	}
-	if len(spec.CustomizeHooks) != 4 {
-		t.Errorf("CustomizeHooks = %q, want upload, upload, provision, download", spec.CustomizeHooks)
+	if bootstrapper.stageFilesPresent["sources.list"] {
+		t.Error("an online build must not upload its own sources.list; mmdebstrap writes it")
+	}
+	if len(spec.CustomizeHooks) != 5 {
+		t.Errorf("CustomizeHooks = %q, want upload, upload, provision, copy-out, download", spec.CustomizeHooks)
+	}
+	if spec.Trusted || spec.KeyringPath == "" {
+		t.Errorf("an online build verifies the archive with a keyring: %+v", spec)
 	}
 
 	lock, err := recipe.LoadLock(filepath.Join(options.RecipeDir, "frostroot.lock"))
@@ -200,9 +253,9 @@ func TestBuildSuccessWritesLockAndTarball(t *testing.T) {
 		Sources:          wantSourceLines,
 		FrostrootVersion: Version,
 		Requested:        []string{"git", "build-essential", "cmake"},
-		Packages: []recipe.LockPackage{ // every installed package, sorted
-			{Name: "git", Version: "1:2.34.1-1ubuntu1.11", Arch: "amd64"},
-			{Name: "libc6", Version: "2.35-0ubuntu3.8", Arch: "amd64"},
+		Packages: []recipe.LockPackage{ // every installed package, sorted, with the checksums from the apt indexes
+			{Name: "git", Version: "1:2.34.1-1ubuntu1.11", Arch: "amd64", SHA256: sampleGitSHA256, Size: 3165964, Filename: "pool/main/g/git/git_1%3a2.34.1-1ubuntu1.11_amd64.deb"},
+			{Name: "libc6", Version: "2.35-0ubuntu3.8", Arch: "amd64", SHA256: sampleLibc6SHA256, Size: 3235712, Filename: "pool/main/g/glibc/libc6_2.35-0ubuntu3.8_amd64.deb"},
 		},
 	}
 	if !slices.Equal(lock.Sources, wantLock.Sources) || !slices.Equal(lock.Requested, wantLock.Requested) ||
@@ -384,6 +437,25 @@ func TestBuildFailuresKeepWorkDirAndWriteNothing(t *testing.T) {
 			bootstrapper: &fakeBootstrapper{dpkgStatus: "\n"},
 			wantInError:  "no installed packages",
 		},
+		{
+			// A lock without checksums is one vendor cannot act on.
+			name:         "apt lists missing",
+			bootstrapper: &fakeBootstrapper{skipAptLists: true},
+			wantInError:  "apt indexes",
+		},
+		{
+			name:         "installed package not in any index",
+			bootstrapper: &fakeBootstrapper{dpkgStatus: sampleDpkgStatus + "\nPackage: mystery\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1\n"},
+			wantInError:  "mystery 1 amd64",
+		},
+		{
+			name: "indexes disagree about a checksum",
+			bootstrapper: &fakeBootstrapper{aptLists: map[string]string{
+				"m_dists_jammy_main_binary-amd64_Packages":          "Package: libc6\nArchitecture: amd64\nVersion: 2.35-0ubuntu3.8\nFilename: pool/main/g/glibc/a.deb\nSize: 1\nSHA256: aa\n\nPackage: git\nArchitecture: amd64\nVersion: 1:2.34.1-1ubuntu1.11\nFilename: pool/main/g/git/g.deb\nSize: 2\nSHA256: bb\n",
+				"m_dists_jammy-security_main_binary-amd64_Packages": "Package: libc6\nArchitecture: amd64\nVersion: 2.35-0ubuntu3.8\nFilename: pool/main/g/glibc/a.deb\nSize: 1\nSHA256: cc\n",
+			}},
+			wantInError: "disagree about libc6",
+		},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -548,6 +620,324 @@ func TestBuildFocalUsesArchivePockets(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(options.RecipeDir, "dist", "cpp-lab-ubuntu-20.04-amd64.tar.gz")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestBuildRecordsFileNameFromTheNewestPocket(t *testing.T) {
+	// A package moved between components after release is listed at two
+	// pool paths with one checksum; the -updates or -security index has the
+	// path the file currently lives at.
+	options, _ := newTestOptions(t)
+	bootstrapper := &fakeBootstrapper{
+		dpkgStatus: "Package: ocl-icd-dev\nStatus: install ok installed\nArchitecture: amd64\nVersion: 2.3.2-1build1\n",
+		aptLists: map[string]string{
+			"m_dists_jammy-updates_main_binary-amd64_Packages": "Package: ocl-icd-dev\nArchitecture: amd64\nVersion: 2.3.2-1build1\nFilename: pool/main/o/ocl-icd/ocl-icd-dev_2.3.2-1build1_amd64.deb\nSize: 10118\nSHA256: 66e9\n",
+			"m_dists_jammy_universe_binary-amd64_Packages":     "Package: ocl-icd-dev\nArchitecture: amd64\nVersion: 2.3.2-1build1\nFilename: pool/universe/o/ocl-icd/ocl-icd-dev_2.3.2-1build1_amd64.deb\nSize: 10118\nSHA256: 66E9\n",
+		},
+	}
+	if _, err := buildWith(bootstrapper, options); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := recipe.LoadLock(filepath.Join(options.RecipeDir, "frostroot.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lock.Packages) != 1 || lock.Packages[0].Filename != "pool/main/o/ocl-icd/ocl-icd-dev_2.3.2-1build1_amd64.deb" || lock.Packages[0].SHA256 != "66e9" {
+		t.Errorf("lock packages = %+v, want the -updates path and a lowercase digest", lock.Packages)
+	}
+}
+
+// writeVendoredLock builds sampleRecipe online into options.RecipeDir and
+// then fills vendor/debs with real .deb files matching the lock's names,
+// rewriting the lock's checksums to those files. It returns the lock.
+func writeVendoredLock(t *testing.T, options Options) recipe.Lockfile {
+	t.Helper()
+	if _, err := buildWith(&fakeBootstrapper{}, options); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(options.RecipeDir, LockFileName)
+	lock, err := recipe.LoadLock(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	poolDir := filepath.Join(options.RecipeDir, "vendor", "debs")
+	if err := os.MkdirAll(poolDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for index, locked := range lock.Packages {
+		fileName := filepath.Base(locked.Filename)
+		path := debtest.Build(t, poolDir, fileName, ".zst", debtest.Control(locked.Name, locked.Version, locked.Arch))
+		size, digest, err := deb.SHA256File(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lock.Packages[index].Size, lock.Packages[index].SHA256 = size, digest
+	}
+	if err := recipe.SaveLock(lockPath, lock); err != nil {
+		t.Fatal(err)
+	}
+	// Remove the online build's tarball so the offline one is told apart.
+	if err := os.Remove(expectedTarballPath(options)); err != nil {
+		t.Fatal(err)
+	}
+	return lock
+}
+
+// offlineFakeBootstrapper writes a tarball and a dpkg status file, reads no
+// apt lists (there are none offline), and records the local repository it
+// was given.
+type offlineFakeBootstrapper struct {
+	fakeBootstrapper
+	repositoryFiles []string // names in the copy:// repository when Run was called
+}
+
+func (f *offlineFakeBootstrapper) Run(ctx context.Context, spec BootstrapSpec) error {
+	if len(spec.SourceLines) == 1 {
+		repositoryDir := strings.TrimSuffix(strings.TrimPrefix(spec.SourceLines[0], "deb [trusted=yes] copy://"), " ./")
+		entries, err := os.ReadDir(repositoryDir)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			f.repositoryFiles = append(f.repositoryFiles, entry.Name())
+		}
+	}
+	return f.fakeBootstrapper.Run(ctx, spec)
+}
+
+func TestBuildOfflineRebuildsFromThePool(t *testing.T) {
+	options, _ := newTestOptions(t)
+	lock := writeVendoredLock(t, options)
+	lockPath := filepath.Join(options.RecipeDir, LockFileName)
+	lockBefore, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	options.Offline = true
+	recorder := &recordingProgress{}
+	options.Progress = recorder
+	bootstrapper := &offlineFakeBootstrapper{}
+	result, err := (&Builder{Bootstrapper: bootstrapper}).Build(context.Background(), sampleRecipe(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := bootstrapper.lastSpec
+	if !spec.Trusted || spec.KeyringPath != "" {
+		t.Errorf("an offline build trusts its own verified repository, no keyring: %+v", spec)
+	}
+	if len(spec.SourceLines) != 1 || !strings.HasPrefix(spec.SourceLines[0], "deb [trusted=yes] copy://"+spec.WorkDir+"/pool ./") {
+		t.Errorf("SourceLines = %q, want the local repository only", spec.SourceLines)
+	}
+	if wantInclude := []string{"git", "libc6"}; !slices.Equal(spec.Include, wantInclude) {
+		t.Errorf("Include = %q, want every locked package, sorted", spec.Include)
+	}
+	if !bootstrapper.stageFilesPresent["sources.list"] {
+		t.Error("an offline build must stage a sources.list from the lock for the image")
+	}
+	if !slices.Contains(spec.CustomizeHooks, "upload '"+filepath.Join(spec.WorkDir, "stage", "sources.list")+"' /etc/apt/sources.list") {
+		t.Errorf("hooks = %q, want the sources.list upload", spec.CustomizeHooks)
+	}
+	if strings.Contains(strings.Join(spec.CustomizeHooks, "\n"), "copy-out") {
+		t.Errorf("hooks = %q, want no apt lists copied offline", spec.CustomizeHooks)
+	}
+	sourcesList, err := os.ReadFile(filepath.Join(spec.WorkDir, "stage", "sources.list"))
+	if err == nil && string(sourcesList) != strings.Join(lock.Sources, "\n")+"\n" {
+		t.Errorf("staged sources.list = %q, want the lock's sources", sourcesList)
+	}
+	slices.Sort(bootstrapper.repositoryFiles)
+	wantFiles := []string{"Packages", "Release", "git_1%3a2.34.1-1ubuntu1.11_amd64.deb", "libc6_2.35-0ubuntu3.8_amd64.deb"}
+	if !slices.Equal(bootstrapper.repositoryFiles, wantFiles) {
+		t.Errorf("repository held %q, want %q", bootstrapper.repositoryFiles, wantFiles)
+	}
+
+	lockAfter, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(lockAfter) != string(lockBefore) {
+		t.Error("an offline build must not rewrite the lock")
+	}
+	if !result.Offline || result.LockPath != lockPath || result.InstalledPackageCount != 2 {
+		t.Errorf("Result = %+v", result)
+	}
+	if _, err := os.Stat(expectedTarballPath(options)); err != nil {
+		t.Errorf("tarball not placed: %v", err)
+	}
+	var started []Phase
+	for _, event := range recorder.ofKind(EventPhaseStarted) {
+		started = append(started, event.Phase)
+	}
+	if wantStarted := []Phase{PhaseVerifyVendored, PhasePrepareRepository, PhaseCheckLock, PhasePlaceTarball}; !slices.Equal(started, wantStarted) {
+		t.Errorf("phases started = %v, want %v", started, wantStarted)
+	}
+	assertNoTemporaryFiles(t, options.RecipeDir)
+}
+
+func TestBuildOfflineFailsWhenTheImageDiffersFromTheLock(t *testing.T) {
+	options, _ := newTestOptions(t)
+	writeVendoredLock(t, options)
+	options.Offline = true
+	bootstrapper := &offlineFakeBootstrapper{fakeBootstrapper: fakeBootstrapper{
+		dpkgStatus: "Package: libc6\nStatus: install ok installed\nArchitecture: amd64\nVersion: 2.35-0ubuntu3.9\n\nPackage: git\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1:2.34.1-1ubuntu1.11\n",
+	}}
+	result, err := (&Builder{Bootstrapper: bootstrapper}).Build(context.Background(), sampleRecipe(), options)
+	if !errors.Is(err, ErrImageDiffersFromLock) {
+		t.Fatalf("Build error = %v, want ErrImageDiffersFromLock", err)
+	}
+	for _, wantText := range []string{"libc6 2.35-0ubuntu3.8 amd64", "libc6 2.35-0ubuntu3.9 amd64"} {
+		if !strings.Contains(err.Error(), wantText) {
+			t.Errorf("error = %v, want it to name %q", err, wantText)
+		}
+	}
+	if result.WorkDir == "" {
+		t.Error("a failed offline build keeps its work directory")
+	}
+	if _, err := os.Stat(expectedTarballPath(options)); !errors.Is(err, os.ErrNotExist) {
+		t.Error("no tarball may be placed when the image differs from the lock")
+	}
+}
+
+func TestBuildOfflineRefusesBeforeAnyWork(t *testing.T) {
+	testCases := []struct {
+		name      string
+		prepare   func(t *testing.T, options Options) recipe.Recipe
+		wantError error
+		wantText  string
+	}{
+		{
+			name:      "no lock",
+			prepare:   func(*testing.T, Options) recipe.Recipe { return sampleRecipe() },
+			wantError: ErrNoLock,
+			wantText:  "frostroot build online first",
+		},
+		{
+			name: "lock without checksums",
+			prepare: func(t *testing.T, options Options) recipe.Recipe {
+				t.Helper()
+				lock := writeVendoredLock(t, options)
+				for index := range lock.Packages {
+					lock.Packages[index].SHA256, lock.Packages[index].Size, lock.Packages[index].Filename = "", 0, ""
+				}
+				lock.FrostrootVersion = "0.3.0"
+				if err := recipe.SaveLock(filepath.Join(options.RecipeDir, LockFileName), lock); err != nil {
+					t.Fatal(err)
+				}
+				return sampleRecipe()
+			},
+			wantError: pool.ErrNoChecksums,
+			wantText:  "0.3.0",
+		},
+		{
+			name: "recipe release changed",
+			prepare: func(t *testing.T, options Options) recipe.Recipe {
+				t.Helper()
+				writeVendoredLock(t, options)
+				imageRecipe := sampleRecipe()
+				imageRecipe.Image.Release = "24.04"
+				return imageRecipe
+			},
+			wantError: ErrLockMismatch,
+			wantText:  "release 22.04 in the lock, 24.04 in the recipe",
+		},
+		{
+			name: "recipe packages changed",
+			prepare: func(t *testing.T, options Options) recipe.Recipe {
+				t.Helper()
+				writeVendoredLock(t, options)
+				imageRecipe := sampleRecipe()
+				imageRecipe.Packages.Include = []string{"cmake", "git", "ninja-build"} // build-essential removed, ninja-build added, order changed
+				return imageRecipe
+			},
+			wantError: ErrLockMismatch,
+			wantText:  "added to the recipe: ninja-build; packages removed from the recipe: build-essential",
+		},
+		{
+			name: "pool incomplete",
+			prepare: func(t *testing.T, options Options) recipe.Recipe {
+				t.Helper()
+				lock := writeVendoredLock(t, options)
+				if err := os.Remove(filepath.Join(options.RecipeDir, "vendor", "debs", filepath.Base(lock.Packages[0].Filename))); err != nil {
+					t.Fatal(err)
+				}
+				return sampleRecipe()
+			},
+			wantError: ErrPoolIncomplete,
+			wantText:  "git_1%3a2.34.1-1ubuntu1.11_amd64.deb (missing); run frostroot vendor",
+		},
+		{
+			name: "pool corrupt",
+			prepare: func(t *testing.T, options Options) recipe.Recipe {
+				t.Helper()
+				lock := writeVendoredLock(t, options)
+				if err := os.WriteFile(filepath.Join(options.RecipeDir, "vendor", "debs", filepath.Base(lock.Packages[1].Filename)), []byte("tampered"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return sampleRecipe()
+			},
+			wantError: ErrPoolIncomplete,
+			wantText:  "libc6_2.35-0ubuntu3.8_amd64.deb (wrong size or checksum)",
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			options, _ := newTestOptions(t)
+			imageRecipe := testCase.prepare(t, options)
+			options.Offline = true
+			bootstrapper := &offlineFakeBootstrapper{}
+			result, err := (&Builder{Bootstrapper: bootstrapper}).Build(context.Background(), imageRecipe, options)
+			if !errors.Is(err, testCase.wantError) {
+				t.Fatalf("Build error = %v, want %v", err, testCase.wantError)
+			}
+			if !strings.Contains(err.Error(), testCase.wantText) {
+				t.Errorf("error = %v, want it to say %q", err, testCase.wantText)
+			}
+			if bootstrapper.runCount != 0 || result.WorkDir != "" {
+				t.Errorf("runs = %d, Result = %+v; want no bootstrap and no work directory", bootstrapper.runCount, result)
+			}
+		})
+	}
+}
+
+func TestBuildOfflineRejectsMirror(t *testing.T) {
+	options, _ := newTestOptions(t)
+	options.Offline = true
+	options.MirrorURL = "http://mirror.example/ubuntu"
+	if _, err := buildWith(&fakeBootstrapper{}, options); err == nil || !strings.Contains(err.Error(), "mirror") {
+		t.Fatalf("Build error = %v, want a refusal naming the mirror", err)
+	}
+}
+
+func TestBuildOfflineUserChangesAreAllowed(t *testing.T) {
+	// The user, sudo, locale, timezone and systemd are provisioned at build
+	// time and need no packages, so they may differ from the lock's build.
+	options, _ := newTestOptions(t)
+	writeVendoredLock(t, options)
+	options.Offline = true
+	imageRecipe := sampleRecipe()
+	imageRecipe.User = recipe.User{Name: "teacher", Sudo: false}
+	imageRecipe.WSL = recipe.WSL{Systemd: false}
+	imageRecipe.Locale = recipe.Locale{Lang: "tr_TR.UTF-8", Timezone: "UTC"}
+	imageRecipe.Packages.Include = []string{"cmake", "build-essential", "git"} // same set, other order
+	if _, err := (&Builder{Bootstrapper: &offlineFakeBootstrapper{}}).Build(context.Background(), imageRecipe, options); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCompareWithLock(t *testing.T) {
+	lock := recipe.Lockfile{Packages: []recipe.LockPackage{{Name: "a", Version: "1", Arch: "amd64"}, {Name: "b", Version: "2", Arch: "all"}}}
+	if err := compareWithLock(lock, []recipe.LockPackage{{Name: "b", Version: "2", Arch: "all"}, {Name: "a", Version: "1", Arch: "amd64"}}); err != nil {
+		t.Errorf("the same set in another order is equal: %v", err)
+	}
+	err := compareWithLock(lock, []recipe.LockPackage{{Name: "a", Version: "1", Arch: "amd64"}, {Name: "c", Version: "3", Arch: "amd64"}})
+	if !errors.Is(err, ErrImageDiffersFromLock) || !strings.Contains(err.Error(), "not in the image: b 2 all") || !strings.Contains(err.Error(), "not in the lock: c 3 amd64") {
+		t.Errorf("error = %v", err)
+	}
+}
+
+func TestPocketRank(t *testing.T) {
+	if pocketRank("noble") != 0 || pocketRank("noble-updates") != 1 || pocketRank("noble-backports") != 1 || pocketRank("noble-security") != 2 {
+		t.Error("pockets must rank release < updates < security")
 	}
 }
 
