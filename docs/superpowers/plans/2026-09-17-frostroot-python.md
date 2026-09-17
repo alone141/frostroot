@@ -199,7 +199,8 @@ as `provision.go` is for the rest.
       `sha256sum` for all three.
 - [x] 22.04 and 20.04: the step's own rendered scripts in chroots of those
       releases, which is what the releases differ in.
-- [ ] `TestIntegrationPython` beside the existing integration tests.
+- [x] `TestIntegrationPython` beside the existing integration tests: it
+      passed in 1124 s on the build host.
 - [x] Record the results in the spec's Verification section and update the
       README's status paragraph.
 

@@ -1,7 +1,7 @@
 # frostroot v0.7: Python packages from PyPI
 
 Date: 2026-09-17
-Status: approved by the project owner in conversation ("implement", then "can we do it using enviroments" on the release question); implemented on branch `feature/python`
+Status: approved by the project owner in conversation ("implement" on the plan); the release question was settled by their suggestion to let the environment carry its own pip, rather than shipping 24.04 alone. Implemented on branch `feature/python`
 Extends: [`2026-09-14-frostroot-design.md`](2026-09-14-frostroot-design.md) (the extension point "Language lockfiles"), [`2026-09-17-frostroot-vendor.md`](2026-09-17-frostroot-vendor.md) (the lock and the pool) and [`2026-09-17-frostroot-reproducible.md`](2026-09-17-frostroot-reproducible.md) (the frozen instant)
 Implements: [issue #7](https://github.com/alone141/frostroot/issues/7), its Python half
 
