@@ -16,68 +16,84 @@ real run on the build host against a local signed repository.
 
 ## Task 1: keys and the recipe
 
-- [ ] `internal/pgp`: `ParsePublicKey(data) (Key, error)` with `Binary`
-      and `Fingerprint`; armor decoding; version 4 fingerprint; tests with
+- [x] `internal/pgp`: `ParsePublicKey(data) (Key, error)` with `Binary`,
+      `Fingerprint` and `Armored`; armor decoding with the CRC-24 check;
+      version 4 and 6 fingerprints; `Armor` for storage; tests with
       Docker's armored key and GitHub's binary two-key file as fixtures,
-      plus an HTML page, an empty file and a bad armor checksum.
-- [ ] `recipe.Source`, `Recipe.Sources`; `Validate` checks name, URL,
-      suite, components, key path and uniqueness; `CheckSourceKeys(dir,
-      sources)`; `Source.SuiteFor(release)`, `Source.ComponentsOrDefault()`.
-      Round-trip tests and a fixture recipe with sources.
+      plus an HTML page, an empty file, a bad armor checksum and a flipped
+      byte.
+- [x] `recipe.Source`, `Recipe.Sources`; `Validate` checks name, URL,
+      suite, components, key path and uniqueness (`CheckSource`,
+      `CheckSourceURL`, `CheckKeyPath`); `CheckSourceKeys(dir, sources)`;
+      `KeyPath`; `Source.SuiteFor`, `Source.ComponentsOrDefault`. Round-trip
+      tests and `testdata/sources.toml`.
 
 ## Task 2: catalog, PPAs and key fetching
 
-- [ ] `internal/sources`: `Entry` catalog with the eight sources and their
-      fingerprints; `Resolve(entry, release) recipe.Source`; `PPA(owner,
-      name)`; `IsPPA(url)`, `PPAFilesURL`; `CheckPPAName`.
-- [ ] `sources.Fetcher` with `Client` interface: `FetchKey(ctx, source)`
-      that downloads, parses, compares fingerprints (catalog pin or
-      Launchpad API) and returns the key bytes; tests with `httptest`.
+- [x] `internal/sources`: the eight-entry catalog with pinned
+      fingerprints; `Entry.Source(releaseSuite)`; `ParsePPA`, `PPA`,
+      `PPAOf`, `PPAFilesURL`, `KeyPathFor`, `Describe`.
+- [x] `FetchKey(ctx, client, source)` over a `Client` interface: catalog
+      pin or Launchpad API, then the key, parsed and compared; `HTTPClient`
+      for production; tests with a fake client for every case.
 
 ## Task 3: the form
 
-- [ ] Fields `sources` (multi-select over the catalog) and `ppas` (input)
-      on page `Sources`; `Defaults`, `FromRecipe`, `ToRecipe` (custom
-      sources kept in order), `Summary`.
-- [ ] Plain interface needs nothing new; a full-screen test drives the new
-      page.
+- [x] Fields `sources` (multi-select over the catalog) and `ppas` (input)
+      on page `Sources`; `Defaults`, `FromRecipe`, `ToRecipe`
+      (`SplitSources`, `MergeSources`: custom sources kept in order),
+      `Summary` with a Sources line.
+- [x] The plain interface needed nothing new; the pty smoke test covers the
+      page in the full-screen form.
 
 ## Task 4: builder and pool
 
-- [ ] `builder.SourceLines` with `signed-by` paths; `StageOptions.Sources`
-      writes binary keys to `<stage>/keys/`; `CustomizeHooks` uploads the
-      keys and always uploads `sources.list`; `RenderSourcesList`.
-- [ ] Lock: `LockRepository`, `Lockfile.Repositories`,
-      `LockPackage.Source`; `recordChecksums` attributes indexes by apt's
-      file naming; unattributed index is an error.
-- [ ] Offline: compare recipe sources with lock repositories; keys
-      uploaded from the recipe.
-- [ ] `pool.Manifest` base URL per repository; `pool.FallbackURL(lock,
-      entry)` for the archive and PPAs.
+- [x] `builder.SourceLines(release, mirror, sources, keyringDir)`;
+      `StageOptions.Keys` writes binary keys to `<stage>/keys/`;
+      `CustomizeHooks` creates `/etc/apt/keyrings`, uploads the keys and
+      always uploads `sources.list`; mmdebstrap gets lines naming the
+      staged keys, the image lines naming its own.
+- [x] Lock: `LockRepository`, `Lockfile.Repositories`, `Repository()`,
+      `LockPackage.Source`; `recordChecksums` attributes indexes through
+      `indexOrigins`/`originOf` by apt's file naming; an unattributed index
+      fails the build; `readSourceKeys` fails a build without its keys
+      (`ErrSourceKey`).
+- [x] Offline: `repositoryDifferences` compares recipe sources with lock
+      repositories; keys uploaded from the recipe.
+- [x] `pool.Entry.BaseURL`/`Source`; `Manifest` resolves each package's
+      base URL; `--mirror` overrides the archive's only;
+      `pool.FallbackURL(lock)` for the archive and PPAs.
 
 ## Task 5: CLI
 
-- [ ] Recipe template renders `[[sources]]` with comments; `loadRecipe`
-      runs `CheckSourceKeys`; `runRecipeForm` fetches missing keys after
-      writing the recipe; `App.KeyClient` for tests.
-- [ ] `build` refuses a recipe whose keys are missing before any work.
-- [ ] Tests: plain init with a catalog source and a PPA against a fake
-      client; mismatch; validate on a missing key.
+- [x] The recipe template renders `[[sources]]` with a comment;
+      `loadRecipe` runs `CheckSourceKeys` with a hint; `runRecipeForm`
+      writes the recipe, then `fetchMissingKeys` (fetched, or provided by
+      capture); `App.KeyClient`; `validate` counts the extra sources.
+- [x] `build` refuses a recipe whose keys are missing or not keys before
+      any work (exit 1).
+- [x] Tests: plain init with a catalog source and a PPA against a fake
+      client; an existing key left alone; a fingerprint mismatch; validate
+      without and with keys.
 
 ## Task 6: capture
 
-- [ ] Parse one-line and deb822 source files; classify; produce
-      `recipe.Source` entries and key contents; report what was not
-      carried; adjust the third-party packages finding.
-- [ ] `cli/capture.go` writes the keys beside the recipe.
-- [ ] Fixtures: a PPA with `signed-by`, deb822 Docker, inline key,
-      `trusted.gpg.d`, flat repository.
+- [x] `capture/sources.go`: one-line and deb822 parsing (options,
+      `Enabled`, inline keys); classification into carried and left with
+      reasons; names from the catalog, PPAs or the host; the third-party
+      packages finding ignores carried hosts.
+- [x] `cli/capture.go` passes the keys to the form runner, which writes
+      them beside the recipe.
+- [x] Fixtures: deb822 Docker with a key file, an inline-key source with
+      two suites, a PPA without `signed-by`, a flat repository, a `deb-src`
+      line, unreadable and non-key files.
 
 ## Task 7: documentation and verification
 
-- [ ] README: recipe table, the Sources page, a "Third-party sources"
-      section, capture's rule, the TLS note, layout.
-- [ ] Build host: real `build` with a local signed repository as a
+- [x] README: status, the form's fifth page, the recipe table, a
+      "Third-party sources" section, capture's rule, the TLS note, layout,
+      documentation table.
+- [x] Build host: real `build` with a local signed repository as a
       source, lock fields, `vendor` from two origins, `build --offline`,
-      `capture` of a fixture root. Record results in the spec.
+      `capture` of a fixture root, the pty smoke test. Results in the spec.
 - [ ] Pull request; ask before merging.
