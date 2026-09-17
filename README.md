@@ -2,15 +2,16 @@
 
 **Freeze an Ubuntu root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
 
-> **Status: v0.5.0.** `init`, `edit`, `capture`, `validate`, `build`,
-> `vendor` and `build --offline` work, and a recipe can add third-party apt
-> sources (PPAs, Docker, Node.js, VS Code...). In a terminal, `init`, `edit`
-> and `capture` are a full-screen form driven with the arrow keys; `build`
-> and `vendor` are a progress screen with bars. Every path in this README
-> was run for real: images for Ubuntu 20.04, 22.04 and 24.04 were built with
+> **Status: v0.6.0.** `init`, `edit`, `capture`, `validate`, `build`,
+> `vendor` and `build --offline` work, a recipe can add third-party apt
+> sources (PPAs, Docker, Node.js, VS Code...), and two offline rebuilds of
+> one lock produce the same bytes. In a terminal, `init`, `edit` and
+> `capture` are a full-screen form driven with the arrow keys; `build` and
+> `vendor` are a progress screen with bars. Every path in this README was
+> run for real: images for Ubuntu 20.04, 22.04 and 24.04 were built with
 > `frostroot build`, imported with `wsl --import` on Windows 11, and logged
-> into; a lock was vendored and rebuilt offline to the same package set. See
-> [Verification](#verification).
+> into; a lock was vendored and rebuilt offline twice, to one `sha256sum`.
+> See [Verification](#verification).
 
 ---
 
@@ -63,10 +64,11 @@ wsl -d cpp-lab
 No internet needed on the receiving end.
 
 **`frostroot.lock`**: a receipt listing every package that ended up inside,
-with exact versions and the checksum of every `.deb` file. You asked for
-three packages; installing them pulled in several hundred, and the lock
-records all of them. Commit it to git and you can see exactly what changed
-between builds.
+with exact versions, the checksum of every `.deb` file, and the instant the
+image is frozen at. You asked for three packages; installing them pulled in
+several hundred, and the lock records all of them, marking the ones apt
+chose for you. Commit it to git and you can see exactly what changed between
+builds.
 
 ```toml
 version = 1
@@ -80,24 +82,36 @@ sources = [
   'deb http://archive.ubuntu.com/ubuntu jammy-updates main universe',
   'deb http://archive.ubuntu.com/ubuntu jammy-security main universe'
 ]
-frostroot_version = '0.4.0'
+frostroot_version = '0.6.0'
 requested = [
   'git',
   'build-essential',
   'cmake'
 ]
+source_date_epoch = 1789662022
+
+[[packages]]
+name = 'binutils'
+version = '2.38-4ubuntu2.12'
+arch = 'amd64'
+auto = true
+sha256 = '7da8d527d9a4ba9b6fea5fe6126a98f81f538db3a4aaa4ced32d2a26761a4707'
+size = 3184
+filename = 'pool/main/b/binutils/binutils_2.38-4ubuntu2.12_amd64.deb'
 
 [[packages]]
 name = 'git'
 version = '1:2.34.1-1ubuntu1.17'
 arch = 'amd64'
-sha256 = '8d3b6ba5a1a1d2b7dfd6b6e0f7a8b1e2b3f4c5d6e7f8091a2b3c4d5e6f708192'
-size = 3165964
-filename = 'pool/main/g/git/git_1%3a2.34.1-1ubuntu1.17_amd64.deb'
+sha256 = '8794fcf2c4606c445df0db3dc963c8fb852772208bfb12727a12717c03767af7'
+size = 3173622
+filename = 'pool/main/g/git/git_2.34.1-1ubuntu1.17_amd64.deb'
 ```
 
 That is an excerpt of a real lock: this recipe produced 341 `[[packages]]`
-entries and a 222 MB tarball.
+entries, 123 of them marked `auto` (pulled in by `build-essential`, as
+`binutils` was), and a 222 MB tarball. `source_date_epoch` is the instant
+the image is frozen at, 2026-09-17 16:20:22 UTC here.
 
 The recipe is **intent** and you edit it. The lock is **fact** and the build
 writes it. Versions never appear in the recipe.
@@ -106,7 +120,8 @@ The lock is also what makes a rebuild exact. `frostroot vendor` downloads
 every file it names into `vendor/debs/`, checked against those checksums, and
 `frostroot build --offline` rebuilds the image from that directory alone: no
 archive, no network, and it fails rather than produce an image whose packages
-differ from the lock by one version. See
+differ from the lock by one version. Two such rebuilds, on any day, on any
+machine with the same mmdebstrap, produce the same bytes. See
 [Rebuilding offline](#rebuilding-offline).
 
 ## Install
@@ -352,10 +367,11 @@ the packages it names, and that is what `vendor` keeps:
 
 ```console
 $ frostroot vendor
-Vendored 341 packages (212 MB) into vendor/debs: 341 downloaded.
+Vendored 341 packages (173 MB) into vendor/debs: 341 downloaded.
 
 $ frostroot build --offline
 Wrote dist/cpp-lab-ubuntu-22.04-amd64.tar.gz (222 MB), rebuilt from frostroot.lock: 341 packages, every one as locked.
+Frozen at 2026-09-17 16:20:22 UTC: every offline build of this lock produces this tarball, byte for byte.
 ```
 
 `vendor` reads the lock, checks what `vendor/debs/` already holds, and
@@ -374,9 +390,32 @@ the result with the lock. A difference is a failed build (exit 2) with the
 packages named; nothing is placed. No archive is contacted and no keyring is
 needed: the checksum check against the lock is the trust.
 
-What is guaranteed: the same packages at the same versions from the same
-bytes. What is not: a byte-identical tarball. File timestamps and the
-gzip header differ between two builds; the files inside do not.
+**Byte for byte.** Every image is frozen at one instant: the second the
+online build started, or `SOURCE_DATE_EPOCH` if that is set, as the
+reproducible-builds convention has it. The lock records it as
+`source_date_epoch`, and every offline build of that lock freezes at the
+same instant. mmdebstrap dates no file later than it, sorts the tarball's
+entries, writes a gzip header without a timestamp and drops the files that
+would carry the build time (dpkg and apt logs, `machine-id`); the image's
+`/etc/shadow` is dated by it too. So two offline builds of one lock, days or
+years apart, produce one `sha256sum`, and you can check a tarball someone
+hands you by rebuilding it. Offline, `SOURCE_DATE_EPOCH` in the environment
+is ignored, with a note, because the lock is the input; a lock written by
+frostroot 0.5 or earlier records no instant, and `build --offline` says so
+and freezes at its own start until you build online once more.
+
+The online build itself is not byte-identical with its offline rebuild:
+mmdebstrap installs the essential packages first online and everything in
+one pass offline, which leaves the paragraph order of apt's
+`extended_states`, the line order of `/var/lib/dpkg/triggers/File` and, on
+24.04, one directory timestamp different; the files, their contents and
+their owners are otherwise the same. Nor does the promise cross mmdebstrap
+or dpkg versions, or packages that generate random material when installed
+(an SSH host key, say; do not ship one in a golden image anyway).
+
+The online build also records which packages apt installed on its own as
+`auto = true` in the lock, and the offline build restores those marks, so
+`apt autoremove` and `frostroot capture` see the same image either way.
 
 `vendor/debs/` is a few hundred megabytes to a gigabyte. Ship it beside the
 tarball or in an archive; add `vendor/` to `.gitignore` unless you use git
@@ -411,20 +450,23 @@ frostroot.toml ──▶ validate ──▶ mmdebstrap ──▶ image.tar.gz �
 
 `mmdebstrap` bootstraps the base system and writes the tarball itself, from
 inside its user namespace, which is the only place ownership, symlinks,
-hardlinks and file capabilities come out correct. Customize hooks upload the
-rendered `wsl.conf` and sudoers drop-in and run one generated provisioning
-script (user, sudo, locale, timezone, cleanup), copy out the apt indexes the
-chroot verified (the lock's checksums come from them), then download the
-image's dpkg status, which frostroot parses into the lock. The tarball is
-moved into `dist/` first and the lock renamed into place second, so a lock
-never describes an image that does not exist. A failed build writes neither.
+hardlinks and file capabilities come out correct, with `SOURCE_DATE_EPOCH`
+in its environment. Customize hooks upload the rendered `wsl.conf` and
+sudoers drop-in and run one generated provisioning script (user, sudo,
+locale, timezone, cleanup), copy out the apt indexes the chroot verified
+(the lock's checksums come from them), download apt's `extended_states`
+(the lock's `auto` marks come from it), then download the image's dpkg
+status, which frostroot parses into the lock. The tarball is moved into
+`dist/` first and the lock renamed into place second, so a lock never
+describes an image that does not exist. A failed build writes neither.
 
 Offline, the three `deb http://…` lines become one
 `deb [trusted=yes] copy://<work>/pool ./` pointing at a flat repository
 frostroot writes in the work directory from the vendored files (their own
 control files, plus a `Release` naming the suite, which mmdebstrap needs to
-find the essential set), every locked package goes into `--include`, and a
-hook restores the archive's lines in the image's `sources.list`.
+find the essential set), every locked package goes into `--include`, and
+hooks restore the archive's lines in the image's `sources.list` and the
+lock's `auto` marks in its `extended_states`.
 
 Work happens in `$XDG_CACHE_HOME/frostroot` if that is set, otherwise in
 `/var/tmp/frostroot-<uid>` (one per user, so a `sudo` build cannot leave a
@@ -499,12 +541,12 @@ user, WSL-ready images.
 
 **Since then:** the arrow-key form and progress screen (v0.2), `frostroot
 capture` (v0.3), vendoring and offline rebuilds with a release process
-(v0.4), third-party apt sources (v0.5).
+(v0.4), third-party apt sources (v0.5), byte-identical offline rebuilds
+(v0.6).
 
 **Deliberately not yet:** Fedora or any non-Ubuntu family · flat or unsigned
-apt repositories · pip / npm / cargo lockfiles · bit-identical tarballs ·
-bare-metal disk or ISO images · a native Windows binary · architectures other
-than amd64.
+apt repositories · pip / npm / cargo lockfiles · bare-metal disk or ISO
+images · a native Windows binary · architectures other than amd64.
 
 Each exclusion has a door left open in the design. Adding Fedora means a new
 `internal/distro` implementation, not a rewrite.
@@ -524,8 +566,10 @@ real mmdebstrap run, the form's field table and its recipe round trip, the
 two screens driven key by key, `.deb` reading for every compression Ubuntu
 has used, the flat repository writer, the vendor pool against a local HTTP
 server (fresh, resumed, corrupt, dropped from the mirror, mismatched,
-interrupted), and offline builds against the fake bootstrapper, including
-every refusal and the final comparison with the lock.
+interrupted), offline builds against the fake bootstrapper, including every
+refusal and the final comparison with the lock, and the frozen instant: taken
+from the environment or the clock online, from the lock offline, refused
+when unusable, with apt's marks parsed and rendered in its own format.
 
 ```sh
 go test -tags=integration -run TestIntegration -v -timeout 30m ./...
@@ -536,9 +580,11 @@ of symlinks all with targets, hardlinks and file capabilities intact, no
 subordinate-uid owners, the user, sudoers, `wsl.conf`, timezone and locale in
 place, and no leaked host files; it also checks that the build reported every
 phase in order with a real download total, and that every package in the
-`init` catalog exists in all three releases. It needs Linux, mmdebstrap,
-ubuntu-keyring, network, and user namespaces or root, and takes about two
-minutes.
+`init` catalog exists in all three releases. A second test builds an image
+online, vendors it, rebuilds it offline twice and requires one SHA-256, no
+entry dated after the lock's instant, and the online image's apt marks in
+the offline one. It needs Linux, mmdebstrap, ubuntu-keyring, network, and
+user namespaces or root, and takes about ten minutes.
 
 **The WSL boot check is manual**, because no CI runner can run `wsl --import`.
 For every release you ship, import the tarball and check: `whoami` is your
@@ -558,6 +604,7 @@ failure paths; the results are recorded in the
 | [Capture spec](docs/superpowers/specs/2026-09-17-frostroot-capture.md) | v0.3: reading an installed machine, the report of the gaps. |
 | [Vendor spec](docs/superpowers/specs/2026-09-17-frostroot-vendor.md) | v0.4: checksums in the lock, `vendor`, `build --offline`, releases; with the spike results. |
 | [Sources spec](docs/superpowers/specs/2026-09-17-frostroot-sources.md) | v0.5: `[[sources]]`, the catalog and PPAs, keys, how `build`, the lock, `vendor` and `capture` handle them. |
+| [Reproducible spec](docs/superpowers/specs/2026-09-17-frostroot-reproducible.md) | v0.6: the frozen instant in the lock, apt's auto marks, what byte identity does and does not cover; with the spike and the verification. |
 | [Implementation plan](docs/superpowers/plans/2026-09-15-frostroot-v1.md) | The 13 tasks v1 was built from, with the spike's amendments. |
 | [TUI plan](docs/superpowers/plans/2026-09-17-frostroot-tui.md) | The seven tasks v0.2 was built from. |
 | [Plan review](docs/superpowers/reviews/2026-09-14-frostroot-plan-review.md) | Found four defects that would have shipped a non-booting image |

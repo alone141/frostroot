@@ -34,13 +34,13 @@ build uses both; two offline builds have one SHA-256.
 
 - [x] `build` summary lines: frozen-at online, byte-identical or not
       offline; the environment note offline; tests.
-- [ ] README: the guarantee, the lock example, notes.
+- [x] README: the guarantee, the lock example, notes.
 
 ## Task 4: verification
 
 - [x] `TestIntegrationOfflineRebuild`: two offline builds, equal sums, no
       entry after the epoch, auto marks in the image.
-- [ ] Build host: real binary, online build, vendor, two offline builds
+- [x] Build host: real binary, online build, vendor, two offline builds
       apart in time, `sha256sum`, and the online-vs-offline diff. Record in
       the spec.
 - [ ] Pull request; ask before merging.
