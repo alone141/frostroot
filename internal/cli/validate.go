@@ -29,3 +29,11 @@ func packageCount(count int) string {
 	}
 	return fmt.Sprintf("%d packages", count)
 }
+
+// wheelCount renders a count of Python packages as "1 wheel" or "N wheels".
+func wheelCount(count int) string {
+	if count == 1 {
+		return "1 wheel"
+	}
+	return fmt.Sprintf("%d wheels", count)
+}

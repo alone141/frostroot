@@ -240,13 +240,23 @@ func TestParseAptSize(t *testing.T) {
 }
 
 func TestPhaseTitles(t *testing.T) {
-	phases := Phases()
+	phases := Phases(false)
 	if len(phases) != 9 || phases[0] != PhaseUpdateIndex || phases[len(phases)-1] != PhasePlaceTarball {
-		t.Errorf("Phases() = %v", phases)
+		t.Errorf("Phases(false) = %v", phases)
 	}
-	offline := OfflinePhases()
+	if slices.Contains(phases, PhaseInstallPython) {
+		t.Errorf("Phases(false) = %v, want no Python step for a recipe without Python packages", phases)
+	}
+	withPython := Phases(true)
+	if len(withPython) != 10 || withPython[5] != PhaseProvision || withPython[6] != PhaseInstallPython {
+		t.Errorf("Phases(true) = %v, want the Python step right after provisioning", withPython)
+	}
+	offline := OfflinePhases(false)
 	if offline[0] != PhaseVerifyVendored || !slices.Contains(offline, PhaseCheckLock) || slices.Contains(offline, PhaseWriteLock) || offline[len(offline)-1] != PhasePlaceTarball {
-		t.Errorf("OfflinePhases() = %v", offline)
+		t.Errorf("OfflinePhases(false) = %v", offline)
+	}
+	if !slices.Contains(OfflinePhases(true), PhaseInstallPython) {
+		t.Errorf("OfflinePhases(true) = %v, want the Python step", OfflinePhases(true))
 	}
 	if vendor := VendorPhases(true); len(vendor) != 4 || vendor[3] != PhaseVendorPrune || len(VendorPhases(false)) != 3 {
 		t.Errorf("VendorPhases = %v / %v", vendor, VendorPhases(false))

@@ -56,6 +56,10 @@ type offlinePlan struct {
 	lock     recipe.Lockfile
 	entries  []pool.Entry
 	poolDir  string
+	// wheelEntries and wheelPoolDir are the Python side, empty for a lock
+	// with no Python packages.
+	wheelEntries []pool.Entry
+	wheelPoolDir string
 }
 
 // packageNames returns every locked package name, sorted, for --include.
@@ -103,11 +107,48 @@ func planOffline(recipeDir string, imageRecipe recipe.Recipe, release distro.Rel
 			differences = append(differences, "packages removed from the recipe: "+strings.Join(removed, ", "))
 		}
 	}
+	if added, removed := setDifferences(lockedPythonRequested(lock), normalizedPythonNames(imageRecipe.PythonPackages())); len(added)+len(removed) > 0 {
+		if len(added) > 0 {
+			differences = append(differences, "python packages added to the recipe: "+strings.Join(added, ", "))
+		}
+		if len(removed) > 0 {
+			differences = append(differences, "python packages removed from the recipe: "+strings.Join(removed, ", "))
+		}
+	}
 	differences = append(differences, repositoryDifferences(lock, imageRecipe.Sources, release)...)
 	if len(differences) > 0 {
 		return nil, fmt.Errorf("%w: %s; run frostroot build online, then frostroot vendor", ErrLockMismatch, strings.Join(differences, "; "))
 	}
-	return &offlinePlan{lockPath: lockPath, lock: lock, entries: entries, poolDir: filepath.Join(recipeDir, filepath.FromSlash(pool.DebsDirName))}, nil
+	wheelEntries, err := pool.WheelManifest(lock)
+	if err != nil {
+		return nil, err
+	}
+	return &offlinePlan{
+		lockPath:     lockPath,
+		lock:         lock,
+		entries:      entries,
+		poolDir:      filepath.Join(recipeDir, filepath.FromSlash(pool.DebsDirName)),
+		wheelEntries: wheelEntries,
+		wheelPoolDir: filepath.Join(recipeDir, filepath.FromSlash(pool.WheelsDirName)),
+	}, nil
+}
+
+// lockedPythonRequested returns the Python packages the lock's recipe asked
+// for, compared the way PyPI compares names.
+func lockedPythonRequested(lock recipe.Lockfile) []string {
+	if lock.Python == nil {
+		return nil
+	}
+	return normalizedPythonNames(lock.Python.Requested)
+}
+
+// normalizedPythonNames returns names as PEP 503 compares them.
+func normalizedPythonNames(names []string) []string {
+	normalized := make([]string, 0, len(names))
+	for _, name := range names {
+		normalized = append(normalized, recipe.NormalizePythonName(name))
+	}
+	return normalized
 }
 
 // repositoryDifferences says how the recipe's sources differ from the lock's

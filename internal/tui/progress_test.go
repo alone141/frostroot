@@ -13,7 +13,7 @@ import (
 	"frostroot/internal/builder"
 )
 
-var sampleScreen = BuildScreen("cpp-lab", "22.04", "jammy", "amd64", "http://archive.ubuntu.com/ubuntu", builder.Phases())
+var sampleScreen = BuildScreen("cpp-lab", "22.04", "jammy", "amd64", "http://archive.ubuntu.com/ubuntu", builder.Phases(false))
 
 // newProgressDriver returns a driver around a progress model whose channels
 // never deliver anything; tests send events and the outcome as messages.

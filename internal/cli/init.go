@@ -47,7 +47,12 @@ timezone = {{tomlQuote .Locale.Timezone}}  # kept under WSL instead of following
 # apt package names, exactly as you would pass them to apt install.
 # Dependencies and Recommends come along automatically.
 include = {{tomlQuoteList .Packages.Include}}
-{{if .Sources}}
+{{if .Python}}
+[python]
+# PyPI names, installed into the image's virtual environment, which every
+# login shell finds on PATH. Versions belong in frostroot.lock, as above.
+include = {{tomlQuoteList .Python.Include}}
+{{end}}{{if .Sources}}
 # Extra apt sources (PPAs, vendor repositories). Each needs its signing key
 # as a file next to this recipe; frostroot init and edit fetch the keys of
 # the sources they know. suite defaults to the release's code name,

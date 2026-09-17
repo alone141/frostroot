@@ -66,13 +66,20 @@ func (a *App) runVendor(args []string) int {
 	if len(lock.Repositories) > 0 {
 		source += fmt.Sprintf(" and %d more", len(lock.Repositories))
 	}
+	wheelEntries, err := pool.WheelManifest(lock)
+	if err != nil {
+		a.stderrf("frostroot: %v\n", err)
+		return exitUserError
+	}
 	run := &vendorRun{
-		poolDir:   filepath.Join(a.RecipeDir, filepath.FromSlash(pool.DebsDirName)),
-		entries:   entries,
-		mirrorURL: *mirrorURL,
-		source:    source,
-		prune:     *prune,
-		fallback:  a.VendorFallback,
+		poolDir:      filepath.Join(a.RecipeDir, filepath.FromSlash(pool.DebsDirName)),
+		entries:      entries,
+		wheelPoolDir: filepath.Join(a.RecipeDir, filepath.FromSlash(pool.WheelsDirName)),
+		wheelEntries: wheelEntries,
+		mirrorURL:    *mirrorURL,
+		source:       source,
+		prune:        *prune,
+		fallback:     a.VendorFallback,
 	}
 	if run.fallback == nil {
 		run.fallback = pool.FallbackURL(lock)
@@ -82,7 +89,7 @@ func (a *App) runVendor(args []string) int {
 	defer stopSignalHandling()
 	screen := tui.Screen{
 		Title:    "frostroot vendor",
-		Subtitle: fmt.Sprintf("%s · %s · %s", packageCount(len(entries)), builder.FormatBytes(pool.TotalSize(entries)), source),
+		Subtitle: fmt.Sprintf("%s · %s · %s", packageCount(len(run.allEntries())), builder.FormatBytes(pool.TotalSize(run.allEntries())), source),
 		Phases:   builder.VendorPhases(*prune),
 		LogTitle: "downloads",
 	}
@@ -144,11 +151,18 @@ func (a *App) reportVendorSuccess(run *vendorRun) {
 		details = append(details, fmt.Sprintf("%d replaced", summary.Replaced))
 	}
 	a.stdoutf("\nVendored %s (%s) into %s: %s.\n", packageCount(len(run.entries)), builder.FormatBytes(pool.TotalSize(run.entries)), pool.DebsDirName, strings.Join(details, ", "))
-	switch {
-	case len(run.pruned) > 0:
+	if len(run.wheelEntries) > 0 {
+		a.stdoutf("Vendored %s into %s.\n", wheelCount(len(run.wheelEntries)), pool.WheelsDirName)
+	}
+	if len(run.pruned) > 0 {
 		a.stdoutf("Removed %d file(s) the lock does not name: %s\n", len(run.pruned), strings.Join(run.pruned, ", "))
-	case len(summary.Extra) > 0:
-		a.stdoutf("%d .deb file(s) in %s are not in the lock; remove them with: frostroot vendor --prune\n", len(summary.Extra), pool.DebsDirName)
+	} else {
+		if extra := run.extraByPool[pool.DebsDirName]; len(extra) > 0 {
+			a.stdoutf("%d .deb file(s) in %s are not in the lock; remove them with: frostroot vendor --prune\n", len(extra), pool.DebsDirName)
+		}
+		if extra := run.extraByPool[pool.WheelsDirName]; len(extra) > 0 {
+			a.stdoutf("%d wheel file(s) in %s are not in the lock; remove them with: frostroot vendor --prune\n", len(extra), pool.WheelsDirName)
+		}
 	}
 	a.stdoutf("\nRebuild the exact image without the archive:\n  frostroot build --offline\n")
 }
@@ -156,40 +170,106 @@ func (a *App) reportVendorSuccess(run *vendorRun) {
 // vendorRun is one run of the vendor command: the fetch, the optional prune,
 // and the progress they report.
 type vendorRun struct {
-	poolDir   string
-	entries   []pool.Entry
-	mirrorURL string // --mirror, or "" for the base URLs the lock records
-	source    string // where the packages come from, for messages
-	prune     bool
-	fallback  func(pool.Entry) string
-	progress  builder.Progress
+	poolDir string
+	entries []pool.Entry
+	// wheelPoolDir and wheelEntries are the Python side, empty for a lock
+	// with no Python packages. Wheels come from PyPI, each by its own whole
+	// URL, so neither --mirror nor the Launchpad fallback touches them.
+	wheelPoolDir string
+	wheelEntries []pool.Entry
+	mirrorURL    string // --mirror, or "" for the base URLs the lock records
+	source       string // where the packages come from, for messages
+	prune        bool
+	fallback     func(pool.Entry) string
+	progress     builder.Progress
 
 	summary pool.Summary
-	pruned  []string
+	// extraByPool holds, per pool directory name, the files there that the
+	// lock does not name, so a message can say where they are.
+	extraByPool map[string][]string
+	pruned      []string
 }
 
-// do fetches and, if asked, prunes, reporting phases as it goes.
+// allEntries returns both pools' entries, for the counts and sizes messages
+// show.
+func (r *vendorRun) allEntries() []pool.Entry {
+	return append(append([]pool.Entry{}, r.entries...), r.wheelEntries...)
+}
+
+// do fetches both pools and, if asked, prunes them, reporting phases as it
+// goes.
 func (r *vendorRun) do(ctx context.Context) error {
 	report := func(event builder.ProgressEvent) { r.progress.Report(event) }
 	report(builder.ProgressEvent{Phase: builder.PhaseVendorRead, Kind: builder.EventPhaseStarted})
 	report(builder.ProgressEvent{Phase: builder.PhaseVendorRead, Kind: builder.EventLogLine, Line: fmt.Sprintf("%s: %s, %s, from %s", builder.LockFileName, packageCount(len(r.entries)), builder.FormatBytes(pool.TotalSize(r.entries)), r.source)})
+	if len(r.wheelEntries) > 0 {
+		report(builder.ProgressEvent{Phase: builder.PhaseVendorRead, Kind: builder.EventLogLine, Line: fmt.Sprintf("%s: %s from PyPI", builder.LockFileName, wheelCount(len(r.wheelEntries)))})
+	}
 	report(builder.ProgressEvent{Phase: builder.PhaseVendorRead, Kind: builder.EventPhaseFinished})
 	report(builder.ProgressEvent{Phase: builder.PhaseVendorCheck, Kind: builder.EventPhaseStarted})
 	downloading := false
+	r.extraByPool = map[string][]string{}
+	if err := r.fetchPool(ctx, report, &downloading, pool.DebsDirName, r.poolDir, r.entries, r.mirrorURL, r.fallback); err != nil {
+		return err
+	}
+	if len(r.wheelEntries) > 0 {
+		// A wheel carries its own whole URL and PyPI never drops a file, so
+		// there is no mirror to substitute and no fallback to try.
+		if err := r.fetchPool(ctx, report, &downloading, pool.WheelsDirName, r.wheelPoolDir, r.wheelEntries, "", nil); err != nil {
+			return err
+		}
+	}
+	if downloading {
+		report(builder.ProgressEvent{Phase: builder.PhaseVendorDownload, Kind: builder.EventPhaseFinished})
+	}
+	if !r.prune {
+		return nil
+	}
+	report(builder.ProgressEvent{Phase: builder.PhaseVendorPrune, Kind: builder.EventPhaseStarted})
+	for _, prunable := range []struct {
+		dir     string
+		entries []pool.Entry
+		name    string
+	}{
+		{r.poolDir, r.entries, pool.DebsDirName},
+		{r.wheelPoolDir, r.wheelEntries, pool.WheelsDirName},
+	} {
+		if len(prunable.entries) == 0 {
+			continue
+		}
+		pruned, err := pool.Prune(prunable.dir, prunable.entries)
+		if err != nil {
+			return fmt.Errorf("pruning %s: %w", prunable.name, err)
+		}
+		r.pruned = append(r.pruned, pruned...)
+		for _, removed := range pruned {
+			report(builder.ProgressEvent{Phase: builder.PhaseVendorPrune, Kind: builder.EventLogLine, Line: "removed " + removed})
+		}
+	}
+	report(builder.ProgressEvent{Phase: builder.PhaseVendorPrune, Kind: builder.EventPhaseFinished})
+	return nil
+}
+
+// fetchPool fills one pool directory, adding what it did to the run's
+// summary. downloading says whether the download phase has been announced
+// yet, so that two pools still report one phase.
+func (r *vendorRun) fetchPool(ctx context.Context, report func(builder.ProgressEvent), downloading *bool, poolName, dir string, entries []pool.Entry, mirrorURL string, fallback func(pool.Entry) string) error {
 	summary, err := pool.Fetch(ctx, pool.FetchOptions{
-		Dir:       r.poolDir,
-		Entries:   r.entries,
-		MirrorURL: r.mirrorURL,
-		Fallback:  r.fallback,
+		Dir:       dir,
+		Entries:   entries,
+		MirrorURL: mirrorURL,
+		Fallback:  fallback,
 		UserAgent: "frostroot/" + builder.Version,
 		OnChecked: func(checked, total int) {
 			report(builder.ProgressEvent{Phase: builder.PhaseVendorCheck, Kind: builder.EventProgress, Done: int64(checked), Total: int64(total), Unit: builder.UnitFiles})
 		},
 		OnVerified: func(status pool.Status) {
 			report(builder.ProgressEvent{Phase: builder.PhaseVendorCheck, Kind: builder.EventLogLine, Line: fmt.Sprintf("%d present, %d missing, %d corrupt, %d not in the lock", len(status.Present), len(status.Missing), len(status.Corrupt), len(status.Extra))})
-			report(builder.ProgressEvent{Phase: builder.PhaseVendorCheck, Kind: builder.EventPhaseFinished})
-			report(builder.ProgressEvent{Phase: builder.PhaseVendorDownload, Kind: builder.EventPhaseStarted})
-			downloading = true
+			if !*downloading {
+				report(builder.ProgressEvent{Phase: builder.PhaseVendorCheck, Kind: builder.EventPhaseFinished})
+				report(builder.ProgressEvent{Phase: builder.PhaseVendorDownload, Kind: builder.EventPhaseStarted})
+				*downloading = true
+			}
 		},
 		OnReplaced: func(entry pool.Entry) {
 			report(builder.ProgressEvent{Phase: builder.PhaseVendorDownload, Kind: builder.EventLogLine, Line: "replacing corrupt " + entry.FileName})
@@ -201,25 +281,13 @@ func (r *vendorRun) do(ctx context.Context) error {
 			report(builder.ProgressEvent{Phase: builder.PhaseVendorDownload, Kind: builder.EventLogLine, Line: fmt.Sprintf("%s (%s) from %s", entry.FileName, builder.FormatBytes(entry.Size), sourceURL)})
 		},
 	})
-	r.summary = summary
-	if err != nil {
-		return err
+	r.summary.Present += summary.Present
+	r.summary.Fetched += summary.Fetched
+	r.summary.Replaced += summary.Replaced
+	r.summary.FetchedBytes += summary.FetchedBytes
+	r.summary.Extra = append(r.summary.Extra, summary.Extra...)
+	if len(summary.Extra) > 0 {
+		r.extraByPool[poolName] = summary.Extra
 	}
-	if downloading {
-		report(builder.ProgressEvent{Phase: builder.PhaseVendorDownload, Kind: builder.EventPhaseFinished})
-	}
-	if !r.prune {
-		return nil
-	}
-	report(builder.ProgressEvent{Phase: builder.PhaseVendorPrune, Kind: builder.EventPhaseStarted})
-	pruned, err := pool.Prune(r.poolDir, r.entries)
-	if err != nil {
-		return fmt.Errorf("pruning %s: %w", pool.DebsDirName, err)
-	}
-	r.pruned = pruned
-	for _, removed := range pruned {
-		report(builder.ProgressEvent{Phase: builder.PhaseVendorPrune, Kind: builder.EventLogLine, Line: "removed " + removed})
-	}
-	report(builder.ProgressEvent{Phase: builder.PhaseVendorPrune, Kind: builder.EventPhaseFinished})
-	return nil
+	return err
 }

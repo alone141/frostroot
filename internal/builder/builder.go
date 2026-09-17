@@ -99,6 +99,9 @@ type Result struct {
 	WorkDir               string // set when the work directory was kept: KeepWork, a failure, or a failed cleanup
 	CleanupErr            error  // the build succeeded but the work directory could not be removed
 	Offline               bool   // the image was rebuilt from the lock, which was checked and left as it was
+	// PythonPackageCount is how many packages the image's virtual
+	// environment holds, and 0 when the recipe asked for none.
+	PythonPackageCount int
 	// SourceDateEpoch is the instant the image is frozen at, in seconds
 	// since 1970: no file in the tarball is dated later. Online it is
 	// recorded in the lock; offline it is the lock's.
@@ -180,7 +183,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	bootstrapSpec := BootstrapSpec{
 		Suite:             release.Suite,
 		SourceLines:       imageSourceLines,
-		Include:           PackagesToInstall(imageRecipe.Packages.Include),
+		Include:           PackagesToInstall(imageRecipe),
 		Arch:              imageRecipe.Image.Arch,
 		InstallRecommends: true,
 		KeyringPath:       UbuntuArchiveKeyring,
@@ -230,12 +233,20 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		return result, err
 	}
 
-	stageOptions := StageOptions{RecordForLock: offline == nil, SourceLines: imageSourceLines}
+	stageOptions := StageOptions{
+		RecordForLock: offline == nil,
+		SourceLines:   imageSourceLines,
+		Python:        PythonOptions{Offline: offline != nil, SourceDateEpoch: instant.epoch},
+	}
 	if offline != nil {
 		stageOptions.SourceLines = offline.lock.Sources
 		// apt marks nothing on its own offline, since every locked package
 		// is asked for by name; the lock says what the online apt marked.
 		stageOptions.AutoMarks = RenderExtendedStates(offline.lock.Packages, offline.lock.Arch)
+		if len(offline.wheelEntries) > 0 {
+			stageOptions.Requirements = RenderRequirements(offline.lock)
+			stageOptions.WheelsDir = filepath.Join(workDir, PythonWheelsDirName)
+		}
 	}
 	if len(sourceKeys) > 0 {
 		stageOptions.Keys = map[string][]byte{}
@@ -252,6 +263,11 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		repositoryDir := filepath.Join(workDir, "pool")
 		if err := stageRepository(offline, repositoryDir, progress); err != nil {
 			return failBuild(err)
+		}
+		if stage.WheelsDir != "" {
+			if err := pool.StageFiles(offline.wheelPoolDir, offline.wheelEntries, stage.WheelsDir, nil); err != nil {
+				return failBuild(fmt.Errorf("staging the vendored wheels: %w", err))
+			}
 		}
 		bootstrapSpec.SourceLines = []string{"deb [trusted=yes] copy://" + repositoryDir + " ./"}
 	case len(imageRecipe.Sources) > 0:
@@ -275,6 +291,16 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		progress.Report(ProgressEvent{Phase: PhaseCheckLock, Kind: EventPhaseStarted})
 		if err := compareWithLock(offline.lock, installedPackages); err != nil {
 			return failBuild(err)
+		}
+		if stage.PipListPath != "" {
+			installedWheels, err := readPipList(stage.PipListPath)
+			if err != nil {
+				return failBuild(err)
+			}
+			if err := ComparePythonWithLock(offline.lock, installedWheels); err != nil {
+				return failBuild(err)
+			}
+			result.PythonPackageCount = len(offline.lock.PyPI)
 		}
 		progress.Report(ProgressEvent{Phase: PhaseCheckLock, Kind: EventPhaseFinished})
 	} else {
@@ -304,6 +330,20 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 			SourceDateEpoch:  instant.epoch,
 			Repositories:     lockRepositories(release, imageRecipe.Sources, sourceKeys),
 			Packages:         installedPackages,
+		}
+		if stage.PipReportPath != "" {
+			pythonResult, err := readPipReport(stage.PipReportPath, imageRecipe.PythonPackages())
+			if err != nil {
+				return failBuild(err)
+			}
+			lock.Python = &recipe.LockPython{
+				Requested:   imageRecipe.PythonPackages(),
+				Venv:        PythonVenvPath,
+				Interpreter: pythonResult.Interpreter,
+				PipVersion:  pythonResult.PipVersion,
+			}
+			lock.PyPI = pythonResult.Wheels
+			result.PythonPackageCount = len(pythonResult.Wheels)
 		}
 		temporaryLockPath, err = writeTemporaryLock(options.RecipeDir, lock)
 		if err != nil {
@@ -361,8 +401,39 @@ func verifyPool(offline *offlinePlan, progress Progress) error {
 	if !status.Complete() {
 		return fmt.Errorf("%w: %s; run frostroot vendor", ErrPoolIncomplete, status.Describe(maxNamedPoolProblems))
 	}
+	if len(offline.wheelEntries) > 0 {
+		wheelStatus, err := pool.Verify(offline.wheelPoolDir, offline.wheelEntries, nil)
+		if err != nil {
+			return fmt.Errorf("checking %s: %w", offline.wheelPoolDir, err)
+		}
+		if !wheelStatus.Complete() {
+			return fmt.Errorf("%w: %s in %s; run frostroot vendor", ErrPoolIncomplete, wheelStatus.Describe(maxNamedPoolProblems), pool.WheelsDirName)
+		}
+	}
 	progress.Report(ProgressEvent{Phase: PhaseVerifyVendored, Kind: EventPhaseFinished})
 	return nil
+}
+
+// readPipReport reads the installation report an online build downloaded out
+// of the image.
+func readPipReport(path string, requested []string) (PythonResult, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return PythonResult{}, fmt.Errorf("bootstrap did not produce pip's installation report: %w", err)
+	}
+	defer func() { _ = file.Close() }() // read-only: closing cannot lose data
+	return ParsePipReport(file, requested)
+}
+
+// readPipList reads the package list an offline build downloaded out of the
+// image's virtual environment.
+func readPipList(path string) ([]PythonInstalled, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("bootstrap did not produce the image's Python package list: %w", err)
+	}
+	defer func() { _ = file.Close() }() // read-only: closing cannot lose data
+	return ParsePipList(file)
 }
 
 // maxNamedPoolProblems bounds how many missing or corrupt files an error
