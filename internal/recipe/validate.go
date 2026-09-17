@@ -28,6 +28,14 @@ var (
 	packageNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]+$`)
 	localePattern      = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*\.[A-Za-z0-9-]+$`)
 	timezonePattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_+-]*(/[A-Za-z0-9][A-Za-z0-9_+-]*){0,2}$`)
+	// pythonNamePattern is a PyPI distribution name as PEP 503 defines it.
+	// The names reach a requirements file and pip's command line inside the
+	// image, so, like the locale, this is an injection boundary: no version
+	// specifier, extra, URL, path or space can pass it.
+	pythonNamePattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$`)
+	// pythonSeparators are the characters PEP 503 folds together when it
+	// compares two distribution names.
+	pythonSeparators = regexp.MustCompile(`[-_.]+`)
 	// Source fields reach apt source lines and file names, so each is a
 	// single token with no whitespace, brackets or slashes.
 	sourceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
@@ -40,6 +48,9 @@ const maxUserNameLength = 32
 
 // maxSourceNameLength keeps keyring file names short.
 const maxSourceNameLength = 32
+
+// maxPythonNameLength is the longest project name PyPI accepts.
+const maxPythonNameLength = 100
 
 // Validate returns every problem with imageRecipe, one message per problem,
 // or nil when there are none. It needs no network and no root. Whether the
@@ -71,6 +82,18 @@ func Validate(imageRecipe Recipe) []string {
 	}
 	for _, packageName := range imageRecipe.Packages.Include {
 		addProblem(CheckPackageName(packageName))
+	}
+	seenPythonNames := map[string]bool{}
+	for _, packageName := range imageRecipe.PythonPackages() {
+		if err := CheckPythonPackageName(packageName); err != nil {
+			addProblem(err)
+			continue
+		}
+		normalized := NormalizePythonName(packageName)
+		if seenPythonNames[normalized] {
+			problems = append(problems, fmt.Sprintf("python.include names %s twice", normalized))
+		}
+		seenPythonNames[normalized] = true
 	}
 	seenSourceNames := map[string]bool{}
 	for index, source := range imageRecipe.Sources {
@@ -199,6 +222,25 @@ func CheckPackageName(name string) error {
 		return fmt.Errorf("invalid package name %q (apt package names only; versions belong in the lock)", name)
 	}
 	return nil
+}
+
+// CheckPythonPackageName reports why name is not a PyPI distribution name, or
+// nil. A version specifier, an extra such as requests[socks], a URL or a path
+// all fail here rather than reaching pip, because the recipe says what to
+// install and the lock says which version it was.
+func CheckPythonPackageName(name string) error {
+	if !pythonNamePattern.MatchString(name) || len(name) > maxPythonNameLength {
+		return fmt.Errorf("invalid python package name %q (PyPI names only, 1-%d characters; versions belong in the lock)", name, maxPythonNameLength)
+	}
+	return nil
+}
+
+// NormalizePythonName returns name as PEP 503 compares it: lowercase, with
+// every run of dots, dashes and underscores folded to one dash. PyPI treats
+// Flask_SQLAlchemy, flask-sqlalchemy and Flask.SQLAlchemy as one project, and
+// so must the recipe, the lock and everything that matches them up.
+func NormalizePythonName(name string) string {
+	return strings.ToLower(pythonSeparators.ReplaceAllString(name, "-"))
 }
 
 // splitJoinedError returns the errors combined by errors.Join, or err itself
