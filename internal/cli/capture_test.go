@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 
+	"frostroot/internal/pgp"
 	"frostroot/internal/recipe"
 )
 
@@ -47,6 +49,58 @@ func runCaptureWithAnswers(recipeDir, root string, answers []string, args ...str
 	app := App{Stdout: &stdoutBuffer, Stderr: &stderrBuffer, RecipeDir: recipeDir, Prompt: &scriptedPrompt{answers: answers}, ReadFile: noHostFile}
 	exitCode = app.Run(append([]string{"capture", "--root", root}, args...))
 	return exitCode, stdoutBuffer.String(), stderrBuffer.String()
+}
+
+func TestCaptureCarriesSourcesWithTheirKeys(t *testing.T) {
+	root := fakeUbuntuRoot(t, "24.04")
+	dockerKey := dockerKeyFixture(t)
+	for relative, content := range map[string][]byte{
+		"etc/apt/sources.list.d/docker.list": []byte("deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable\n"),
+		"etc/apt/keyrings/docker.asc":        dockerKey,
+		"etc/apt/sources.list.d/nokey.list":  []byte("deb https://nokey.example/ubuntu noble main\n"),
+	} {
+		path := filepath.Join(root, filepath.FromSlash(relative))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recipeDir := t.TempDir()
+	exitCode, stdout, stderr := runCaptureWithAnswers(recipeDir, root, nil)
+	if exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr)
+	}
+	imageRecipe := loadWrittenRecipe(t, recipeDir)
+	if len(imageRecipe.Sources) != 1 || imageRecipe.Sources[0].Name != "docker" || imageRecipe.Sources[0].Key != "keys/docker.asc" {
+		t.Fatalf("Sources = %+v", imageRecipe.Sources)
+	}
+	written, err := os.ReadFile(filepath.Join(recipeDir, "keys", "docker.asc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key, err := pgp.ParsePublicKey(written); err != nil || key.Fingerprint != "9DC858229FC7DD38854AE2D88D81803C0EBFCD88" {
+		t.Errorf("written key: %v, %+v", err, key)
+	}
+	for _, wantText := range []string{"1 third-party sources with keys", "Saved the signing key of docker from the machine into keys/docker.asc"} {
+		if !strings.Contains(stdout, wantText) {
+			t.Errorf("stdout lacks %q:\n%s", wantText, stdout)
+		}
+	}
+	if !regexp.MustCompile(`Third-party apt sources\s+1\n`).MatchString(stdout) {
+		t.Errorf("the summary should count the source not carried:\n%s", stdout)
+	}
+	if exitCode, _, validateErr := runValidateIn(recipeDir); exitCode != exitSuccess {
+		t.Errorf("validate: exit %d, stderr %s", exitCode, validateErr)
+	}
+	report, err := os.ReadFile(filepath.Join(recipeDir, captureReportFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(report), "nokey.list (https://nokey.example/ubuntu noble): no signed-by key") || !strings.Contains(string(report), `source "docker" (Docker) from /etc/apt/sources.list.d/docker.list, key /etc/apt/keyrings/docker.asc`) {
+		t.Errorf("report:\n%s", report)
+	}
 }
 
 func TestCaptureWritesRecipeAndReport(t *testing.T) {

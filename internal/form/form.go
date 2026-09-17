@@ -11,6 +11,7 @@ import (
 
 	"frostroot/internal/distro"
 	"frostroot/internal/recipe"
+	"frostroot/internal/sources"
 )
 
 // Kind says how a field is answered.
@@ -64,9 +65,14 @@ const (
 	KeySystemd       = "systemd"
 	KeyPackages      = "packages"
 	KeyOtherPackages = "other_packages"
+	KeySources       = "sources" // catalog source names
+	KeyPPAs          = "ppas"    // free text: owner/name, separated by spaces or commas
 	// keyOriginalInclude is not a field: edit keeps the recipe's package
 	// order here so an unchanged recipe is written back as it was.
 	keyOriginalInclude = "original_include"
+	// keyOriginalSources is not a field either: the recipe's sources as they
+	// were, so hand-written ones survive an edit and the order is kept.
+	keyOriginalSources = "original_sources"
 )
 
 // The pages fields are grouped on, in order.
@@ -75,10 +81,11 @@ const (
 	PageUser     = "User"
 	PageSystem   = "System"
 	PagePackages = "Packages"
+	PageSources  = "Sources"
 )
 
 // Pages returns the page titles in order.
-func Pages() []string { return []string{PageImage, PageUser, PageSystem, PagePackages} }
+func Pages() []string { return []string{PageImage, PageUser, PageSystem, PagePackages, PageSources} }
 
 // Host is what the form reads from the machine it runs on.
 type Host struct {
@@ -146,7 +153,43 @@ func Fields(host Host) []Field {
 			Placeholder: "none",
 			Validate:    checkPackageList,
 		},
+		{
+			Key: KeySources, Page: PageSources, Kind: KindMultiSelect,
+			Title:       "Third-party apt sources",
+			Description: "Repositories besides Ubuntu's archive; their signing keys are fetched and checked when the recipe is written",
+			Options:     sourceOptions(),
+		},
+		{
+			Key: KeyPPAs, Page: PageSources, Kind: KindInput,
+			Title:       "Other PPAs",
+			Description: "Launchpad PPAs as owner/name, separated by spaces or commas",
+			Placeholder: "none",
+			Validate:    checkPPAList,
+		},
 	}
+}
+
+// sourceOptions renders the source catalog as MultiSelect options.
+func sourceOptions() []Option {
+	var options []Option
+	for _, entry := range sources.Catalog() {
+		options = append(options, Option{
+			Value:       entry.Name,
+			Label:       entry.Title + "  " + entry.Description,
+			Description: entry.Category,
+		})
+	}
+	return options
+}
+
+// checkPPAList validates a free-text list of PPAs. An empty list is fine.
+func checkPPAList(text string) error {
+	for _, ppa := range splitPackageList(text) {
+		if _, _, err := sources.ParsePPA(ppa); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // releaseOptions lists the supported Ubuntu releases, marking the one past

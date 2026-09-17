@@ -19,7 +19,7 @@ func (s Snapshot) Report() string {
 		fmt.Fprintf(&report, "- %s\n", line)
 	}
 	report.WriteString("\n## Not captured\n\n")
-	report.WriteString("Capture reads what apt knows and a few configuration files, and copies nothing else. Each area below was checked.\n")
+	report.WriteString("Capture reads what apt knows and a few configuration files; the only files it copies are the public signing keys of apt sources. Each area below was checked.\n")
 	for _, finding := range s.Findings {
 		report.WriteString("\n")
 		writeFinding(&report, finding)

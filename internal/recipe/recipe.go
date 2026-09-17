@@ -20,6 +20,38 @@ type Recipe struct {
 	WSL      WSL      `toml:"wsl"`
 	Locale   Locale   `toml:"locale"`
 	Packages Packages `toml:"packages"`
+	Sources  []Source `toml:"sources,omitempty"`
+}
+
+// Source is one [[sources]] table: an apt repository besides the Ubuntu
+// archive, such as a PPA or a vendor's repository, with the key that signs
+// it. Every source has a suite and components; flat repositories and
+// unsigned sources are not supported.
+type Source struct {
+	Name       string   `toml:"name"`                 // names the keyring in the image and the source in the lock
+	URL        string   `toml:"url"`                  // base URL, such as https://download.docker.com/linux/ubuntu
+	Suite      string   `toml:"suite,omitempty"`      // defaults to the release's code name
+	Components []string `toml:"components,omitempty"` // defaults to ["main"]
+	Key        string   `toml:"key"`                  // OpenPGP public key file, relative to the recipe directory
+}
+
+// DefaultComponents is what a source installs from when it names none.
+var DefaultComponents = []string{"main"}
+
+// SuiteFor returns the source's suite, or releaseSuite when it names none.
+func (s Source) SuiteFor(releaseSuite string) string {
+	if s.Suite != "" {
+		return s.Suite
+	}
+	return releaseSuite
+}
+
+// ComponentsOrDefault returns the source's components, or DefaultComponents.
+func (s Source) ComponentsOrDefault() []string {
+	if len(s.Components) > 0 {
+		return s.Components
+	}
+	return DefaultComponents
 }
 
 // Image is the [image] table: which Ubuntu release to build and what to call

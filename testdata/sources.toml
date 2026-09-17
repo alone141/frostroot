@@ -1,0 +1,31 @@
+[image]
+name = "docker-lab"
+release = "24.04"
+arch = "amd64"
+
+[user]
+name = "student"
+sudo = true
+
+[wsl]
+systemd = true
+default_user = "student"
+
+[locale]
+lang = "en_US.UTF-8"
+timezone = "UTC"
+
+[packages]
+include = ["docker-ce", "python3.12"]
+
+[[sources]]
+name = "docker"
+url = "https://download.docker.com/linux/ubuntu"
+components = ["stable"]
+key = "keys/docker.asc"
+
+[[sources]]
+name = "ppa-deadsnakes-ppa"
+url = "https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu"
+suite = "noble"
+key = "keys/ppa-deadsnakes-ppa.asc"
