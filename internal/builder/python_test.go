@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -289,7 +290,7 @@ func TestComparePythonWithLock(t *testing.T) {
 		{
 			// python3 -m venv seeds these; no lock names them.
 			name:      "seeded packages are not a difference",
-			installed: append(append([]PythonInstalled{}, asLocked...), PythonInstalled{Name: "setuptools", Version: "68.1.2"}),
+			installed: append(slices.Clone(asLocked), PythonInstalled{Name: "setuptools", Version: "68.1.2"}),
 		},
 		{
 			name:        "another version",
@@ -303,7 +304,7 @@ func TestComparePythonWithLock(t *testing.T) {
 		},
 		{
 			name:        "one the lock does not name",
-			installed:   append(append([]PythonInstalled{}, asLocked...), PythonInstalled{Name: "scipy", Version: "1.14.1"}),
+			installed:   append(slices.Clone(asLocked), PythonInstalled{Name: "scipy", Version: "1.14.1"}),
 			wantMessage: "scipy 1.14.1 is in the environment but not in the lock",
 		},
 	}

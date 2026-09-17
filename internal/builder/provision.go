@@ -128,9 +128,6 @@ if ! have_locale; then
 	fi
 fi
 update-locale "LANG=$lang"
-
-# mmdebstrap copies these from the build host and leaves them behind.
-rm -f /etc/resolv.conf /etc/hostname
 `))
 
 // provisionScriptValues are the values the provision script template needs.
@@ -392,6 +389,11 @@ func CustomizeHooks(stage Stage) []string {
 	}
 	hooks = append(hooks, `chroot "$1" /bin/sh -c "$(cat `+shellQuote(stage.ProvisionScriptPath)+`)" `+provisionScriptName)
 	hooks = append(hooks, pythonHooks(stage)...)
+	// mmdebstrap copies these from the build host and leaves them behind.
+	// They go last, because they are also how anything running in the chroot
+	// resolves a name: deleting them in the provision script left pip with no
+	// DNS, and that is what the Python step needs the network for.
+	hooks = append(hooks, `rm -f "$1/etc/resolv.conf" "$1/etc/hostname"`)
 	if stage.AutoMarksPath != "" {
 		// upload makes the file root's, mode 0644, as apt's own would be.
 		hooks = append(hooks, "upload "+shellQuote(stage.AutoMarksPath)+" "+aptExtendedStatesPath)
