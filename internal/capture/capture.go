@@ -1,7 +1,8 @@
 // Package capture reads an installed Ubuntu system and describes it as a
 // recipe plus a report of what a recipe cannot carry. It reads package
-// metadata and a few configuration files; it never copies files, never reads
-// the content of a home directory beyond entry names, and never needs root.
+// metadata and a few configuration files; the only files it copies are the
+// public signing keys of apt sources, it never reads the content of a home
+// directory beyond entry names, and it never needs root.
 package capture
 
 import (
@@ -12,6 +13,7 @@ import (
 
 	"frostroot/internal/distro"
 	"frostroot/internal/recipe"
+	"frostroot/internal/sources"
 )
 
 // Errors for systems capture cannot describe. Compare with errors.Is.
@@ -49,6 +51,10 @@ type Snapshot struct {
 	Locale    string
 	Timezone  string
 	Packages  []string // packages asked for, sorted
+	// Sources are the machine's third-party apt sources the recipe can hold,
+	// and Keys their signing keys, armored, by source name.
+	Sources []recipe.Source
+	Keys    map[string][]byte
 
 	InstalledCount int // packages installed, for the report
 	// Evidence says, one line each, where every captured value came from.
@@ -70,6 +76,7 @@ func (s Snapshot) Recipe() recipe.Recipe {
 		WSL:      recipe.WSL{Systemd: s.Systemd, DefaultUser: s.UserName},
 		Locale:   recipe.Locale{Lang: s.Locale, Timezone: s.Timezone},
 		Packages: recipe.Packages{Include: packages},
+		Sources:  slices.Clone(s.Sources),
 	}
 }
 
@@ -82,7 +89,7 @@ func Read(rootDir string) (Snapshot, error) {
 	root := systemRoot(filepath.Clean(rootDir))
 	snapshot := Snapshot{Root: string(root)}
 
-	release, err := root.checkRelease()
+	release, suite, err := root.checkRelease()
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -117,11 +124,23 @@ func Read(rootDir string) (Snapshot, error) {
 	homeDir, groups := snapshot.readUser(root, accounts)
 	snapshot.readLocaleAndTimezone(root)
 
+	carried, left := root.sourcesForRecipe(suite)
+	carriedHosts := map[string]bool{}
+	for _, source := range carried {
+		snapshot.Sources = append(snapshot.Sources, source.source)
+		if snapshot.Keys == nil {
+			snapshot.Keys = map[string][]byte{}
+		}
+		snapshot.Keys[source.source.Name] = source.key
+		carriedHosts[hostOfURI(source.source.URL)] = true
+		snapshot.note("source %q (%s) from %s", source.source.Name, sources.Describe(source.source), source.from)
+	}
+
 	owned, haveOwnership := root.ownedPaths()
 	origins := root.packageOrigins()
-	thirdParty, unsourced := thirdPartyPackageFindings(requested, origins)
+	thirdParty, unsourced := thirdPartyPackageFindings(requested, origins, carriedHosts)
 	snapshot.Findings = []Finding{
-		thirdPartySourceFinding(root.thirdPartySourceFiles()),
+		thirdPartySourceFinding(left),
 		thirdParty,
 		unsourced,
 		modifiedConfigFinding(root.modifiedConffiles(installed)),
@@ -140,20 +159,21 @@ func (s *Snapshot) note(format string, args ...any) {
 	s.Evidence = append(s.Evidence, fmt.Sprintf(format, args...))
 }
 
-// checkRelease reads /etc/os-release and returns the Ubuntu version when
-// frostroot can build it.
-func (root systemRoot) checkRelease() (string, error) {
+// checkRelease reads /etc/os-release and returns the Ubuntu version and its
+// code name when frostroot can build it.
+func (root systemRoot) checkRelease() (version, suite string, err error) {
 	release, ok := root.osRelease()
 	if !ok {
-		return "", fmt.Errorf("%w: no readable /etc/os-release under %s", ErrNotLinuxRoot, root)
+		return "", "", fmt.Errorf("%w: no readable /etc/os-release under %s", ErrNotLinuxRoot, root)
 	}
 	if release.id != "ubuntu" {
-		return "", fmt.Errorf("%w: /etc/os-release says ID=%s", ErrNotUbuntu, release.id)
+		return "", "", fmt.Errorf("%w: /etc/os-release says ID=%s", ErrNotUbuntu, release.id)
 	}
-	if _, err := distro.Lookup(release.version, distro.SupportedArch); err != nil {
-		return "", fmt.Errorf("%w: Ubuntu %s; frostroot builds %v", ErrUnsupportedRelease, release.version, distro.SupportedVersions())
+	known, err := distro.Lookup(release.version, distro.SupportedArch)
+	if err != nil {
+		return "", "", fmt.Errorf("%w: Ubuntu %s; frostroot builds %v", ErrUnsupportedRelease, release.version, distro.SupportedVersions())
 	}
-	return release.version, nil
+	return release.version, known.Suite, nil
 }
 
 // readIdentity sets the image name from the hostname.

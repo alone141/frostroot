@@ -11,16 +11,38 @@ import (
 // Lockfile is the content of frostroot.lock: what a build actually produced.
 // It is written by build and committed next to the recipe.
 type Lockfile struct {
-	Version          int           `toml:"version"` // lock format version
-	Distro           string        `toml:"distro"`
-	Release          string        `toml:"release"`
-	Suite            string        `toml:"suite"`
-	Arch             string        `toml:"arch"`
-	Mirror           string        `toml:"mirror"`  // archive URL actually used
-	Sources          []string      `toml:"sources"` // the three deb lines actually used
-	FrostrootVersion string        `toml:"frostroot_version"`
-	Requested        []string      `toml:"requested"` // the recipe's packages.include, as written
-	Packages         []LockPackage `toml:"packages"`  // every installed package, sorted
+	Version          int      `toml:"version"` // lock format version
+	Distro           string   `toml:"distro"`
+	Release          string   `toml:"release"`
+	Suite            string   `toml:"suite"`
+	Arch             string   `toml:"arch"`
+	Mirror           string   `toml:"mirror"`  // archive URL actually used
+	Sources          []string `toml:"sources"` // the three deb lines actually used
+	FrostrootVersion string   `toml:"frostroot_version"`
+	Requested        []string `toml:"requested"` // the recipe's packages.include, as written
+	// Repositories are the recipe's extra sources as the build used them,
+	// with the checksum of each signing key file. Absent without sources.
+	Repositories []LockRepository `toml:"repositories,omitempty"`
+	Packages     []LockPackage    `toml:"packages"` // every installed package, sorted
+}
+
+// LockRepository is one extra source the build installed from.
+type LockRepository struct {
+	Name       string   `toml:"name"`
+	URL        string   `toml:"url"`
+	Suite      string   `toml:"suite"`
+	Components []string `toml:"components"`
+	KeySHA256  string   `toml:"key_sha256"` // hex digest of the recipe's key file
+}
+
+// Repository returns the repository named name.
+func (l Lockfile) Repository(name string) (LockRepository, bool) {
+	for _, repository := range l.Repositories {
+		if repository.Name == name {
+			return repository, true
+		}
+	}
+	return LockRepository{}, false
 }
 
 // LockPackage is one installed package, and where its .deb file comes from.
@@ -33,7 +55,10 @@ type LockPackage struct {
 	Arch     string `toml:"arch"`
 	SHA256   string `toml:"sha256,omitempty"`   // hex digest of the .deb file
 	Size     int64  `toml:"size,omitempty"`     // bytes of the .deb file
-	Filename string `toml:"filename,omitempty"` // path of the .deb below the mirror's base URL
+	Filename string `toml:"filename,omitempty"` // path of the .deb below its source's base URL
+	// Source names the repository Filename is relative to; empty for the
+	// Ubuntu archive (Mirror).
+	Source string `toml:"source,omitempty"`
 }
 
 // HasChecksums reports whether every package carries the checksum, size and

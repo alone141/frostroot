@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"frostroot/internal/builder"
 	"frostroot/internal/pool"
 	"frostroot/internal/recipe"
 )
@@ -234,22 +235,23 @@ func TestVendorMirrorFlagOverridesTheLock(t *testing.T) {
 }
 
 func TestVersion(t *testing.T) {
+	version := "frostroot " + builder.Version
 	testCases := []struct {
 		name string
 		info *debug.BuildInfo
 		want string
 	}{
-		{name: "no build info", info: nil, want: "frostroot 0.4.0\n"},
-		{name: "without version control", info: &debug.BuildInfo{}, want: "frostroot 0.4.0\n"},
+		{name: "no build info", info: nil, want: version + "\n"},
+		{name: "without version control", info: &debug.BuildInfo{}, want: version + "\n"},
 		{
 			name: "from a clean checkout",
 			info: &debug.BuildInfo{Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: "5325294abcdef0123456789"}, {Key: "vcs.time", Value: "2026-09-17T08:12:00Z"}, {Key: "vcs.modified", Value: "false"}}},
-			want: "frostroot 0.4.0 (commit 5325294, 2026-09-17)\n",
+			want: version + " (commit 5325294, 2026-09-17)\n",
 		},
 		{
 			name: "from a dirty checkout",
 			info: &debug.BuildInfo{Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: "5325294abcdef0123456789"}, {Key: "vcs.modified", Value: "true"}}},
-			want: "frostroot 0.4.0 (commit 5325294+dirty)\n",
+			want: version + " (commit 5325294+dirty)\n",
 		},
 	}
 	for _, testCase := range testCases {

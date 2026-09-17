@@ -271,7 +271,7 @@ func TestIntegrationOfflineRebuild(t *testing.T) {
 
 	t.Log("vendor")
 	poolDir := filepath.Join(recipeDir, "vendor", "debs")
-	summary, err := pool.Fetch(context.Background(), pool.FetchOptions{Dir: poolDir, Entries: entries, MirrorURL: lock.Mirror, Fallback: pool.LaunchpadURL})
+	summary, err := pool.Fetch(context.Background(), pool.FetchOptions{Dir: poolDir, Entries: entries, Fallback: pool.FallbackURL(lock)})
 	if err != nil {
 		t.Fatal(err)
 	}

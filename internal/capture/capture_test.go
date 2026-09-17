@@ -6,12 +6,17 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
+	"frostroot/internal/pgp"
 	"frostroot/internal/recipe"
 )
+
+// fakeKeyPacket is the smallest OpenPGP public key pgp accepts.
+var fakeKeyPacket = []byte{0x99, 0x00, 0x03, 0x04, 0x00, 0x00}
 
 // buildRoot creates a fake root filesystem from path to content; a value
 // starting with "-> " makes a symlink to the rest of it.
@@ -66,9 +71,18 @@ func wslMachine() map[string]string {
 		dpkgStanza("libcurl4", "optional", installed) +
 		dpkgStanza("golang-1.24", "optional", installed) +
 		dpkgStanza("mytool", "optional", installed) +
+		dpkgStanza("docker-ce", "optional", installed) +
 		dpkgStanza("ubuntu-wsl", "optional", installed) +
 		dpkgStanza("oldthing", "optional", "deinstall ok config-files")
+	inlineKey := strings.ReplaceAll(strings.TrimRight(string(pgp.Armor(fakeKeyPacket)), "\n"), "\n\n", "\n.\n")
 	return map[string]string{
+		// Third-party sources: Docker (deb822, key file) and an inline-key
+		// source are carried; a PPA without signed-by and a flat repository
+		// are not; deb-src installs nothing.
+		"etc/apt/sources.list.d/docker.sources": "Types: deb\nURIs: https://download.docker.com/linux/ubuntu\nSuites: noble\nComponents: stable\nSigned-By: /etc/apt/keyrings/docker.gpg\n",
+		"etc/apt/keyrings/docker.gpg":           string(fakeKeyPacket),
+		"etc/apt/sources.list.d/corp.sources":   "Types: deb deb-src\nURIs: https://apt.corp.example/ubuntu/\nSuites: noble noble-extras\nComponents: main tools\nSigned-By:\n " + strings.ReplaceAll(inlineKey, "\n", "\n ") + "\n",
+		"etc/apt/sources.list.d/flat.list":      "deb [signed-by=/etc/apt/keyrings/docker.gpg] https://flat.example/repo ./\ndeb-src https://ppa.launchpadcontent.net/longsleep/golang-backports/ubuntu noble main\n",
 		"etc/os-release":                        "NAME=\"Ubuntu\"\nID=ubuntu\nVERSION_ID=\"24.04\"\nVERSION_CODENAME=noble\n",
 		"etc/hostname":                          "Melik's Laptop\n",
 		"etc/wsl.conf":                          "[boot]\nsystemd=true\n\n[user]\ndefault=melik\n",
@@ -93,6 +107,7 @@ func wslMachine() map[string]string {
 		"var/lib/dpkg/info/owned.list":          "/etc/systemd/system/owned.service\n",
 		"var/lib/apt/lists/archive.ubuntu.com_ubuntu_dists_noble_main_binary-amd64_Packages":                                  "Package: git\nVersion: 1\n\nPackage: curl\nVersion: 1\n\nPackage: libcurl4\nVersion: 1\n\nPackage: bash\nVersion: 1\n\n",
 		"var/lib/apt/lists/ppa.launchpadcontent.net_longsleep_golang-backports_ubuntu_dists_noble_main_binary-amd64_Packages": "Package: golang-1.24\nVersion: 1\n\n",
+		"var/lib/apt/lists/download.docker.com_linux_ubuntu_dists_noble_stable_binary-amd64_Packages":                         "Package: docker-ce\nVersion: 1\n\n",
 		"usr/local/bin/mytool": "#!/bin/sh\n",
 		"opt/myide/bin/ide":    "binary",
 		"usr/local/lib/python3.12/dist-packages/requests-2.32.3.dist-info/METADATA": "Name: requests\n",
@@ -134,15 +149,37 @@ func TestReadWSLMachine(t *testing.T) {
 	}
 	// Required/important, automatic, metapackage and removed packages are
 	// out; what someone asked for stays, sorted.
-	if want := []string{"curl", "git", "golang-1.24", "mytool"}; !slices.Equal(snapshot.Packages, want) {
+	if want := []string{"curl", "docker-ce", "git", "golang-1.24", "mytool"}; !slices.Equal(snapshot.Packages, want) {
 		t.Errorf("packages = %q, want %q", snapshot.Packages, want)
 	}
-	if snapshot.InstalledCount != 10 {
-		t.Errorf("installed = %d, want 10 (the removed package does not count)", snapshot.InstalledCount)
+	if snapshot.InstalledCount != 11 {
+		t.Errorf("installed = %d, want 11 (the removed package does not count)", snapshot.InstalledCount)
+	}
+	wantSources := []recipe.Source{ // source files are read in name order
+		{Name: "apt-corp-example", URL: "https://apt.corp.example/ubuntu", Components: []string{"main", "tools"}, Key: "keys/apt-corp-example.asc"},
+		{Name: "apt-corp-example-2", URL: "https://apt.corp.example/ubuntu", Suite: "noble-extras", Components: []string{"main", "tools"}, Key: "keys/apt-corp-example-2.asc"},
+		{Name: "docker", URL: "https://download.docker.com/linux/ubuntu", Components: []string{"stable"}, Key: "keys/docker.asc"},
+	}
+	if !reflect.DeepEqual(snapshot.Sources, wantSources) {
+		t.Errorf("sources =\n%+v\nwant\n%+v", snapshot.Sources, wantSources)
+	}
+	for _, source := range wantSources {
+		key, err := pgp.ParsePublicKey(snapshot.Keys[source.Name])
+		if err != nil || !key.Armored {
+			t.Errorf("key of %s: %v", source.Name, err)
+		}
+	}
+	if !slices.ContainsFunc(snapshot.Evidence, func(line string) bool {
+		return strings.Contains(line, `source "docker" (Docker) from /etc/apt/sources.list.d/docker.sources, key /etc/apt/keyrings/docker.gpg`)
+	}) {
+		t.Errorf("evidence should name the carried source and its key: %q", snapshot.Evidence)
+	}
+	thirdPartySources := findingByArea(t, snapshot, AreaThirdPartySources)
+	if thirdPartySources.Count != 2 || !strings.Contains(thirdPartySources.Examples[0], "flat.list (https://flat.example/repo ./): a flat repository") || !strings.Contains(thirdPartySources.Examples[1], "golang.list (https://ppa.launchpadcontent.net/longsleep/golang-backports/ubuntu noble): no signed-by key") {
+		t.Errorf("third-party sources = %+v", thirdPartySources)
 	}
 	expectations := map[string][]string{
-		AreaThirdPartySources:  {"/etc/apt/sources.list.d/golang.list (https://ppa.launchpadcontent.net/longsleep/golang-backports/ubuntu)"},
-		AreaThirdPartyPackages: {"golang-1.24 (ppa.launchpadcontent.net)"},
+		AreaThirdPartyPackages: {"golang-1.24 (ppa.launchpadcontent.net)"}, // docker-ce's source is in the recipe now
 		AreaUnsourcedPackages:  {"mytool"},
 		AreaModifiedConfig:     {"/etc/adduser.conf"},
 		AreaAddedEtc:           {"/etc/profile.d/go.sh"},
@@ -330,18 +367,64 @@ func TestImageNameFromHostname(t *testing.T) {
 	}
 }
 
-func TestSourceURIs(t *testing.T) {
-	oneLine := "# comment\ndeb [arch=amd64 signed-by=/k.gpg] https://ppa.example/ubuntu noble main\ndeb-src http://archive.ubuntu.com/ubuntu noble main\n"
-	if got := sourceURIs(oneLine); !slices.Equal(got, []string{"https://ppa.example/ubuntu", "http://archive.ubuntu.com/ubuntu"}) {
-		t.Errorf("sourceURIs(one-line) = %q", got)
+func TestParseSourceFiles(t *testing.T) {
+	oneLine := "# comment\ndeb [arch=amd64 signed-by=/k.gpg,/other.gpg] https://ppa.example/ubuntu noble main universe\ndeb-src http://archive.ubuntu.com/ubuntu noble main\ndeb http://plain.example/repo noble main\nbroken\n"
+	got := parseOneLineSources("/etc/apt/sources.list", oneLine)
+	want := []aptSource{
+		{file: "/etc/apt/sources.list", uri: "https://ppa.example/ubuntu", suite: "noble", components: []string{"main", "universe"}, signedBy: "/k.gpg"},
+		{file: "/etc/apt/sources.list", uri: "http://plain.example/repo", suite: "noble", components: []string{"main"}},
 	}
-	deb822 := "Types: deb\nURIs: http://tr.archive.ubuntu.com/ubuntu/ http://security.ubuntu.com/ubuntu/\nSuites: noble\n"
-	got := sourceURIs(deb822)
-	if len(got) != 2 || !isUbuntuArchiveURI(got[0]) || !isUbuntuArchiveURI(got[1]) {
-		t.Errorf("sourceURIs(deb822) = %q, want two Ubuntu archive URIs", got)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("one-line =\n%+v\nwant\n%+v", got, want)
+	}
+	deb822 := "Types: deb\nURIs: http://tr.archive.ubuntu.com/ubuntu/ http://security.ubuntu.com/ubuntu/\nSuites: noble noble-updates\nComponents: main\n\nTypes: deb-src\nURIs: https://src.example\nSuites: noble\n\nTypes: deb\nURIs: https://off.example\nSuites: noble\nEnabled: no\n"
+	entries := parseDeb822Sources("/etc/apt/sources.list.d/ubuntu.sources", deb822)
+	if len(entries) != 4 || !isUbuntuArchiveURI(entries[0].uri) || entries[3].suite != "noble-updates" {
+		t.Errorf("deb822 = %+v, want two URIs times two suites, no deb-src, nothing disabled", entries)
 	}
 	if isUbuntuArchiveURI("https://ppa.launchpadcontent.net/x/y/ubuntu") || isUbuntuArchive("notubuntu.com_dists_x_Packages") {
 		t.Error("third-party hosts must not count as the Ubuntu archive")
+	}
+	if got := deb822SignedBy("\n-----BEGIN PGP PUBLIC KEY BLOCK-----\n.\nmQIN\n-----END PGP PUBLIC KEY BLOCK-----"); got != "-----BEGIN PGP PUBLIC KEY BLOCK-----\n\nmQIN\n-----END PGP PUBLIC KEY BLOCK-----\n" {
+		t.Errorf("inline key = %q", got)
+	}
+}
+
+func TestSourceNameFor(t *testing.T) {
+	used := map[string]bool{}
+	for uri, want := range map[string]string{
+		"https://download.docker.com/linux/ubuntu/":                          "docker",
+		"https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu":             "deadsnakes", // the catalog knows this PPA
+		"https://ppa.launchpadcontent.net/longsleep/golang-backports/ubuntu": "ppa-longsleep-golang-backports",
+		"https://apt.corp.example/ubuntu":                                    "apt-corp-example",
+		"http://127.0.0.1:8099":                                              "127-0-0-1",
+	} {
+		if got := sourceNameFor(uri, "noble", "noble", used); got != want {
+			t.Errorf("sourceNameFor(%q) = %q, want %q", uri, got, want)
+		}
+	}
+	used["apt-corp-example"] = true
+	if got := sourceNameFor("https://apt.corp.example/ubuntu", "noble-extras", "noble", used); got != "apt-corp-example-2" {
+		t.Errorf("second name = %q", got)
+	}
+	// Docker on another suite is not the catalog's Docker entry.
+	if got := sourceNameFor("https://download.docker.com/linux/ubuntu", "jammy", "noble", map[string]bool{}); got != "download-docker-com" {
+		t.Errorf("docker on jammy = %q", got)
+	}
+}
+
+func TestSourcesForRecipeReportsUnreadableKeys(t *testing.T) {
+	root := buildRoot(t, map[string]string{
+		"etc/apt/sources.list.d/a.list": "deb [signed-by=/etc/apt/keyrings/missing.gpg] https://a.example/ubuntu noble main\n",
+		"etc/apt/sources.list.d/b.list": "deb [signed-by=/etc/apt/keyrings/html.gpg] https://b.example/ubuntu noble main\n",
+		"etc/apt/keyrings/html.gpg":     "<html>",
+	})
+	carried, left := systemRoot(root).sourcesForRecipe("noble")
+	if len(carried) != 0 || len(left) != 2 {
+		t.Fatalf("carried %+v, left %+v", carried, left)
+	}
+	if !strings.Contains(left[0].reason, "missing.gpg could not be read") || !strings.Contains(left[1].reason, "not an OpenPGP public key") {
+		t.Errorf("reasons = %q, %q", left[0].reason, left[1].reason)
 	}
 }
 

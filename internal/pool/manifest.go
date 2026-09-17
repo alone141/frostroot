@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"frostroot/internal/recipe"
+	"frostroot/internal/sources"
 )
 
 // DebsDirName is where the vendored packages live, relative to the recipe
@@ -34,14 +35,17 @@ type Entry struct {
 	Version  string
 	Arch     string
 	FileName string // base name in the pool directory, from the lock's filename
-	URLPath  string // the lock's filename: the path below the mirror's base URL
+	URLPath  string // the lock's filename: the path below BaseURL
+	BaseURL  string // the archive's mirror, or the extra source's URL
+	Source   string // the lock's source name; "" for the archive
 	Size     int64
 	SHA256   string // lowercase hex
 }
 
 // Manifest lists what a complete pool for lock holds, in the lock's order.
-// It refuses locks of another format version, locks without checksums, and
-// file names that could escape the pool directory.
+// It refuses locks of another format version, locks without checksums,
+// packages from a repository the lock does not describe, and file names
+// that could escape the pool directory.
 func Manifest(lock recipe.Lockfile) ([]Entry, error) {
 	if lock.Version != 1 {
 		return nil, fmt.Errorf("%w: format version %d, want 1", ErrBadLock, lock.Version)
@@ -60,17 +64,45 @@ func Manifest(lock recipe.Lockfile) ([]Entry, error) {
 			return nil, fmt.Errorf("%w: packages %s and %s share the file name %s", ErrBadLock, other, locked.Name, fileName)
 		}
 		seenFileNames[fileName] = locked.Name
+		baseURL := lock.Mirror
+		if locked.Source != "" {
+			repository, found := lock.Repository(locked.Source)
+			if !found {
+				return nil, fmt.Errorf("%w: package %s comes from source %q, which the lock does not describe", ErrBadLock, locked.Name, locked.Source)
+			}
+			baseURL = repository.URL
+		}
 		entries = append(entries, Entry{
 			Package:  locked.Name,
 			Version:  locked.Version,
 			Arch:     locked.Arch,
 			FileName: fileName,
 			URLPath:  locked.Filename,
+			BaseURL:  baseURL,
+			Source:   locked.Source,
 			Size:     locked.Size,
 			SHA256:   strings.ToLower(locked.SHA256),
 		})
 	}
 	return entries, nil
+}
+
+// FallbackURL returns the Fetch fallback for lock: Launchpad's librarian for
+// a package of the Ubuntu archive, Launchpad's PPA files for a package of a
+// PPA, nothing for other sources.
+func FallbackURL(lock recipe.Lockfile) func(Entry) string {
+	return func(entry Entry) string {
+		if entry.Source == "" {
+			if lock.Distro == "ubuntu" {
+				return LaunchpadURL(entry)
+			}
+			return ""
+		}
+		if owner, name, isPPA := sources.PPAOf(entry.BaseURL); isPPA {
+			return sources.PPAFilesURL(owner, name, entry.FileName)
+		}
+		return ""
+	}
 }
 
 // poolFileName returns the base name of an index Filename, refusing anything

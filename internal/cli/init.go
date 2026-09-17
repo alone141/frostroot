@@ -47,7 +47,19 @@ timezone = {{tomlQuote .Locale.Timezone}}  # kept under WSL instead of following
 # apt package names, exactly as you would pass them to apt install.
 # Dependencies and Recommends come along automatically.
 include = {{tomlQuoteList .Packages.Include}}
-`))
+{{if .Sources}}
+# Extra apt sources (PPAs, vendor repositories). Each needs its signing key
+# as a file next to this recipe; frostroot init and edit fetch the keys of
+# the sources they know. suite defaults to the release's code name,
+# components to ["main"].
+{{range .Sources}}
+[[sources]]
+name = {{tomlQuote .Name}}
+url = {{tomlQuote .URL}}
+{{if .Suite}}suite = {{tomlQuote .Suite}}
+{{end}}{{if .Components}}components = {{tomlQuoteList .Components}}
+{{end}}key = {{tomlQuote .Key}}
+{{end}}{{end}}`))
 
 const initUsageText = `usage: frostroot init [--force] [--plain]
 
@@ -67,7 +79,7 @@ func (a *App) runInit(args []string) int {
 		a.stderrf("frostroot: %s already exists; use --force to overwrite it, or frostroot edit to change it\n", recipePath)
 		return exitUserError
 	}
-	return a.runRecipeForm("init", form.Defaults(a.host()), recipePath, *plain)
+	return a.runRecipeForm("init", form.Defaults(a.host()), recipePath, *plain, nil)
 }
 
 // writeRecipe renders imageRecipe to a temporary file next to recipePath,

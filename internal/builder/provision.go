@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"text/template"
 
@@ -176,17 +177,26 @@ type Stage struct {
 	// them. mmdebstrap's copy-out puts the directory inside its destination,
 	// so this is <stage>/lists and the hook names the stage directory.
 	AptListsDir string
+	// KeyringDir holds the binary signing keys of the recipe's extra
+	// sources, one KeyringFileName each, for mmdebstrap's signed-by on the
+	// host and for upload into the image. KeyNames lists them in order.
+	KeyringDir string
+	KeyNames   []string
 }
 
 // StageOptions say what WriteStage renders besides the provisioning files.
 type StageOptions struct {
-	// SourceLines, when set, are written as /etc/apt/sources.list for the
-	// image. An offline build needs this: mmdebstrap would otherwise leave
-	// the local repository's line in the image.
+	// SourceLines are written as /etc/apt/sources.list for the image, with
+	// signed-by paths under ImageKeyringDir. mmdebstrap would otherwise
+	// leave the lines it was given, which name host paths (or, offline, the
+	// local repository).
 	SourceLines []string
 	// CopyAptLists asks for the image's apt indexes to be copied out, which
 	// an online build reads for the lock's checksums.
 	CopyAptLists bool
+	// Keys are the extra sources' signing keys in binary form, by source
+	// name, to stage for apt and upload into the image.
+	Keys map[string][]byte
 }
 
 // WriteStage renders every provisioning file for imageRecipe into stageDir.
@@ -222,14 +232,34 @@ func WriteStage(stageDir string, imageRecipe recipe.Recipe, options StageOptions
 		contentByPath[stage.SourcesListPath] = strings.Join(options.SourceLines, "\n") + "\n"
 	}
 	for path, content := range contentByPath {
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-			return Stage{}, err
-		}
-		if err := os.Chmod(path, 0o644); err != nil {
+		if err := writeStageFile(path, []byte(content)); err != nil {
 			return Stage{}, err
 		}
 	}
+	if len(options.Keys) > 0 {
+		stage.KeyringDir = filepath.Join(stageDir, "keys")
+		if err := makeDirectoriesWithMode(stage.KeyringDir, 0o755); err != nil {
+			return Stage{}, err
+		}
+		for name := range options.Keys {
+			stage.KeyNames = append(stage.KeyNames, name)
+		}
+		slices.Sort(stage.KeyNames)
+		for _, name := range stage.KeyNames {
+			if err := writeStageFile(filepath.Join(stage.KeyringDir, KeyringFileName(name)), options.Keys[name]); err != nil {
+				return Stage{}, err
+			}
+		}
+	}
 	return stage, nil
+}
+
+// writeStageFile writes a world-readable stage file whatever the umask.
+func writeStageFile(path string, content []byte) error {
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o644)
 }
 
 // shellQuote single-quotes value for a POSIX shell. recipe.Validate already
@@ -249,6 +279,13 @@ func CustomizeHooks(stage Stage) []string {
 	hooks := []string{"upload " + shellQuote(stage.WSLConfPath) + " /etc/wsl.conf"}
 	if stage.SudoersPath != "" {
 		hooks = append(hooks, "upload "+shellQuote(stage.SudoersPath)+" "+sudoersDropInPath)
+	}
+	if len(stage.KeyNames) > 0 {
+		// focal's apt has no /etc/apt/keyrings; later releases ship it.
+		hooks = append(hooks, `mkdir -p "$1`+ImageKeyringDir+`"`)
+		for _, name := range stage.KeyNames {
+			hooks = append(hooks, "upload "+shellQuote(filepath.Join(stage.KeyringDir, KeyringFileName(name)))+" "+ImageKeyringDir+"/"+KeyringFileName(name))
+		}
 	}
 	if stage.SourcesListPath != "" {
 		hooks = append(hooks, "upload "+shellQuote(stage.SourcesListPath)+" /etc/apt/sources.list")

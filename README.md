@@ -2,11 +2,12 @@
 
 **Freeze an Ubuntu root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
 
-> **Status: v0.4.0.** `init`, `edit`, `capture`, `validate`, `build`,
-> `vendor` and `build --offline` work. In a terminal, `init`, `edit` and
-> `capture` are a full-screen form driven with the arrow keys; `build` and
-> `vendor` are a progress screen with bars. Every path in this README was run
-> for real: images for Ubuntu 20.04, 22.04 and 24.04 were built with
+> **Status: v0.5.0.** `init`, `edit`, `capture`, `validate`, `build`,
+> `vendor` and `build --offline` work, and a recipe can add third-party apt
+> sources (PPAs, Docker, Node.js, VS Code...). In a terminal, `init`, `edit`
+> and `capture` are a full-screen form driven with the arrow keys; `build`
+> and `vendor` are a progress screen with bars. Every path in this README
+> was run for real: images for Ubuntu 20.04, 22.04 and 24.04 were built with
 > `frostroot build`, imported with `wsl --import` on Windows 11, and logged
 > into; a lock was vendored and rebuilt offline to the same package set. See
 > [Verification](#verification).
@@ -143,15 +144,19 @@ mkdir cpp-lab && cd cpp-lab
 frostroot init
 ```
 
-`init` opens a form. Four pages, each a few questions: the image name and
+`init` opens a form. Five pages, each a few questions: the image name and
 release; the user name and whether it gets passwordless sudo; the timezone
 (type `ist` to filter the list down to `Europe/Istanbul`), locale and whether
-the image boots with systemd; then the packages, picked with Space from a
-catalog grouped by category (C/C++, Python, editors, tools...), plus a line
-for any other apt package names. Enter moves on, Shift-Tab goes back, Ctrl-C
-leaves without writing. A summary page shows the recipe before it is
-written. You type an image name, a user name and, if you want, extra
-package names; everything else is a choice.
+the image boots with systemd; the packages, picked with Space from a catalog
+grouped by category (C/C++, Python, editors, tools...), plus a line for any
+other apt package names; then third-party apt sources, picked from a catalog
+(deadsnakes, git-core, Docker, NodeSource, GitHub CLI, Kitware, LLVM, VS
+Code), plus a line for other PPAs as `owner/name`. Enter moves on, Shift-Tab
+goes back, Ctrl-C leaves without writing. A summary page shows the recipe
+before it is written. You type an image name, a user name and, if you want,
+extra package names or PPAs; everything else is a choice. The signing keys
+of the sources you picked are fetched, checked against pinned fingerprints
+and saved under `keys/` when the recipe is written.
 
 ```console
 $ frostroot validate
@@ -205,10 +210,10 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 
 | Command | What it does |
 |---|---|
-| `frostroot init [--force] [--plain]` | Opens the form and writes a commented `frostroot.toml`. Refuses to overwrite one without `--force`. Writes nothing unless the answers validate and you confirm. |
-| `frostroot edit [--plain]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back. The file is regenerated from the template, so your own comments in it do not survive. |
-| `frostroot capture [--root DIR] [--force] [--plain]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt and the configuration files say, writes `frostroot.toml`, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing; needs no root. |
-| `frostroot validate` | Checks `frostroot.toml` and prints every problem. No network, no root. |
+| `frostroot init [--force] [--plain]` | Opens the form and writes a commented `frostroot.toml`, then fetches the signing keys of the sources you picked into `keys/`. Refuses to overwrite a recipe without `--force`. Writes nothing unless the answers validate and you confirm. |
+| `frostroot edit [--plain]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back; fetches any missing source keys. The file is regenerated from the template, so your own comments in it do not survive. |
+| `frostroot capture [--root DIR] [--force] [--plain]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, writes `frostroot.toml` and the signing keys of the third-party sources it could carry, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys; needs no root. |
+| `frostroot validate` | Checks `frostroot.toml`, including that every source's key file is there and is a key, and prints every problem. No network, no root. |
 | `frostroot build [--mirror URL] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-ubuntu-<release>-amd64.tar.gz`. Never prompts. Overwrites the previous lock and tarball. |
 | `frostroot vendor [--mirror URL] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name. |
 | `frostroot build --offline [--keep-work] [--plain]` | Rebuilds the image from `frostroot.lock` and `vendor/debs/`, without the archive. Fails unless the result has exactly the lock's packages. The lock is read, not written. |
@@ -242,6 +247,7 @@ kept after a failure).
 | `locale.lang` | e.g. `en_US.UTF-8`, `tr_TR.UTF-8`, `C.UTF-8` | `en_US.UTF-8` |
 | `locale.timezone` | e.g. `UTC`, `Europe/Istanbul`, `America/Argentina/Buenos_Aires` | `UTC` |
 | `packages.include` | apt package names only; no versions, no suites | preset plus extras |
+| `[[sources]]` | extra apt repositories; see [Third-party sources](#third-party-sources) | none |
 
 Unknown fields are an error, so a `[package]` typo fails loudly instead of
 building an image without your packages. `locale` and `timezone` are checked
@@ -249,6 +255,50 @@ strictly because they reach shell scripts. Whether the timezone and locale
 actually exist can only be checked inside the image, so `build` fails if they
 do not. Files saved by Windows editors are fine: CRLF line endings and a UTF-8
 byte order mark are both accepted.
+
+## Third-party sources
+
+Most labs need something the Ubuntu archive does not have: Python 3.12 on
+22.04, a current git, Docker, Node.js, VS Code. A recipe can name apt
+repositories besides the archive:
+
+```toml
+[[sources]]
+name = "docker"
+url = "https://download.docker.com/linux/ubuntu"
+components = ["stable"]      # default ["main"]
+key = "keys/docker.asc"      # the repository's OpenPGP public key, next to the recipe
+
+[[sources]]
+name = "ppa-deadsnakes-ppa"
+url = "https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu"
+key = "keys/ppa-deadsnakes-ppa.asc"
+```
+
+`suite` defaults to the release's code name (`noble`), which is what PPAs
+and most vendors use. Every source has a suite, components and a key: flat
+repositories and unsigned sources are not supported, and there is no
+`key_url` that `build` fetches blindly.
+
+The form offers a catalog (deadsnakes, git-core, Docker, NodeSource, GitHub
+CLI, Kitware, LLVM, VS Code) whose key fingerprints are pinned in frostroot,
+and takes PPAs as `owner/name`, whose fingerprints come from Launchpad's
+API. When the recipe is written the keys are fetched, checked against those
+fingerprints, and saved as `keys/<name>.asc`; a key that does not match is
+refused. For any other repository, save its public key yourself at the path
+the recipe names, and commit the `keys/` directory with the recipe.
+
+`build` installs from the archive and the sources together, each source
+verified by its own key and nothing else. The lock records which source
+every package came from and the checksum of every key file
+(`[[repositories]]`), `vendor` fetches each package from its own source (with
+Launchpad as the fallback for PPAs), and `build --offline` rebuilds from the
+pool as before, refusing if the recipe's sources no longer match the lock's.
+In the image, the sources are in `/etc/apt/sources.list` with their keys
+under `/etc/apt/keyrings/`, so `apt update` there works with the same trust.
+
+HTTPS sources are fetched by apt on the build host, so they need the host's
+CA certificates; see the note on networks that inspect TLS.
 
 The package catalog `init` offers is a convenience, not a recipe feature: the
 recipe holds plain apt names, whether they came from the catalog or were
@@ -268,7 +318,10 @@ which packages were installed automatically, and `capture` drops those, the
 base system and frostroot's own essentials. The user comes from
 `/etc/wsl.conf` or the first ordinary account, sudo from the `sudo` group,
 timezone and locale from `/etc/timezone` and `/etc/default/locale`, the
-image name from the hostname.
+image name from the hostname. Third-party apt sources that have a signing
+key (`signed-by` in a `.list` file, `Signed-By` in a `.sources` file, as a
+key file or inline) become `[[sources]]` entries, with their keys saved
+under `keys/`; sources without one, and flat repositories, are reported.
 
 Two rules, both deliberate:
 
@@ -279,12 +332,13 @@ Two rules, both deliberate:
   `frostroot-capture.md` lists each area with what was found and what to do
   about it. A capture that stayed quiet about these would leave you believing
   the machine was captured when it was not.
-- **It never copies files.** A live machine holds SSH keys, tokens, `.env`
-  files and shell history; an image built from a tarball of it would hand
-  all of that to every student. `capture` reads package metadata and a few
-  configuration files, lists the names of the entries in your home directory
-  and nothing more, and needs no root. The report marks `.ssh`, `.gnupg`,
-  `.aws`, `.kube` and `.docker` as secrets that must never be copied.
+- **It copies nothing but apt signing keys, which are public.** A live
+  machine holds SSH keys, tokens, `.env` files and shell history; an image
+  built from a tarball of it would hand all of that to every student.
+  `capture` reads package metadata and a few configuration files, lists the
+  names of the entries in your home directory and nothing more, and needs no
+  root. The report marks `.ssh`, `.gnupg`, `.aws`, `.kube` and `.docker` as
+  secrets that must never be copied.
 
 `--root DIR` captures another root filesystem, such as a mounted disk.
 
@@ -422,8 +476,11 @@ login, sudo, networking or apt.
 authorities from `ca-certificates`, nothing else. On a network with a TLS
 inspection proxy, HTTPS from inside the image (`git clone https://…`) fails
 until the organisation's CA certificate is added in the image with
-`update-ca-certificates`. `apt` itself uses plain HTTP and signed metadata, so
-building is not affected.
+`update-ca-certificates`. The Ubuntu archive is fetched over plain HTTP with
+signed metadata, so a build without extra sources is not affected; a build
+with HTTPS sources (PPAs, Docker...) fetches them with apt on the build host,
+which then has to trust the proxy's certificate, as `curl` would. So does
+`init` when it fetches signing keys.
 
 **Building from a Windows checkout.** If `go build` inside WSL reports `error
 obtaining VCS status`, git is refusing a repository owned by Windows; add
@@ -442,10 +499,10 @@ user, WSL-ready images.
 
 **Since then:** the arrow-key form and progress screen (v0.2), `frostroot
 capture` (v0.3), vendoring and offline rebuilds with a release process
-(v0.4).
+(v0.4), third-party apt sources (v0.5).
 
-**Deliberately not yet:** Fedora or any non-Ubuntu family · PPAs and extra
-apt sources · pip / npm / cargo lockfiles · bit-identical tarballs ·
+**Deliberately not yet:** Fedora or any non-Ubuntu family · flat or unsigned
+apt repositories · pip / npm / cargo lockfiles · bit-identical tarballs ·
 bare-metal disk or ISO images · a native Windows binary · architectures other
 than amd64.
 
@@ -500,6 +557,7 @@ failure paths; the results are recorded in the
 | [TUI spec](docs/superpowers/specs/2026-09-17-frostroot-tui.md) | v0.2: the form, the build screen, the progress parser, the plain fallback. |
 | [Capture spec](docs/superpowers/specs/2026-09-17-frostroot-capture.md) | v0.3: reading an installed machine, the report of the gaps. |
 | [Vendor spec](docs/superpowers/specs/2026-09-17-frostroot-vendor.md) | v0.4: checksums in the lock, `vendor`, `build --offline`, releases; with the spike results. |
+| [Sources spec](docs/superpowers/specs/2026-09-17-frostroot-sources.md) | v0.5: `[[sources]]`, the catalog and PPAs, keys, how `build`, the lock, `vendor` and `capture` handle them. |
 | [Implementation plan](docs/superpowers/plans/2026-09-15-frostroot-v1.md) | The 13 tasks v1 was built from, with the spike's amendments. |
 | [TUI plan](docs/superpowers/plans/2026-09-17-frostroot-tui.md) | The seven tasks v0.2 was built from. |
 | [Plan review](docs/superpowers/reviews/2026-09-14-frostroot-plan-review.md) | Found four defects that would have shipped a non-booting image |
@@ -513,6 +571,8 @@ cmd/frostroot/      main
 internal/cli/       init, edit, capture, validate, build, vendor, version; flags, exit codes, the plain line interface
 internal/capture/   reading an installed system: packages asked for, user, locale, and the report of the gaps
 internal/form/      the questions as data: fields, package catalog, timezones, locales, recipe mapping
+internal/sources/   the catalog of third-party repositories, PPAs, and fetching and checking their keys
+internal/pgp/       OpenPGP public keys: armor, the primary key's fingerprint; nothing else
 internal/tui/       the full-screen form and progress screen (the only package using the Charm libraries)
 internal/recipe/    frostroot.toml and frostroot.lock: types, strict parsing, validation
 internal/distro/    Ubuntu releases, archive URL, the three pocket lines
