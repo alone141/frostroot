@@ -7,12 +7,14 @@ import (
 	"strings"
 )
 
-// Phase is one step of a build, in the order a build runs them and a
-// progress display lists them. The first seven are mmdebstrap's; the last two
-// are frostroot's own.
+// Phase is one step of a long-running command. The first seven are
+// mmdebstrap's, recognized in its output; the rest are frostroot's own, in
+// the build, the offline build and the vendor command. Phases(),
+// OfflinePhases() and VendorPhases() list the ones each command runs, in
+// order, for a progress display.
 type Phase int
 
-// The phases of a build.
+// The phases.
 const (
 	PhaseUpdateIndex Phase = iota
 	PhaseDownload
@@ -23,19 +25,33 @@ const (
 	PhaseCreateTarball
 	PhaseWriteLock
 	PhasePlaceTarball
+	PhaseVerifyVendored    // offline build: check vendor/debs against the lock
+	PhasePrepareRepository // offline build: stage the flat repository
+	PhaseCheckLock         // offline build: compare the image with the lock
+	PhaseVendorRead        // vendor: read the lock
+	PhaseVendorCheck       // vendor: check what vendor/debs already holds
+	PhaseVendorDownload    // vendor: download the rest
+	PhaseVendorPrune       // vendor --prune: remove files the lock does not name
 	phaseCount
 )
 
 var phaseTitles = [phaseCount]string{
-	PhaseUpdateIndex:      "Update package index",
-	PhaseDownload:         "Download packages",
-	PhaseExtract:          "Extract archives",
-	PhaseInstallEssential: "Install essential packages",
-	PhaseInstallRequested: "Install requested packages",
-	PhaseProvision:        "Provision user, locale and timezone",
-	PhaseCreateTarball:    "Create tarball",
-	PhaseWriteLock:        "Write frostroot.lock",
-	PhasePlaceTarball:     "Place tarball",
+	PhaseUpdateIndex:       "Update package index",
+	PhaseDownload:          "Download packages",
+	PhaseExtract:           "Extract archives",
+	PhaseInstallEssential:  "Install essential packages",
+	PhaseInstallRequested:  "Install requested packages",
+	PhaseProvision:         "Provision user, locale and timezone",
+	PhaseCreateTarball:     "Create tarball",
+	PhaseWriteLock:         "Write frostroot.lock",
+	PhasePlaceTarball:      "Place tarball",
+	PhaseVerifyVendored:    "Check vendor/debs against frostroot.lock",
+	PhasePrepareRepository: "Prepare the local package repository",
+	PhaseCheckLock:         "Check the image against frostroot.lock",
+	PhaseVendorRead:        "Read frostroot.lock",
+	PhaseVendorCheck:       "Check vendor/debs",
+	PhaseVendorDownload:    "Download packages",
+	PhaseVendorPrune:       "Remove packages not in the lock",
 }
 
 // Title returns the phase's name as a progress display shows it.
@@ -49,11 +65,22 @@ func (p Phase) Title() string {
 // String returns the phase's title.
 func (p Phase) String() string { return p.Title() }
 
-// Phases returns every phase in build order.
+// Phases returns the phases of an online build, in order.
 func Phases() []Phase {
-	phases := make([]Phase, 0, phaseCount)
-	for phase := Phase(0); phase < phaseCount; phase++ {
-		phases = append(phases, phase)
+	return []Phase{PhaseUpdateIndex, PhaseDownload, PhaseExtract, PhaseInstallEssential, PhaseInstallRequested, PhaseProvision, PhaseCreateTarball, PhaseWriteLock, PhasePlaceTarball}
+}
+
+// OfflinePhases returns the phases of a build from vendor/debs, in order.
+func OfflinePhases() []Phase {
+	return []Phase{PhaseVerifyVendored, PhasePrepareRepository, PhaseUpdateIndex, PhaseDownload, PhaseExtract, PhaseInstallEssential, PhaseInstallRequested, PhaseProvision, PhaseCreateTarball, PhaseCheckLock, PhasePlaceTarball}
+}
+
+// VendorPhases returns the phases of the vendor command, in order. The prune
+// phase runs only with --prune; a display may leave it out.
+func VendorPhases(prune bool) []Phase {
+	phases := []Phase{PhaseVendorRead, PhaseVendorCheck, PhaseVendorDownload}
+	if prune {
+		phases = append(phases, PhaseVendorPrune)
 	}
 	return phases
 }
@@ -86,7 +113,7 @@ type Unit int
 const (
 	UnitNone  Unit = iota
 	UnitBytes      // bytes downloaded or copied
-	UnitFiles      // index files fetched; the total is never known
+	UnitFiles      // files fetched or checked; the total is zero while unknown
 	UnitSteps      // dpkg steps: every package is unpacked, then set up
 )
 
@@ -121,6 +148,9 @@ func (event ProgressEvent) Summary() string {
 		}
 		return FormatBytes(event.Done)
 	case UnitFiles:
+		if event.Total > 0 {
+			return strconv.FormatInt(event.Done, 10) + " / " + strconv.FormatInt(event.Total, 10) + " files"
+		}
 		if event.Done == 1 {
 			return "1 file"
 		}
@@ -271,8 +301,8 @@ func (parser *progressParser) handleLine(line string) {
 		}
 		parser.handleAptLine(line)
 		parser.handleDpkgLine(line)
-	case PhaseExtract, PhaseProvision, PhaseCreateTarball, PhaseWriteLock, PhasePlaceTarball, phaseCount:
-		// Nothing measurable in the output of these phases.
+	default:
+		// Nothing measurable in the output of the other phases.
 	}
 }
 

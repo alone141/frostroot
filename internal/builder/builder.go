@@ -11,14 +11,17 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
+	"frostroot/internal/deb"
 	"frostroot/internal/distro"
 	"frostroot/internal/export"
+	"frostroot/internal/pool"
 	"frostroot/internal/recipe"
 )
 
 // Version is the frostroot version recorded in every lockfile.
-const Version = "0.3.0"
+const Version = "0.4.0"
 
 // UbuntuArchiveKeyring is the keyring that verifies the Ubuntu archive's
 // Release files.
@@ -42,15 +45,19 @@ var (
 // BootstrapSpec is everything a Bootstrapper needs to build one image.
 type BootstrapSpec struct {
 	Suite             string   // apt code name, such as "noble"
-	SourceLines       []string // the three "deb URL suite components" lines
+	SourceLines       []string // "deb ..." lines: the three pockets, or offline the one local repository
 	Include           []string // packages to install on top of the base system
 	CustomizeHooks    []string // mmdebstrap --customize-hook arguments, in order
 	TarballPath       string   // where the bootstrapper writes the image
 	WorkDir           string   // scratch space; during Preflight, the work root instead
 	Arch              string   // CPU architecture, such as "amd64"
 	InstallRecommends bool     // install Recommends, as apt does by default
-	KeyringPath       string   // keyring that verifies the archive
-	Progress          Progress // receives phases and output lines; nil discards them
+	KeyringPath       string   // keyring that verifies the archive; unused when Trusted
+	// Trusted means the source lines carry [trusted=yes] and no keyring is
+	// involved: an offline build's local repository, whose files frostroot
+	// verified against the lock itself.
+	Trusted  bool
+	Progress Progress // receives phases and output lines; nil discards them
 }
 
 // Bootstrapper builds an image tarball. Implementations write the tarball to
@@ -74,15 +81,19 @@ type Options struct {
 	GOOS      string              // operating system; defaults to runtime.GOOS
 	Getenv    func(string) string // environment lookup; defaults to os.Getenv
 	Progress  Progress            // receives the build's phases and output; nil discards them
+	// Offline rebuilds the lock's exact package set from vendor/debs, with no
+	// archive, no network and no keyring, and leaves the lock unchanged.
+	Offline bool
 }
 
 // Result describes a finished or failed build.
 type Result struct {
-	LockPath              string
+	LockPath              string // the lock written, or offline the lock rebuilt from
 	TarballPath           string
 	InstalledPackageCount int    // packages recorded in the lock
 	WorkDir               string // set when the work directory was kept: KeepWork, a failure, or a failed cleanup
 	CleanupErr            error  // the build succeeded but the work directory could not be removed
+	Offline               bool   // the image was rebuilt from the lock, which was checked and left as it was
 }
 
 // Builder runs builds with a Bootstrapper.
@@ -95,6 +106,12 @@ type Builder struct {
 // everything succeeded, places the tarball and then the lock. A failed build
 // writes no lock, no tarball and no temporary file, and keeps its work
 // directory for debugging.
+//
+// With Options.Offline the image is rebuilt from frostroot.lock and
+// vendor/debs instead: the lock must still describe the recipe, the pool must
+// hold every locked file intact, mmdebstrap installs from a local repository
+// of exactly those files, and the result must list exactly the lock's
+// packages. The lock is read, never written.
 func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options Options) (Result, error) {
 	operatingSystem := options.GOOS
 	if operatingSystem == "" {
@@ -115,6 +132,15 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if options.MirrorURL != "" {
 		archiveURL = options.MirrorURL
 	}
+	var offline *offlinePlan
+	if options.Offline {
+		if options.MirrorURL != "" {
+			return Result{}, errors.New("an offline build takes no mirror: it installs from vendor/debs")
+		}
+		if offline, err = planOffline(options.RecipeDir, imageRecipe, release); err != nil {
+			return Result{}, err
+		}
+	}
 	currentUID := os.Getuid()
 	workRoot, err := WorkRoot(getenv, currentUID)
 	if err != nil {
@@ -131,6 +157,13 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		WorkDir:           workRoot,
 		Progress:          progress,
 	}
+	if offline != nil {
+		// Every locked package, so that the outcome does not depend on the
+		// priorities in the local index; see the v0.4 spec.
+		bootstrapSpec.Include = offline.packageNames()
+		bootstrapSpec.Trusted = true
+		bootstrapSpec.KeyringPath = ""
+	}
 	if preflighter, ok := b.Bootstrapper.(Preflighter); ok {
 		if err := preflighter.Preflight(bootstrapSpec); err != nil {
 			return Result{}, err
@@ -138,6 +171,11 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	}
 	if err := checkOutputWritable(options.RecipeDir); err != nil {
 		return Result{}, err
+	}
+	if offline != nil {
+		if err := verifyPool(offline, progress); err != nil {
+			return Result{}, err
+		}
 	}
 	if err := prepareWorkRoot(workRoot, currentUID); err != nil {
 		return Result{}, err
@@ -150,7 +188,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	// From here on every failure keeps the work directory: it is the only
 	// debugging evidence. Nothing in dist/ or the lock is touched until the
 	// bootstrap has fully succeeded.
-	result := Result{WorkDir: workDir}
+	result := Result{WorkDir: workDir, Offline: offline != nil}
 	var temporaryLockPath string
 	failBuild := func(err error) (Result, error) {
 		if temporaryLockPath != "" {
@@ -161,9 +199,20 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		return result, err
 	}
 
-	stage, err := WriteStage(filepath.Join(workDir, "stage"), imageRecipe)
+	stageOptions := StageOptions{CopyAptLists: offline == nil}
+	if offline != nil {
+		stageOptions.SourceLines = offline.lock.Sources
+	}
+	stage, err := WriteStage(filepath.Join(workDir, "stage"), imageRecipe, stageOptions)
 	if err != nil {
 		return failBuild(err)
+	}
+	if offline != nil {
+		repositoryDir := filepath.Join(workDir, "pool")
+		if err := stageRepository(offline, repositoryDir, progress); err != nil {
+			return failBuild(err)
+		}
+		bootstrapSpec.SourceLines = []string{"deb [trusted=yes] copy://" + repositoryDir + " ./"}
 	}
 	bootstrapSpec.CustomizeHooks = CustomizeHooks(stage)
 	bootstrapSpec.TarballPath = filepath.Join(workDir, "image.tar.gz")
@@ -172,32 +221,44 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		return failBuild(err)
 	}
 
-	progress.Report(ProgressEvent{Phase: PhaseWriteLock, Kind: EventPhaseStarted})
 	installedPackages, err := readDpkgStatus(stage.DpkgStatusPath)
 	if err != nil {
 		return failBuild(err)
 	}
-	requestedPackages := imageRecipe.Packages.Include
-	if requestedPackages == nil {
-		requestedPackages = []string{}
+	lockPath := filepath.Join(options.RecipeDir, LockFileName)
+	if offline != nil {
+		progress.Report(ProgressEvent{Phase: PhaseCheckLock, Kind: EventPhaseStarted})
+		if err := compareWithLock(offline.lock, installedPackages); err != nil {
+			return failBuild(err)
+		}
+		progress.Report(ProgressEvent{Phase: PhaseCheckLock, Kind: EventPhaseFinished})
+	} else {
+		progress.Report(ProgressEvent{Phase: PhaseWriteLock, Kind: EventPhaseStarted})
+		if err := recordChecksums(stage.AptListsDir, installedPackages); err != nil {
+			return failBuild(err)
+		}
+		requestedPackages := imageRecipe.Packages.Include
+		if requestedPackages == nil {
+			requestedPackages = []string{}
+		}
+		lock := recipe.Lockfile{
+			Version:          1,
+			Distro:           "ubuntu",
+			Release:          imageRecipe.Image.Release,
+			Suite:            release.Suite,
+			Arch:             imageRecipe.Image.Arch,
+			Mirror:           archiveURL,
+			Sources:          bootstrapSpec.SourceLines,
+			FrostrootVersion: Version,
+			Requested:        requestedPackages,
+			Packages:         installedPackages,
+		}
+		temporaryLockPath, err = writeTemporaryLock(options.RecipeDir, lock)
+		if err != nil {
+			return failBuild(err)
+		}
+		progress.Report(ProgressEvent{Phase: PhaseWriteLock, Kind: EventPhaseFinished})
 	}
-	lock := recipe.Lockfile{
-		Version:          1,
-		Distro:           "ubuntu",
-		Release:          imageRecipe.Image.Release,
-		Suite:            release.Suite,
-		Arch:             imageRecipe.Image.Arch,
-		Mirror:           archiveURL,
-		Sources:          bootstrapSpec.SourceLines,
-		FrostrootVersion: Version,
-		Requested:        requestedPackages,
-		Packages:         installedPackages,
-	}
-	temporaryLockPath, err = writeTemporaryLock(options.RecipeDir, lock)
-	if err != nil {
-		return failBuild(err)
-	}
-	progress.Report(ProgressEvent{Phase: PhaseWriteLock, Kind: EventPhaseFinished})
 
 	// mmdebstrap creates its output file before it starts, so existence alone
 	// proves nothing.
@@ -212,11 +273,12 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if err := export.Place(bootstrapSpec.TarballPath, tarballPath, reportCopied); err != nil {
 		return failBuild(fmt.Errorf("placing tarball: %w", err))
 	}
-	// The lock goes into place only after the tarball has landed, so a lock
-	// never describes an image that does not exist.
-	lockPath := filepath.Join(options.RecipeDir, "frostroot.lock")
-	if err := os.Rename(temporaryLockPath, lockPath); err != nil {
-		return failBuild(fmt.Errorf("placing lock: %w", err))
+	if temporaryLockPath != "" {
+		// The lock goes into place only after the tarball has landed, so a
+		// lock never describes an image that does not exist.
+		if err := os.Rename(temporaryLockPath, lockPath); err != nil {
+			return failBuild(fmt.Errorf("placing lock: %w", err))
+		}
 	}
 	progress.Report(ProgressEvent{Phase: PhasePlaceTarball, Kind: EventPhaseFinished})
 
@@ -232,6 +294,42 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	}
 	result.WorkDir = ""
 	return result, nil
+}
+
+// verifyPool checks vendor/debs against the lock, as a phase with a files
+// bar, before any work directory exists.
+func verifyPool(offline *offlinePlan, progress Progress) error {
+	progress.Report(ProgressEvent{Phase: PhaseVerifyVendored, Kind: EventPhaseStarted})
+	status, err := pool.Verify(offline.poolDir, offline.entries, func(checked, total int) {
+		progress.Report(ProgressEvent{Phase: PhaseVerifyVendored, Kind: EventProgress, Done: int64(checked), Total: int64(total), Unit: UnitFiles})
+	})
+	if err != nil {
+		return fmt.Errorf("checking %s: %w", offline.poolDir, err)
+	}
+	if !status.Complete() {
+		return fmt.Errorf("%w: %s; run frostroot vendor", ErrPoolIncomplete, status.Describe(maxNamedPoolProblems))
+	}
+	progress.Report(ProgressEvent{Phase: PhaseVerifyVendored, Kind: EventPhaseFinished})
+	return nil
+}
+
+// maxNamedPoolProblems bounds how many missing or corrupt files an error
+// names.
+const maxNamedPoolProblems = 10
+
+// stageRepository builds the local flat repository an offline build installs
+// from, as a phase with a bytes bar.
+func stageRepository(offline *offlinePlan, repositoryDir string, progress Progress) error {
+	progress.Report(ProgressEvent{Phase: PhasePrepareRepository, Kind: EventPhaseStarted})
+	release := deb.FlatRelease{Suite: offline.lock.Suite, Arch: offline.lock.Arch, Date: time.Now()}
+	err := pool.Stage(offline.poolDir, offline.entries, repositoryDir, release, func(doneBytes, totalBytes int64) {
+		progress.Report(ProgressEvent{Phase: PhasePrepareRepository, Kind: EventProgress, Done: doneBytes, Total: totalBytes, Unit: UnitBytes})
+	})
+	if err != nil {
+		return fmt.Errorf("preparing the local repository: %w", err)
+	}
+	progress.Report(ProgressEvent{Phase: PhasePrepareRepository, Kind: EventPhaseFinished})
+	return nil
 }
 
 // createBuildDir creates a new, uniquely named build directory under workRoot.

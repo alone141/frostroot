@@ -44,7 +44,7 @@ func (m *Mmdebstrap) Preflight(spec BootstrapSpec) error {
 	if _, err := lookPath("mmdebstrap"); err != nil {
 		return fmt.Errorf("%w; install it with: sudo apt install mmdebstrap", ErrNoMmdebstrap)
 	}
-	if err := checkKeyringExists(keyringPath(spec)); err != nil {
+	if err := checkKeyring(spec); err != nil {
 		return err
 	}
 	if m.bootstrapMode() == "unshare" && spec.WorkDir != "" {
@@ -60,7 +60,7 @@ func (m *Mmdebstrap) Preflight(spec BootstrapSpec) error {
 // explanation of a failure such as a missing user namespace or an unknown
 // package.
 func (m *Mmdebstrap) Run(ctx context.Context, spec BootstrapSpec) error {
-	if err := checkKeyringExists(keyringPath(spec)); err != nil {
+	if err := checkKeyring(spec); err != nil {
 		return err
 	}
 	if m.bootstrapMode() == "unshare" {
@@ -133,7 +133,9 @@ func (m *Mmdebstrap) commandLine(spec BootstrapSpec) (args, environment []string
 		"--mode=" + m.bootstrapMode(),
 		"--variant=important",
 		"--architectures=" + spec.Arch,
-		"--keyring=" + keyringPath(spec),
+	}
+	if !spec.Trusted {
+		args = append(args, "--keyring="+keyringPath(spec))
 	}
 	if spec.InstallRecommends {
 		args = append(args, `--aptopt=Apt::Install-Recommends "true"`)
@@ -188,9 +190,13 @@ func keyringPath(spec BootstrapSpec) string {
 	return UbuntuArchiveKeyring
 }
 
-// checkKeyringExists returns ErrNoKeyring, with an install hint, when path
-// does not exist.
-func checkKeyringExists(path string) error {
+// checkKeyring returns ErrNoKeyring, with an install hint, when the spec
+// needs a keyring that does not exist. A trusted source needs none.
+func checkKeyring(spec BootstrapSpec) error {
+	if spec.Trusted {
+		return nil
+	}
+	path := keyringPath(spec)
 	if _, err := os.Stat(path); err != nil {
 		return fmt.Errorf("%w at %s; install it with: sudo apt install ubuntu-keyring", ErrNoKeyring, path)
 	}

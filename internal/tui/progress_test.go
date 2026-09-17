@@ -13,14 +13,14 @@ import (
 	"frostroot/internal/builder"
 )
 
-var sampleScreen = BuildScreen{ImageName: "cpp-lab", Release: "22.04", Suite: "jammy", Arch: "amd64", ArchiveURL: "http://archive.ubuntu.com/ubuntu"}
+var sampleScreen = BuildScreen("cpp-lab", "22.04", "jammy", "amd64", "http://archive.ubuntu.com/ubuntu", builder.Phases())
 
-// newBuildDriver returns a driver around a build model whose channels never
-// deliver anything; tests send events and the outcome as messages.
-func newBuildDriver(t *testing.T) (*driver, *buildModel, *int) {
+// newProgressDriver returns a driver around a progress model whose channels
+// never deliver anything; tests send events and the outcome as messages.
+func newProgressDriver(t *testing.T, screen Screen) (*driver, *progressModel, *int) {
 	t.Helper()
 	cancelCalls := 0
-	model := newBuildModel(sampleScreen, make(chan builder.ProgressEvent), make(chan BuildOutcome), func() { cancelCalls++ })
+	model := newProgressModel(screen, make(chan builder.ProgressEvent), make(chan error), func() { cancelCalls++ })
 	d := newDriver(t, model)
 	d.press(tea.WindowSizeMsg{Width: 100, Height: 40})
 	return d, model, &cancelCalls
@@ -30,8 +30,13 @@ func event(phase builder.Phase, kind builder.EventKind) eventMsg {
 	return eventMsg(builder.ProgressEvent{Phase: phase, Kind: kind})
 }
 
-func TestBuildModelShowsPhasesAndProgress(t *testing.T) {
-	d, model, _ := newBuildDriver(t)
+// statusOf returns the state of phase on the screen.
+func statusOf(model *progressModel, phase builder.Phase) phaseStatus {
+	return model.phases[model.rows[phase]].status
+}
+
+func TestProgressModelShowsPhasesAndProgress(t *testing.T) {
+	d, model, _ := newProgressDriver(t, sampleScreen)
 	d.press(eventMsg(builder.ProgressEvent{Kind: builder.EventLogFile, Line: "/var/tmp/frostroot-1000/build-1/mmdebstrap.log"}))
 	d.press(event(builder.PhaseUpdateIndex, builder.EventPhaseStarted))
 	d.press(eventMsg(builder.ProgressEvent{Phase: builder.PhaseUpdateIndex, Kind: builder.EventProgress, Done: 9, Unit: builder.UnitFiles}))
@@ -53,70 +58,97 @@ func TestBuildModelShowsPhasesAndProgress(t *testing.T) {
 			t.Errorf("view lacks %q:\n%s", wantText, view)
 		}
 	}
-	if model.phases[builder.PhaseUpdateIndex].status != phaseDone || model.phases[builder.PhaseDownload].status != phaseRunning {
+	if statusOf(model, builder.PhaseUpdateIndex) != phaseDone || statusOf(model, builder.PhaseDownload) != phaseRunning {
 		t.Errorf("phase statuses = %v", model.phases)
 	}
 }
 
-func TestBuildModelFinishes(t *testing.T) {
-	d, model, _ := newBuildDriver(t)
+func TestProgressModelShowsOnlyItsOwnPhases(t *testing.T) {
+	// The vendor screen lists the vendor phases; a build phase reported to
+	// it (which cannot happen, but the screen must not crash) is ignored.
+	screen := Screen{Title: "frostroot vendor", Subtitle: "351 packages · 308 MB", Phases: builder.VendorPhases(true), LogTitle: "downloads"}
+	d, model, _ := newProgressDriver(t, screen)
+	d.press(event(builder.PhaseVendorRead, builder.EventPhaseStarted))
+	d.press(event(builder.PhaseVendorRead, builder.EventPhaseFinished))
+	d.press(event(builder.PhaseVendorCheck, builder.EventPhaseStarted))
+	d.press(eventMsg(builder.ProgressEvent{Phase: builder.PhaseVendorCheck, Kind: builder.EventProgress, Done: 120, Total: 351, Unit: builder.UnitFiles}))
+	d.press(event(builder.PhaseInstallEssential, builder.EventPhaseStarted))
+	view := model.View()
+	for _, wantText := range []string{"frostroot vendor", "351 packages · 308 MB", "Read frostroot.lock", "Check vendor/debs", "120 / 351 files", " 34%", "Download packages", "Remove packages not in the lock", "downloads"} {
+		if !strings.Contains(view, wantText) {
+			t.Errorf("view lacks %q:\n%s", wantText, view)
+		}
+	}
+	if strings.Contains(view, "Install essential") || strings.Contains(view, "mmdebstrap") {
+		t.Errorf("the vendor screen shows build phases:\n%s", view)
+	}
+	if len(model.phases) != 4 || statusOf(model, builder.PhaseVendorCheck) != phaseRunning {
+		t.Errorf("phases = %v", model.phases)
+	}
+}
+
+func TestProgressModelFinishes(t *testing.T) {
+	d, model, _ := newProgressDriver(t, sampleScreen)
 	d.press(event(builder.PhaseUpdateIndex, builder.EventPhaseStarted))
 	d.press(eventsClosedMsg{})
 	if d.quit {
 		t.Fatal("the screen must wait for the outcome after the events end")
 	}
-	d.press(doneMsg(BuildOutcome{Result: builder.Result{InstalledPackageCount: 3}}))
+	d.press(doneMsg{})
 	if !d.quit {
 		t.Fatal("the screen should quit once the outcome and the last event are in")
 	}
-	if model.phases[builder.PhaseUpdateIndex].status != phaseDone {
-		t.Errorf("a phase still running at success is done, got %v", model.phases[builder.PhaseUpdateIndex].status)
+	if statusOf(model, builder.PhaseUpdateIndex) != phaseDone {
+		t.Errorf("a phase still running at success is done, got %v", statusOf(model, builder.PhaseUpdateIndex))
 	}
-	if outcome := model.outcome(); outcome.Abandoned || outcome.Interrupted || outcome.Result.InstalledPackageCount != 3 {
+	if outcome := model.outcome(); outcome.Abandoned || outcome.Interrupted || outcome.Err != nil {
 		t.Errorf("outcome = %+v", outcome)
 	}
 }
 
-func TestBuildModelMarksTheFailedPhase(t *testing.T) {
-	d, model, _ := newBuildDriver(t)
+func TestProgressModelMarksTheFailedPhase(t *testing.T) {
+	d, model, _ := newProgressDriver(t, sampleScreen)
 	d.press(event(builder.PhaseUpdateIndex, builder.EventPhaseStarted))
 	d.press(event(builder.PhaseUpdateIndex, builder.EventPhaseFinished))
 	d.press(event(builder.PhaseDownload, builder.EventPhaseStarted))
-	d.press(doneMsg(BuildOutcome{Err: errors.New("mmdebstrap failed: exit status 1")}))
+	d.press(doneMsg{err: errors.New("mmdebstrap failed: exit status 1")})
 	d.press(eventsClosedMsg{})
 	if !d.quit {
 		t.Fatal("the screen should quit after a failure too")
 	}
-	if model.phases[builder.PhaseDownload].status != phaseFailed || model.phases[builder.PhaseUpdateIndex].status != phaseDone {
+	if statusOf(model, builder.PhaseDownload) != phaseFailed || statusOf(model, builder.PhaseUpdateIndex) != phaseDone {
 		t.Errorf("phase statuses = %v, want the running phase failed and the finished one done", model.phases)
 	}
 	if view := model.View(); !strings.Contains(view, "failed") {
 		t.Errorf("view should mark the failure:\n%s", view)
 	}
+	if outcome := model.outcome(); outcome.Err == nil {
+		t.Errorf("outcome = %+v, want the error", outcome)
+	}
 }
 
-func TestBuildModelInterrupts(t *testing.T) {
-	d, model, cancelCalls := newBuildDriver(t)
+func TestProgressModelInterrupts(t *testing.T) {
+	d, model, cancelCalls := newProgressDriver(t, sampleScreen)
 	d.press(event(builder.PhaseDownload, builder.EventPhaseStarted))
 	d.press(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if *cancelCalls != 1 || d.quit {
-		t.Fatalf("first Ctrl-C: cancel called %d times, quit %v; want the build canceled and the screen kept", *cancelCalls, d.quit)
+		t.Fatalf("first Ctrl-C: cancel called %d times, quit %v; want the work canceled and the screen kept", *cancelCalls, d.quit)
 	}
-	if view := model.View(); !strings.Contains(view, "interrupting") || !strings.Contains(view, "Ctrl-C again") {
+	if view := model.View(); !strings.Contains(view, "interrupting: waiting for mmdebstrap to stop") || !strings.Contains(view, "Ctrl-C again") {
 		t.Errorf("view should explain the wait:\n%s", view)
 	}
-	d.press(doneMsg(BuildOutcome{Err: context.Canceled, Result: builder.Result{WorkDir: "/w"}}))
+	d.press(doneMsg{err: context.Canceled})
 	d.press(eventsClosedMsg{})
 	if !d.quit {
-		t.Fatal("the screen should quit when the interrupted build has finished")
+		t.Fatal("the screen should quit when the interrupted work has finished")
 	}
-	if outcome := model.outcome(); !outcome.Interrupted || outcome.Abandoned || outcome.Result.WorkDir != "/w" {
-		t.Errorf("outcome = %+v, want interrupted with the kept work directory", outcome)
+	if outcome := model.outcome(); !outcome.Interrupted || outcome.Abandoned || !errors.Is(outcome.Err, context.Canceled) {
+		t.Errorf("outcome = %+v, want interrupted with the error", outcome)
 	}
 }
 
-func TestBuildModelAbandonsOnSecondCtrlC(t *testing.T) {
-	d, model, cancelCalls := newBuildDriver(t)
+func TestProgressModelAbandonsOnSecondCtrlC(t *testing.T) {
+	d, model, cancelCalls := newProgressDriver(t, sampleScreen)
 	d.press(tea.KeyMsg{Type: tea.KeyCtrlC})
 	d.press(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if *cancelCalls != 1 || !d.quit {
@@ -127,8 +159,8 @@ func TestBuildModelAbandonsOnSecondCtrlC(t *testing.T) {
 	}
 }
 
-func TestBuildModelLogPaneKeysAndResize(t *testing.T) {
-	d, model, _ := newBuildDriver(t)
+func TestProgressModelLogPaneKeysAndResize(t *testing.T) {
+	d, model, _ := newProgressDriver(t, sampleScreen)
 	for lineNumber := range 30 {
 		d.press(eventMsg(builder.ProgressEvent{Kind: builder.EventLogLine, Line: strings.Repeat("x", 10) + string(rune('a'+lineNumber%26))}))
 	}
@@ -160,30 +192,30 @@ func TestFormatDuration(t *testing.T) {
 	}
 }
 
-func TestRunBuildEndToEnd(t *testing.T) {
+func TestRunProgressEndToEnd(t *testing.T) {
 	events := make(chan builder.ProgressEvent, 16)
-	done := make(chan BuildOutcome, 1)
+	done := make(chan error, 1)
 	events <- builder.ProgressEvent{Phase: builder.PhaseUpdateIndex, Kind: builder.EventPhaseStarted}
 	events <- builder.ProgressEvent{Phase: builder.PhaseUpdateIndex, Kind: builder.EventPhaseFinished}
 	close(events)
-	done <- BuildOutcome{Result: builder.Result{InstalledPackageCount: 5}}
+	done <- nil
 	finished := make(chan struct{})
-	var outcome BuildOutcome
+	var outcome Outcome
 	var err error
 	go func() {
 		defer close(finished)
 		// The input never delivers a key: the screen must end on its own.
-		outcome, err = RunBuild(sampleScreen, events, done, func() {}, neverReader{}, io.Discard)
+		outcome, err = RunProgress(sampleScreen, events, done, func() {}, neverReader{}, io.Discard)
 	}()
 	select {
 	case <-finished:
 	case <-time.After(20 * time.Second):
-		t.Fatal("RunBuild did not return after the build finished")
+		t.Fatal("RunProgress did not return after the work finished")
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome.Abandoned || outcome.Result.InstalledPackageCount != 5 {
+	if outcome.Abandoned || outcome.Err != nil {
 		t.Errorf("outcome = %+v", outcome)
 	}
 }

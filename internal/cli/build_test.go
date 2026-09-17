@@ -11,16 +11,24 @@ import (
 	"testing"
 
 	"frostroot/internal/builder"
+	"frostroot/internal/deb"
+	"frostroot/internal/deb/debtest"
+	"frostroot/internal/recipe"
 )
 
 // fakeDpkgStatus is the dpkg status file fakeBootstrapper "downloads".
 const fakeDpkgStatus = "Package: git\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1:1\n"
 
-// fakeBootstrapper writes the two files a real bootstrap produces, without
+// fakeAptIndex is the Packages index fakeBootstrapper leaves in the copied
+// apt lists, so that the lock gets a checksum for git.
+const fakeAptIndex = "Package: git\nArchitecture: amd64\nVersion: 1:1\nFilename: pool/main/g/git/git_1%3a1_amd64.deb\nSize: 3\nSHA256: 2a8f4e0a1c3c4b0f37dc8b4e0d5a1c23f3c1b6d2a7a5e6e7f8091a2b3c4d5e6f\n"
+
+// fakeBootstrapper writes the files a real bootstrap produces, without
 // running mmdebstrap.
 type fakeBootstrapper struct {
 	runErr       error
 	preflightErr error
+	dpkgStatus   string                // defaults to fakeDpkgStatus
 	lastSpec     builder.BootstrapSpec // zero until Run is called
 }
 
@@ -40,12 +48,32 @@ func (f *fakeBootstrapper) Run(_ context.Context, spec builder.BootstrapSpec) er
 	if err := os.WriteFile(spec.TarballPath, []byte("tar"), 0o644); err != nil {
 		return err
 	}
+	dpkgStatus := f.dpkgStatus
+	if dpkgStatus == "" {
+		dpkgStatus = fakeDpkgStatus
+	}
+	statusWritten := false
 	for _, hook := range spec.CustomizeHooks {
+		if listsParent, isCopyOut := strings.CutPrefix(hook, "copy-out /var/lib/apt/lists "); isCopyOut {
+			listsDir := filepath.Join(strings.Trim(listsParent, "'"), "lists")
+			if err := os.MkdirAll(listsDir, 0o755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(listsDir, "archive.ubuntu.com_ubuntu_dists_jammy_main_binary-amd64_Packages"), []byte(fakeAptIndex), 0o644); err != nil {
+				return err
+			}
+		}
 		if statusDestination, isDownload := strings.CutPrefix(hook, "download /var/lib/dpkg/status "); isDownload {
-			return os.WriteFile(strings.Trim(statusDestination, "'"), []byte(fakeDpkgStatus), 0o644)
+			if err := os.WriteFile(strings.Trim(statusDestination, "'"), []byte(dpkgStatus), 0o644); err != nil {
+				return err
+			}
+			statusWritten = true
 		}
 	}
-	return errors.New("no download hook for the dpkg status file")
+	if !statusWritten {
+		return errors.New("no download hook for the dpkg status file")
+	}
+	return nil
 }
 
 // bootstrapRan reports whether the build reached the bootstrapper's Run.
@@ -114,6 +142,7 @@ func TestBuildSuccess(t *testing.T) {
 	for _, wantText := range []string{
 		"wsl --import cpp-lab <install-dir> dist/cpp-lab-ubuntu-22.04-amd64.tar.gz",
 		"frostroot.lock (1 package)",
+		"frostroot vendor",
 	} {
 		if !strings.Contains(stdout.String(), wantText) {
 			t.Errorf("stdout lacks %q:\n%s", wantText, stdout.String())
@@ -123,10 +152,163 @@ func TestBuildSuccess(t *testing.T) {
 		t.Errorf("no Windows path should be printed without wslpath:\n%s", stdout.String())
 	}
 	// Without a terminal, progress is plain lines: the phase, then tenths.
-	for _, wantLine := range []string{"frostroot: building cpp-lab from Ubuntu 22.04 (jammy, amd64) using http://archive.ubuntu.com/ubuntu\n", "frostroot: Download packages\n", "frostroot:    50%  14.1 MB / 28.1 MB\n", "frostroot: Write frostroot.lock\n", "frostroot: Place tarball\n"} {
+	for _, wantLine := range []string{"frostroot: building cpp-lab · Ubuntu 22.04 (jammy, amd64) · http://archive.ubuntu.com/ubuntu\n", "frostroot: Download packages\n", "frostroot:    50%  14.1 MB / 28.1 MB\n", "frostroot: Write frostroot.lock\n", "frostroot: Place tarball\n"} {
 		if !strings.Contains(stderr.String(), wantLine) {
 			t.Errorf("stderr lacks progress line %q:\n%s", wantLine, stderr.String())
 		}
+	}
+	lock, err := recipe.LoadLock(filepath.Join(recipeDir, "frostroot.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !lock.HasChecksums() {
+		t.Errorf("the lock must record checksums for vendoring: %+v", lock.Packages)
+	}
+}
+
+// vendorFakePool fills vendor/debs in recipeDir with a real .deb for every
+// package of the lock and rewrites the lock's checksums to match, the way a
+// vendor run after a build would leave things.
+func vendorFakePool(t *testing.T, recipeDir string) recipe.Lockfile {
+	t.Helper()
+	lockPath := filepath.Join(recipeDir, "frostroot.lock")
+	lock, err := recipe.LoadLock(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	poolDir := filepath.Join(recipeDir, "vendor", "debs")
+	if err := os.MkdirAll(poolDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for index, locked := range lock.Packages {
+		path := debtest.Build(t, poolDir, filepath.Base(locked.Filename), ".zst", debtest.Control(locked.Name, locked.Version, locked.Arch))
+		size, digest, err := deb.SHA256File(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lock.Packages[index].Size, lock.Packages[index].SHA256 = size, digest
+	}
+	if err := recipe.SaveLock(lockPath, lock); err != nil {
+		t.Fatal(err)
+	}
+	return lock
+}
+
+func TestBuildOffline(t *testing.T) {
+	recipeDir := newRecipeDir(t, "valid.toml")
+	var stdout, stderr bytes.Buffer
+	if exitCode := newBuildApp(t, recipeDir, &fakeBootstrapper{}, &stdout, &stderr).Run([]string{"build"}); exitCode != exitSuccess {
+		t.Fatalf("online build: exit code = %d, stderr %s", exitCode, stderr.String())
+	}
+	vendorFakePool(t, recipeDir)
+	lockBefore, err := os.ReadFile(filepath.Join(recipeDir, "frostroot.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	bootstrapper := &fakeBootstrapper{}
+	if exitCode := newBuildApp(t, recipeDir, bootstrapper, &stdout, &stderr).Run([]string{"build", "--offline"}); exitCode != exitSuccess {
+		t.Fatalf("offline build: exit code = %d, stderr %s", exitCode, stderr.String())
+	}
+	if !bootstrapper.lastSpec.Trusted || len(bootstrapper.lastSpec.SourceLines) != 1 || !strings.HasPrefix(bootstrapper.lastSpec.SourceLines[0], "deb [trusted=yes] copy://") {
+		t.Errorf("spec = %+v, want a trusted local repository", bootstrapper.lastSpec)
+	}
+	for _, wantText := range []string{"rebuilt from frostroot.lock: 1 package, every one as locked", "wsl --import cpp-lab"} {
+		if !strings.Contains(stdout.String(), wantText) {
+			t.Errorf("stdout lacks %q:\n%s", wantText, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "Wrote frostroot.lock") || strings.Contains(stdout.String(), "frostroot vendor\n") {
+		t.Errorf("an offline build writes no lock and needs no vendoring hint:\n%s", stdout.String())
+	}
+	for _, wantLine := range []string{"frostroot: building cpp-lab · Ubuntu 22.04 (jammy, amd64) · vendor/debs\n", "frostroot: Check vendor/debs against frostroot.lock\n", "frostroot: Prepare the local package repository\n", "frostroot: Check the image against frostroot.lock\n"} {
+		if !strings.Contains(stderr.String(), wantLine) {
+			t.Errorf("stderr lacks %q:\n%s", wantLine, stderr.String())
+		}
+	}
+	if strings.Contains(stderr.String(), "Write frostroot.lock") {
+		t.Errorf("an offline build has no lock-writing phase:\n%s", stderr.String())
+	}
+	lockAfter, err := os.ReadFile(filepath.Join(recipeDir, "frostroot.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(lockAfter) != string(lockBefore) {
+		t.Error("the lock must not change")
+	}
+}
+
+func TestBuildOfflineRefusals(t *testing.T) {
+	testCases := []struct {
+		name         string
+		prepare      func(t *testing.T, recipeDir string)
+		args         []string
+		wantExit     int
+		wantInStderr string
+	}{
+		{
+			name:         "with --mirror",
+			prepare:      func(*testing.T, string) {},
+			args:         []string{"build", "--offline", "--mirror", "http://mirror.example/ubuntu"},
+			wantExit:     exitUserError,
+			wantInStderr: "exclude each other",
+		},
+		{
+			name:         "no lock",
+			prepare:      func(*testing.T, string) {},
+			args:         []string{"build", "--offline"},
+			wantExit:     exitUserError,
+			wantInStderr: "no frostroot.lock",
+		},
+		{
+			name: "pool missing",
+			prepare: func(t *testing.T, recipeDir string) {
+				t.Helper()
+				var output bytes.Buffer
+				if exitCode := newBuildApp(t, recipeDir, &fakeBootstrapper{}, &output, &output).Run([]string{"build"}); exitCode != exitSuccess {
+					t.Fatalf("online build failed: %s", output.String())
+				}
+			},
+			args:         []string{"build", "--offline"},
+			wantExit:     exitUserError,
+			wantInStderr: "run frostroot vendor",
+		},
+		{
+			name: "image differs from the lock",
+			prepare: func(t *testing.T, recipeDir string) {
+				t.Helper()
+				var output bytes.Buffer
+				if exitCode := newBuildApp(t, recipeDir, &fakeBootstrapper{}, &output, &output).Run([]string{"build"}); exitCode != exitSuccess {
+					t.Fatalf("online build failed: %s", output.String())
+				}
+				vendorFakePool(t, recipeDir)
+			},
+			args:         []string{"build", "--offline"},
+			wantExit:     exitBuildFailed,
+			wantInStderr: "differs from frostroot.lock",
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			recipeDir := newRecipeDir(t, "valid.toml")
+			testCase.prepare(t, recipeDir)
+			var stdout, stderr bytes.Buffer
+			bootstrapper := &fakeBootstrapper{}
+			if testCase.wantExit == exitBuildFailed {
+				bootstrapper.dpkgStatus = "Package: git\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1:2\n"
+			}
+			if exitCode := newBuildApp(t, recipeDir, bootstrapper, &stdout, &stderr).Run(testCase.args); exitCode != testCase.wantExit {
+				t.Fatalf("exit code = %d, want %d; stderr %s", exitCode, testCase.wantExit, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), testCase.wantInStderr) {
+				t.Errorf("stderr lacks %q:\n%s", testCase.wantInStderr, stderr.String())
+			}
+			if testCase.wantExit == exitUserError && bootstrapper.bootstrapRan() {
+				t.Error("a refused build must not reach the bootstrapper")
+			}
+		})
 	}
 }
 
@@ -409,7 +591,7 @@ func TestBuildFullScreenThenPlainSummary(t *testing.T) {
 	output := stdout.String()
 	// The screen ran (alternate screen on, phases drawn) and the plain
 	// summary followed it.
-	for _, wantText := range []string{"\x1b[?1049h", "Download packages", "Wrote frostroot.lock (1 package)", "wsl --import cpp-lab"} {
+	for _, wantText := range []string{"\x1b[?1049h", "Download packages", "Write frostroot.lock", "Wrote frostroot.lock (1 package)", "wsl --import cpp-lab"} {
 		if !strings.Contains(output, wantText) {
 			t.Errorf("stdout lacks %q", wantText)
 		}

@@ -15,42 +15,51 @@ import (
 	"frostroot/internal/builder"
 )
 
-// BuildScreen is what the build screen shows in its header.
-type BuildScreen struct {
-	ImageName  string
-	Release    string // "22.04"
-	Suite      string // "jammy"
-	Arch       string
-	ArchiveURL string
+// Screen describes a progress screen: what a long-running command shows
+// while it works. build and vendor each fill one in.
+type Screen struct {
+	Title    string          // "frostroot build"
+	Subtitle string          // what is being built or fetched, and from where
+	Phases   []builder.Phase // the rows of the checklist, in order
+	LogTitle string          // label of the log pane: whose output it shows
 }
 
-// BuildOutcome is how a build ended.
-type BuildOutcome struct {
-	Result builder.Result
-	Err    error
-	// Interrupted means the user pressed Ctrl-C and the build was canceled;
-	// Result and Err describe how it stopped.
+// BuildScreen returns the screen of a build.
+func BuildScreen(imageName, release, suite, arch, source string, phases []builder.Phase) Screen {
+	return Screen{
+		Title:    "frostroot build",
+		Subtitle: fmt.Sprintf("%s · Ubuntu %s (%s, %s) · %s", imageName, release, suite, arch, source),
+		Phases:   phases,
+		LogTitle: "mmdebstrap",
+	}
+}
+
+// Outcome is how the work behind a screen ended, as far as the screen saw.
+type Outcome struct {
+	Err error // what the work reported, or nil
+	// Interrupted means the user pressed Ctrl-C and the work was canceled;
+	// Err describes how it stopped.
 	Interrupted bool
 	// Abandoned means the user pressed Ctrl-C a second time and the screen
-	// closed before the build finished, so Result and Err are unknown.
+	// closed before the work finished, so Err is unknown.
 	Abandoned bool
 }
 
-// RunBuild shows the build screen until the build finishes. events carries the
-// builder's progress and is closed when the build is over; done then delivers
-// the outcome. cancelBuild is called on the first Ctrl-C; the screen stays up
-// until the canceled build has finished cleaning up, unless Ctrl-C is pressed
+// RunProgress shows the screen until the work finishes. events carries the
+// progress and is closed when the work is over; done then delivers its
+// error, or nil. cancel is called on the first Ctrl-C; the screen stays up
+// until the canceled work has finished cleaning up, unless Ctrl-C is pressed
 // again.
-func RunBuild(screen BuildScreen, events <-chan builder.ProgressEvent, done <-chan BuildOutcome, cancelBuild func(), input io.Reader, output io.Writer) (BuildOutcome, error) {
-	model := newBuildModel(screen, events, done, cancelBuild)
+func RunProgress(screen Screen, events <-chan builder.ProgressEvent, done <-chan error, cancel func(), input io.Reader, output io.Writer) (Outcome, error) {
+	model := newProgressModel(screen, events, done, cancel)
 	program := tea.NewProgram(model, tea.WithInput(input), tea.WithOutput(output), tea.WithAltScreen())
 	finalModel, err := program.Run()
 	if err != nil {
-		return BuildOutcome{}, fmt.Errorf("running the build screen: %w", err)
+		return Outcome{}, fmt.Errorf("running the progress screen: %w", err)
 	}
-	finished, isBuildModel := finalModel.(*buildModel)
-	if !isBuildModel {
-		return BuildOutcome{}, fmt.Errorf("running the build screen: unexpected model %T", finalModel)
+	finished, isProgressModel := finalModel.(*progressModel)
+	if !isProgressModel {
+		return Outcome{}, fmt.Errorf("running the progress screen: unexpected model %T", finalModel)
 	}
 	return finished.outcome(), nil
 }
@@ -78,7 +87,7 @@ type phaseState struct {
 const (
 	defaultWidth       = 80
 	defaultHeight      = 24
-	phaseTitleWidth    = 36
+	phaseTitleWidth    = 40
 	barWidth           = 20
 	collapsedLogHeight = 8
 	minimumLogHeight   = 3
@@ -86,22 +95,23 @@ const (
 	clockInterval      = time.Second
 )
 
-// Messages the build model receives besides Bubble Tea's own.
+// Messages the model receives besides Bubble Tea's own.
 type (
 	eventMsg        builder.ProgressEvent
 	eventsClosedMsg struct{}
-	doneMsg         BuildOutcome
+	doneMsg         struct{ err error }
 	clockMsg        time.Time
 )
 
-// buildModel is the build screen.
-type buildModel struct {
-	screen      BuildScreen
-	events      <-chan builder.ProgressEvent
-	done        <-chan BuildOutcome
-	cancelBuild func()
+// progressModel is the progress screen.
+type progressModel struct {
+	screen Screen
+	events <-chan builder.ProgressEvent
+	done   <-chan error
+	cancel func()
 
-	phases    []phaseState
+	phases    []phaseState          // one per screen.Phases
+	rows      map[builder.Phase]int // phase to its index in phases
 	spinner   spinner.Model
 	bar       progress.Model
 	logLines  []string
@@ -113,48 +123,50 @@ type buildModel struct {
 	startedAt time.Time
 	now       time.Time
 
-	result       *BuildOutcome
+	result       *error
 	eventsClosed bool
 	interrupting bool
 	abandoned    bool
 }
 
-func newBuildModel(screen BuildScreen, events <-chan builder.ProgressEvent, done <-chan BuildOutcome, cancelBuild func()) *buildModel {
+func newProgressModel(screen Screen, events <-chan builder.ProgressEvent, done <-chan error, cancel func()) *progressModel {
 	now := time.Now()
-	model := &buildModel{
-		screen:      screen,
-		events:      events,
-		done:        done,
-		cancelBuild: cancelBuild,
-		phases:      make([]phaseState, len(builder.Phases())),
-		spinner:     spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(runningStyle)),
-		bar:         progress.New(progress.WithWidth(barWidth), progress.WithoutPercentage(), progress.WithDefaultGradient()),
-		logView:     viewport.New(defaultWidth-4, collapsedLogHeight),
-		width:       defaultWidth,
-		height:      defaultHeight,
-		startedAt:   now,
-		now:         now,
+	model := &progressModel{
+		screen:    screen,
+		events:    events,
+		done:      done,
+		cancel:    cancel,
+		phases:    make([]phaseState, len(screen.Phases)),
+		rows:      make(map[builder.Phase]int, len(screen.Phases)),
+		spinner:   spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(runningStyle)),
+		bar:       progress.New(progress.WithWidth(barWidth), progress.WithoutPercentage(), progress.WithDefaultGradient()),
+		logView:   viewport.New(defaultWidth-4, collapsedLogHeight),
+		width:     defaultWidth,
+		height:    defaultHeight,
+		startedAt: now,
+		now:       now,
+	}
+	for index, phase := range screen.Phases {
+		model.rows[phase] = index
 	}
 	return model
 }
 
-// outcome returns how the build ended, as far as the screen saw it.
-func (m *buildModel) outcome() BuildOutcome {
+// outcome returns how the work ended, as far as the screen saw it.
+func (m *progressModel) outcome() Outcome {
 	if m.result == nil {
-		return BuildOutcome{Abandoned: true, Interrupted: m.interrupting}
+		return Outcome{Abandoned: true, Interrupted: m.interrupting}
 	}
-	result := *m.result
-	result.Interrupted = m.interrupting
-	return result
+	return Outcome{Err: *m.result, Interrupted: m.interrupting}
 }
 
 // Init implements tea.Model.
-func (m *buildModel) Init() tea.Cmd {
+func (m *progressModel) Init() tea.Cmd {
 	return tea.Batch(m.spinner.Tick, m.waitForEvent(), m.waitForDone(), tickClock())
 }
 
 // waitForEvent delivers the next progress event, or says the channel closed.
-func (m *buildModel) waitForEvent() tea.Cmd {
+func (m *progressModel) waitForEvent() tea.Cmd {
 	return func() tea.Msg {
 		event, open := <-m.events
 		if !open {
@@ -164,9 +176,9 @@ func (m *buildModel) waitForEvent() tea.Cmd {
 	}
 }
 
-// waitForDone delivers the build's outcome.
-func (m *buildModel) waitForDone() tea.Cmd {
-	return func() tea.Msg { return doneMsg(<-m.done) }
+// waitForDone delivers the work's outcome.
+func (m *progressModel) waitForDone() tea.Cmd {
+	return func() tea.Msg { return doneMsg{err: <-m.done} }
 }
 
 func tickClock() tea.Cmd {
@@ -174,7 +186,7 @@ func tickClock() tea.Cmd {
 }
 
 // Update implements tea.Model.
-func (m *buildModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -198,25 +210,25 @@ func (m *buildModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.eventsClosed = true
 		return m, m.quitIfFinished()
 	case doneMsg:
-		outcome := BuildOutcome(msg)
-		m.result = &outcome
-		m.closePhases(outcome.Err != nil)
+		err := msg.err
+		m.result = &err
+		m.closePhases(err != nil)
 		return m, m.quitIfFinished()
 	}
 	return m, nil
 }
 
-// finished reports whether the build is over and every event has been seen.
-func (m *buildModel) finished() bool { return m.result != nil && m.eventsClosed }
+// finished reports whether the work is over and every event has been seen.
+func (m *progressModel) finished() bool { return m.result != nil && m.eventsClosed }
 
-func (m *buildModel) quitIfFinished() tea.Cmd {
+func (m *progressModel) quitIfFinished() tea.Cmd {
 	if m.finished() {
 		return tea.Quit
 	}
 	return nil
 }
 
-func (m *buildModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *progressModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case msg.Type == tea.KeyCtrlC:
 		if m.interrupting || m.finished() {
@@ -224,7 +236,7 @@ func (m *buildModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		m.interrupting = true
-		m.cancelBuild()
+		m.cancel()
 		return m, nil
 	case msg.String() == "l":
 		m.logGrown = !m.logGrown
@@ -237,7 +249,7 @@ func (m *buildModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // apply updates the phase table and the log from one event.
-func (m *buildModel) apply(event builder.ProgressEvent) {
+func (m *progressModel) apply(event builder.ProgressEvent) {
 	switch event.Kind {
 	case builder.EventLogFile:
 		m.logPath = event.Line
@@ -247,10 +259,11 @@ func (m *buildModel) apply(event builder.ProgressEvent) {
 		return
 	case builder.EventPhaseStarted, builder.EventProgress, builder.EventPhaseFinished:
 	}
-	if int(event.Phase) >= len(m.phases) {
-		return // a phase this screen does not know; the log still shows it
+	row, shown := m.rows[event.Phase]
+	if !shown {
+		return // a phase this screen does not list; the log still shows it
 	}
-	state := &m.phases[event.Phase]
+	state := &m.phases[row]
 	switch event.Kind {
 	case builder.EventPhaseStarted:
 		state.status = phaseRunning
@@ -270,9 +283,9 @@ func (m *buildModel) apply(event builder.ProgressEvent) {
 	}
 }
 
-// closePhases settles the running phase when the build ends: failed when the
-// build did, done otherwise.
-func (m *buildModel) closePhases(failed bool) {
+// closePhases settles the running phase when the work ends: failed when the
+// work did, done otherwise.
+func (m *progressModel) closePhases(failed bool) {
 	for index := range m.phases {
 		state := &m.phases[index]
 		if state.status != phaseRunning {
@@ -289,7 +302,7 @@ func (m *buildModel) closePhases(failed bool) {
 
 // appendLog adds a line to the pane, keeping the view at the bottom when it
 // was there.
-func (m *buildModel) appendLog(line string) {
+func (m *progressModel) appendLog(line string) {
 	followTail := m.logView.AtBottom()
 	m.logLines = append(m.logLines, line)
 	if len(m.logLines) > maxLogLines {
@@ -302,7 +315,7 @@ func (m *buildModel) appendLog(line string) {
 }
 
 // resizeLog fits the log pane to the terminal.
-func (m *buildModel) resizeLog() {
+func (m *progressModel) resizeLog() {
 	m.logView.Width = max(10, m.width-4)
 	fixedRows := 2 + len(m.phases) + 1 + 2 + 2 // header, phases, gap, box frame, footer
 	free := m.height - fixedRows
@@ -327,17 +340,16 @@ var (
 )
 
 // View implements tea.Model.
-func (m *buildModel) View() string {
+func (m *progressModel) View() string {
 	var view strings.Builder
-	fmt.Fprintf(&view, "%s   %s · Ubuntu %s (%s, %s) · %s\n\n", titleStyle.Render("frostroot build"),
-		m.screen.ImageName, m.screen.Release, m.screen.Suite, m.screen.Arch, m.screen.ArchiveURL)
-	for index, phase := range builder.Phases() {
+	fmt.Fprintf(&view, "%s   %s\n\n", titleStyle.Render(m.screen.Title), m.screen.Subtitle)
+	for index, phase := range m.screen.Phases {
 		view.WriteString(m.phaseLine(phase, m.phases[index]))
 		view.WriteByte('\n')
 	}
 	view.WriteByte('\n')
 	pane := paneStyle.Width(m.logView.Width).Render(m.logView.View())
-	pane = strings.Replace(pane, "╭─", "╭─ "+dimStyle.Render("mmdebstrap")+" ", 1)
+	pane = strings.Replace(pane, "╭─", "╭─ "+dimStyle.Render(m.screen.LogTitle)+" ", 1)
 	view.WriteString(pane)
 	view.WriteByte('\n')
 	view.WriteString(m.footer())
@@ -345,7 +357,7 @@ func (m *buildModel) View() string {
 }
 
 // phaseLine renders one row of the phase table.
-func (m *buildModel) phaseLine(phase builder.Phase, state phaseState) string {
+func (m *progressModel) phaseLine(phase builder.Phase, state phaseState) string {
 	icon, title := dimStyle.Render("·"), dimStyle.Render(padRight(phase.Title(), phaseTitleWidth))
 	detail, duration := "", ""
 	switch state.status {
@@ -371,7 +383,7 @@ func (m *buildModel) phaseLine(phase builder.Phase, state phaseState) string {
 }
 
 // progressDetail renders the bar and the words for a running phase.
-func (m *buildModel) progressDetail(state phaseState) string {
+func (m *progressModel) progressDetail(state phaseState) string {
 	if !state.hasProgress {
 		return ""
 	}
@@ -382,8 +394,8 @@ func (m *buildModel) progressDetail(state phaseState) string {
 	return fmt.Sprintf("%s %3.0f%%  %s", m.bar.ViewAs(percent/100), percent, dimStyle.Render(truncate(state.progress.Summary(), m.width-phaseTitleWidth-barWidth-22)))
 }
 
-// finishedDetail says what a finished measured phase did: "28.1 MB", "326 steps".
-func (m *buildModel) finishedDetail(state phaseState) string {
+// finishedDetail says what a finished measured phase did: "28.1 MB", "326 files".
+func (m *progressModel) finishedDetail(state phaseState) string {
 	if !state.hasProgress {
 		return ""
 	}
@@ -399,10 +411,10 @@ func (m *buildModel) finishedDetail(state phaseState) string {
 
 // footer renders the last line: elapsed time, log location and keys, or the
 // interruption notice.
-func (m *buildModel) footer() string {
+func (m *progressModel) footer() string {
 	elapsed := formatDuration(m.now.Sub(m.startedAt))
 	if m.interrupting && !m.finished() {
-		return warningStyle.Render(fmt.Sprintf("  %s elapsed · interrupting: waiting for mmdebstrap to clean up (Ctrl-C again to stop waiting)", elapsed))
+		return warningStyle.Render(fmt.Sprintf("  %s elapsed · interrupting: waiting for %s to stop (Ctrl-C again to stop waiting)", elapsed, m.screen.LogTitle))
 	}
 	parts := []string{elapsed + " elapsed"}
 	if m.logPath != "" {
