@@ -22,7 +22,7 @@ import (
 )
 
 // Version is the frostroot version recorded in every lockfile.
-const Version = "0.5.0"
+const Version = "0.6.0"
 
 // UbuntuArchiveKeyring is the keyring that verifies the Ubuntu archive's
 // Release files.
@@ -99,6 +99,16 @@ type Result struct {
 	WorkDir               string // set when the work directory was kept: KeepWork, a failure, or a failed cleanup
 	CleanupErr            error  // the build succeeded but the work directory could not be removed
 	Offline               bool   // the image was rebuilt from the lock, which was checked and left as it was
+	// SourceDateEpoch is the instant the image is frozen at, in seconds
+	// since 1970: no file in the tarball is dated later. Online it is
+	// recorded in the lock; offline it is the lock's.
+	SourceDateEpoch int64
+	// Reproducible means the tarball is byte-identical with any other
+	// offline build of this lock, because the instant came from the lock.
+	// An online build is never reproducible in this sense (it installs in
+	// another order than the offline rebuild), and neither is an offline
+	// build of a lock from before frostroot 0.6, which records no instant.
+	Reproducible bool
 }
 
 // Builder runs builds with a Bootstrapper.
@@ -151,6 +161,10 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if err != nil {
 		return Result{}, err
 	}
+	instant, err := chooseFrozenInstant(getenv, offline, time.Now())
+	if err != nil {
+		return Result{}, err
+	}
 	currentUID := os.Getuid()
 	workRoot, err := WorkRoot(getenv, currentUID)
 	if err != nil {
@@ -171,6 +185,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		InstallRecommends: true,
 		KeyringPath:       UbuntuArchiveKeyring,
 		WorkDir:           workRoot,
+		SourceDateEpoch:   instant.epoch,
 		Progress:          progress,
 	}
 	if offline != nil {
@@ -204,7 +219,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	// From here on every failure keeps the work directory: it is the only
 	// debugging evidence. Nothing in dist/ or the lock is touched until the
 	// bootstrap has fully succeeded.
-	result := Result{WorkDir: workDir, Offline: offline != nil}
+	result := Result{WorkDir: workDir, Offline: offline != nil, SourceDateEpoch: instant.epoch, Reproducible: instant.fromLock}
 	var temporaryLockPath string
 	failBuild := func(err error) (Result, error) {
 		if temporaryLockPath != "" {
@@ -215,9 +230,12 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		return result, err
 	}
 
-	stageOptions := StageOptions{CopyAptLists: offline == nil, SourceLines: imageSourceLines}
+	stageOptions := StageOptions{RecordForLock: offline == nil, SourceLines: imageSourceLines}
 	if offline != nil {
 		stageOptions.SourceLines = offline.lock.Sources
+		// apt marks nothing on its own offline, since every locked package
+		// is asked for by name; the lock says what the online apt marked.
+		stageOptions.AutoMarks = RenderExtendedStates(offline.lock.Packages, offline.lock.Arch)
 	}
 	if len(sourceKeys) > 0 {
 		stageOptions.Keys = map[string][]byte{}
@@ -264,6 +282,11 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		if err := recordChecksums(stage.AptListsDir, installedPackages, indexOrigins(release, archiveURL, imageRecipe.Sources)); err != nil {
 			return failBuild(err)
 		}
+		autoMarks, err := readExtendedStates(stage.ExtendedStatesPath)
+		if err != nil {
+			return failBuild(err)
+		}
+		markAutoInstalled(installedPackages, autoMarks, imageRecipe.Image.Arch)
 		requestedPackages := imageRecipe.Packages.Include
 		if requestedPackages == nil {
 			requestedPackages = []string{}
@@ -278,6 +301,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 			Sources:          imageSourceLines,
 			FrostrootVersion: Version,
 			Requested:        requestedPackages,
+			SourceDateEpoch:  instant.epoch,
 			Repositories:     lockRepositories(release, imageRecipe.Sources, sourceKeys),
 			Packages:         installedPackages,
 		}

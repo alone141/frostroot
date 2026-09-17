@@ -105,10 +105,16 @@ offline still differ in that file's bytes, not in its meaning.
   when zero); `recipe.LockPackage.Auto bool` (`auto`, omitted when false).
 - `builder.BootstrapSpec.SourceDateEpoch`; `Mmdebstrap.commandLine` adds
   `SOURCE_DATE_EPOCH=<n>` to the environment beside `TMPDIR`.
-- `builder.Options.SourceDateEpoch` (0 means decide as above);
-  `Result.SourceDateEpoch` for the summary. The stage gains
-  `ExtendedStatesPath`: downloaded online, rendered and uploaded offline.
-  `RenderExtendedStates(lock)`, `ParseExtendedStates(reader)`.
+- The builder decides the epoch itself from the environment, the clock or
+  the lock (no option: the environment variable is the convention, and
+  nothing else would set one); `Result.SourceDateEpoch` and
+  `Result.Reproducible` for the summary. The stage gains
+  `ExtendedStatesPath`, where the online image's file is downloaded to, and
+  `AutoMarksPath`, the file rendered from the lock that the offline build
+  uploads. `RenderExtendedStates(packages, nativeArch)`,
+  `ParseExtendedStates(reader)`. apt records a package of architecture
+  `all` under the image's native architecture, and the renderer does the
+  same.
 - `cli build` prints the instant the image is frozen at, in UTC, and
   offline says that the tarball is byte-identical with any other offline
   build of this lock, or, for an old lock, that it is not.

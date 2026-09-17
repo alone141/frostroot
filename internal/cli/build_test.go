@@ -67,6 +67,12 @@ func (f *fakeBootstrapper) Run(_ context.Context, spec builder.BootstrapSpec) er
 				return err
 			}
 		}
+		if statesDestination, isDownload := strings.CutPrefix(hook, "download /var/lib/apt/extended_states "); isDownload {
+			// git was asked for, so apt marked nothing: an empty file.
+			if err := os.WriteFile(strings.Trim(statesDestination, "'"), nil, 0o644); err != nil {
+				return err
+			}
+		}
 		if statusDestination, isDownload := strings.CutPrefix(hook, "download /var/lib/dpkg/status "); isDownload {
 			if err := os.WriteFile(strings.Trim(statusDestination, "'"), []byte(dpkgStatus), 0o644); err != nil {
 				return err
