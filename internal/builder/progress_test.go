@@ -3,6 +3,7 @@ package builder
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -240,16 +241,33 @@ func TestParseAptSize(t *testing.T) {
 
 func TestPhaseTitles(t *testing.T) {
 	phases := Phases()
-	if len(phases) != int(phaseCount) || phases[0] != PhaseUpdateIndex || phases[len(phases)-1] != PhasePlaceTarball {
+	if len(phases) != 9 || phases[0] != PhaseUpdateIndex || phases[len(phases)-1] != PhasePlaceTarball {
 		t.Errorf("Phases() = %v", phases)
 	}
-	for _, phase := range phases {
+	offline := OfflinePhases()
+	if offline[0] != PhaseVerifyVendored || !slices.Contains(offline, PhaseCheckLock) || slices.Contains(offline, PhaseWriteLock) || offline[len(offline)-1] != PhasePlaceTarball {
+		t.Errorf("OfflinePhases() = %v", offline)
+	}
+	if vendor := VendorPhases(true); len(vendor) != 4 || vendor[3] != PhaseVendorPrune || len(VendorPhases(false)) != 3 {
+		t.Errorf("VendorPhases = %v / %v", vendor, VendorPhases(false))
+	}
+	for phase := Phase(0); phase < phaseCount; phase++ {
 		if phase.Title() == "" || phase.Title() == "Unknown phase" {
 			t.Errorf("%d has no title", int(phase))
 		}
 	}
 	if got := Phase(99).Title(); got != "Unknown phase" {
 		t.Errorf("Phase(99).Title() = %q", got)
+	}
+}
+
+func TestSummaryOfFilesWithTotal(t *testing.T) {
+	event := ProgressEvent{Kind: EventProgress, Done: 120, Total: 351, Unit: UnitFiles}
+	if got := event.Summary(); got != "120 / 351 files" {
+		t.Errorf("Summary() = %q", got)
+	}
+	if percent, known := event.Percent(); !known || percent < 34 || percent > 35 {
+		t.Errorf("Percent() = %v, %v", percent, known)
 	}
 }
 

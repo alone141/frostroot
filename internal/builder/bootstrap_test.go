@@ -301,6 +301,31 @@ func TestMmdebstrapRunInterruptedReportsCanceled(t *testing.T) {
 	}
 }
 
+func TestMmdebstrapTrustedSpecNeedsNoKeyring(t *testing.T) {
+	// An offline build's local repository carries [trusted=yes]; frostroot
+	// verified its files against the lock, and no keyring is involved.
+	var record commandRecord
+	bootstrapper := Mmdebstrap{CurrentUID: uidFunc(1000), RunCommand: recordingRunner(&record), LookPath: func(string) (string, error) { return "/usr/bin/mmdebstrap", nil }}
+	spec := runnableSpec(t)
+	spec.Trusted = true
+	spec.KeyringPath = ""
+	spec.SourceLines = []string{"deb [trusted=yes] copy:///w/pool ./"}
+	if err := bootstrapper.Preflight(spec); err != nil {
+		t.Fatalf("Preflight: %v", err)
+	}
+	if err := bootstrapper.Run(context.Background(), spec); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, arg := range record.args {
+		if strings.HasPrefix(arg, "--keyring") {
+			t.Errorf("args = %q, want no --keyring for a trusted source", record.args)
+		}
+	}
+	if !slices.Contains(record.args, "deb [trusted=yes] copy:///w/pool ./") {
+		t.Errorf("args = %q, want the local repository line", record.args)
+	}
+}
+
 func TestMmdebstrapRunWithoutKeyring(t *testing.T) {
 	var record commandRecord
 	bootstrapper := Mmdebstrap{CurrentUID: uidFunc(1000), RunCommand: recordingRunner(&record)}

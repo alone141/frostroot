@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 
+	"frostroot/internal/deb"
+	"frostroot/internal/pool"
 	"frostroot/internal/recipe"
 )
 
@@ -217,6 +219,120 @@ func TestIntegrationNobleTiny(t *testing.T) {
 			t.Errorf("etc/machine-id must exist and be empty: %+v", machineID)
 		}
 	})
+}
+
+// TestIntegrationOfflineRebuild builds a real minimal image online, vendors
+// its packages from the archive, rebuilds it from the pool alone and checks
+// that the second image has exactly the first one's packages. Takes a few
+// minutes and downloads the packages twice (once through mmdebstrap, once
+// into the pool).
+func TestIntegrationOfflineRebuild(t *testing.T) {
+	skipUnlessMmdebstrapAvailable(t)
+	cacheHome, err := os.MkdirTemp("/var/tmp", "frostroot-integration-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(cacheHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(cacheHome) })
+	recipeDir := t.TempDir()
+	imageRecipe := recipe.Recipe{
+		Image:    recipe.Image{Name: "tiny", Release: "24.04", Arch: "amd64"},
+		User:     recipe.User{Name: "student", Sudo: true},
+		WSL:      recipe.WSL{Systemd: true, DefaultUser: "student"},
+		Locale:   recipe.Locale{Lang: "en_US.UTF-8", Timezone: "UTC"},
+		Packages: recipe.Packages{Include: []string{"curl"}},
+	}
+	options := Options{RecipeDir: recipeDir, GOOS: "linux", Getenv: fakeEnvironment(map[string]string{"XDG_CACHE_HOME": cacheHome})}
+	builder := Builder{Bootstrapper: &Mmdebstrap{}}
+
+	t.Log("online build")
+	online, err := builder.Build(context.Background(), imageRecipe, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := recipe.LoadLock(online.LockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !lock.HasChecksums() {
+		t.Fatalf("the lock lacks checksums: %+v", lock.Packages[:3])
+	}
+	for _, locked := range lock.Packages {
+		if !strings.HasPrefix(locked.Filename, "pool/") || len(locked.SHA256) != 64 {
+			t.Errorf("odd lock entry %+v", locked)
+		}
+	}
+	entries, err := pool.Manifest(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Log("vendor")
+	poolDir := filepath.Join(recipeDir, "vendor", "debs")
+	summary, err := pool.Fetch(context.Background(), pool.FetchOptions{Dir: poolDir, Entries: entries, MirrorURL: lock.Mirror, Fallback: pool.LaunchpadURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Fetched != len(entries) {
+		t.Errorf("fetched %d of %d", summary.Fetched, len(entries))
+	}
+	// Every vendored file is a real .deb whose control names the locked package.
+	for _, entry := range entries[:5] {
+		control, err := deb.ReadControl(filepath.Join(poolDir, entry.FileName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if control.Fields["Package"] != entry.Package || control.Fields["Version"] != entry.Version {
+			t.Errorf("%s holds %s %s, want %s %s", entry.FileName, control.Fields["Package"], control.Fields["Version"], entry.Package, entry.Version)
+		}
+	}
+
+	t.Log("offline build")
+	if err := os.Remove(online.TarballPath); err != nil {
+		t.Fatal(err)
+	}
+	lockBefore, err := os.ReadFile(online.LockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.Offline = true
+	progress := &testLogProgress{t: t}
+	options.Progress = progress
+	imageRecipe.User.Name = "teacher" // provisioning may change; packages may not
+	imageRecipe.WSL.DefaultUser = "teacher"
+	offline, err := builder.Build(context.Background(), imageRecipe, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !offline.Offline || offline.InstalledPackageCount != len(lock.Packages) {
+		t.Errorf("Result = %+v, want offline with %d packages", offline, len(lock.Packages))
+	}
+	lockAfter, err := os.ReadFile(online.LockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(lockAfter) != string(lockBefore) {
+		t.Error("the offline build rewrote the lock")
+	}
+	wantStarted := []Phase{PhaseVerifyVendored, PhasePrepareRepository, PhaseUpdateIndex, PhaseDownload, PhaseExtract, PhaseInstallEssential, PhaseInstallRequested, PhaseProvision, PhaseCreateTarball, PhaseCheckLock, PhasePlaceTarball}
+	if !slices.Equal(progress.started, wantStarted) {
+		t.Errorf("phases started = %v, want %v", progress.started, wantStarted)
+	}
+	if progress.downloadTotalBytes <= 0 {
+		t.Error("the copy from the local repository never reported a total")
+	}
+	image := readTarball(t, offline.TarballPath)
+	if sourcesList := image.fileContent(t, "etc/apt/sources.list"); sourcesList != strings.Join(lock.Sources, "\n")+"\n" {
+		t.Errorf("the image's sources.list holds %q, want the lock's sources", sourcesList)
+	}
+	if !strings.Contains(image.fileContent(t, "etc/passwd"), "teacher:x:1000:1000") {
+		t.Error("the offline build did not provision the changed user")
+	}
+	if hasCopyLine := strings.Contains(image.fileContent(t, "etc/apt/sources.list"), "copy://"); hasCopyLine {
+		t.Error("the local repository leaked into the image")
+	}
 }
 
 // TestIntegrationUnreachableWorkRootFailsFast checks that a work root which
