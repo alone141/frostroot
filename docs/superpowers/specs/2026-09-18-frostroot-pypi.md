@@ -208,5 +208,8 @@ tests: the status line claimed "all sections" and the help line offered
 whatever `--python-index` said. Both are fixed, and the second is now a
 test.
 
-Still to do before this is called finished: a real `build` of a recipe the
-picker wrote, to prove the names it produces are names pip resolves.
+A real `build` of a recipe naming `requests` and `Flask_SQLAlchemy` — the
+second spelled the way PEP 503 allows rather than the way PyPI spells it —
+finished in 425 s and locked 17 `[[pypi]]` entries, among them
+`Flask-SQLAlchemy 3.1.1` and `requests`: the normalization the picker and the
+warning rely on is the same one pip applies, all the way to the lock.

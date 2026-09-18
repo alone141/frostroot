@@ -994,6 +994,12 @@ have told PyPI which names you looked up; summaries now follow the index
 they belong to. That one was caught by a test that resolved `numpy` against
 the real PyPI while pointed at a fake one.
 
+A real `build` of a recipe naming `requests` and `Flask_SQLAlchemy` — the
+second spelled the way PEP 503 allows rather than the way PyPI spells it —
+finished in 425 s and locked 17 `[[pypi]]` entries, among them
+`Flask-SQLAlchemy 3.1.1` and `requests`: the normalization the picker and the
+warning rely on is the same one pip applies, all the way to the lock.
+
 
 ## Documentation
 
