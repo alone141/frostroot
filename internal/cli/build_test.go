@@ -94,7 +94,7 @@ func (f *fakeBootstrapper) bootstrapRan() bool {
 // newBuildApp returns an App that builds the recipe in recipeDir with
 // bootstrapper, on Linux, outside WSL, with its work root in a temporary
 // directory.
-func newBuildApp(t *testing.T, recipeDir string, bootstrapper *fakeBootstrapper, stdout, stderr *bytes.Buffer) *App {
+func newBuildApp(t *testing.T, recipeDir string, bootstrapper builder.Bootstrapper, stdout, stderr *bytes.Buffer) *App {
 	t.Helper()
 	cacheDir := t.TempDir()
 	return &App{
