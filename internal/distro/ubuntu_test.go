@@ -34,7 +34,7 @@ func TestLookupSupportedReleases(t *testing.T) {
 			if release.EndOfLife != testCase.wantEndOfLife {
 				t.Errorf("EndOfLife = %v, want %v", release.EndOfLife, testCase.wantEndOfLife)
 			}
-			if !slices.Equal(release.Components, []string{"main", "universe"}) {
+			if !slices.Equal(release.Components, []string{"main", "restricted", "universe", "multiverse"}) {
 				t.Errorf("Components = %q, want main and universe", release.Components)
 			}
 		})
@@ -48,9 +48,9 @@ func TestSourceLinesHasThreePockets(t *testing.T) {
 	}
 	got := release.SourceLines("")
 	want := []string{
-		"deb http://archive.ubuntu.com/ubuntu jammy main universe",
-		"deb http://archive.ubuntu.com/ubuntu jammy-updates main universe",
-		"deb http://archive.ubuntu.com/ubuntu jammy-security main universe",
+		"deb http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse",
+		"deb http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse",
+		"deb http://archive.ubuntu.com/ubuntu jammy-security main restricted universe multiverse",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("SourceLines(\"\") =\n%q\nwant\n%q", got, want)
@@ -64,9 +64,9 @@ func TestSourceLinesMirrorReplacesArchiveInAllPockets(t *testing.T) {
 	}
 	got := release.SourceLines("http://mirror.example/ubuntu")
 	want := []string{
-		"deb http://mirror.example/ubuntu noble main universe",
-		"deb http://mirror.example/ubuntu noble-updates main universe",
-		"deb http://mirror.example/ubuntu noble-security main universe",
+		"deb http://mirror.example/ubuntu noble main restricted universe multiverse",
+		"deb http://mirror.example/ubuntu noble-updates main restricted universe multiverse",
+		"deb http://mirror.example/ubuntu noble-security main restricted universe multiverse",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("SourceLines(mirror) =\n%q\nwant\n%q", got, want)

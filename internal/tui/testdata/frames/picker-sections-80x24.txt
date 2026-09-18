@@ -1,0 +1,25 @@
+Packages
+    [ ] python3  the interpreter
+    [ ] python3-pip  package installer (use a venv on 24.04)
+
+┃ Other packages
+┃ type to search the release's archive, or a name; Space adds the row
+┃ > cmake
+┃ 5 found · all sections · noble · 85,574 packages · fetched 2 days ago
+┃   all sections
+┃ > devel            3
+┃   libs             2
+┃
+┃
+┃
+┃
+┃
+┃ enter picks the section · esc keeps all sections
+┃
+
+  Python packages
+  installed from PyPI into the image's virtual environment, separated by spaces
+  or commas
+  > none
+
+↑/↓ move • enter pick • esc close

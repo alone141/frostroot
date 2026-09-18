@@ -1,0 +1,44 @@
+Package: rar
+Architecture: amd64
+Version: 2:7.00-1build1
+Priority: optional
+Section: multiverse/utils
+Origin: Ubuntu
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Original-Maintainer: Martin Meredith <mez@debian.org>
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Installed-Size: 1619
+Depends: libc6 (>= 2.34), libgcc-s1 (>= 3.0), libstdc++6 (>= 5.2)
+Suggests: unrar
+Filename: pool/multiverse/r/rar/rar_7.00-1build1_amd64.deb
+Size: 451668
+MD5sum: bbe2d290a26f700da90dc8a06c6034a5
+SHA1: 06ddd47da24533ff4a518b361928614690720c16
+SHA256: 5c38d1e445ab572b41c407e22d3232a839727bf718770ff126ceee79a7655e84
+SHA512: eae12e88e22deddd62f3182ca2bc30a53d53cf32d88a39394e86617f60fb15da0ea9f2ead9bfbe55ea7dcd2af3de029bf0cf21c6474acd13e547ad6494a2056c
+Homepage: https://www.rarlabs.com/
+Description: Archiver for .rar files
+Description-md5: 649b872741c4c5402456879832c70c03
+
+Package: unrar
+Architecture: amd64
+Version: 1:7.0.7-1build1
+Priority: optional
+Section: multiverse/utils
+Source: unrar-nonfree
+Origin: Ubuntu
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Original-Maintainer: UnRar maintainer team <team+unrar-nonfree@tracker.debian.org>
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Installed-Size: 397
+Depends: libc6 (>= 2.38), libgcc-s1 (>= 3.3.1), libstdc++6 (>= 11)
+Filename: pool/multiverse/u/unrar-nonfree/unrar_7.0.7-1build1_amd64.deb
+Size: 177964
+MD5sum: 1f853b65027f7a831c53b0b915087a5c
+SHA1: 319ea80895ff96693f771d782db8e7f2c3f7ae29
+SHA256: 3d05dd213babf0b8b9082a9a7d8663d35d85449b95b8593a4acb52598759e9a6
+SHA512: 8cce0794d8767ef110a6bdc7cd24c212454b1093b7316fb276d18bd23633e9d047301fd664f5c8f05d07ff85541e83e90fd4f529984f8d92404057c11da8d57e
+Homepage: https://www.rarlab.com/
+Description: Unarchiver for .rar files (non-free version)
+Description-md5: 363f696bb115028ffafb265ccc9f32fb
+

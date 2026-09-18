@@ -20,4 +20,4 @@ This is what frostroot.toml will say:
 |
 |   Write     Cancel
 
-←/→ toggle |   • enter submit |   • y Write |   • n Cancel
+←/→ toggle | enter submit | y Write | n Cancel

@@ -1,0 +1,173 @@
+Package: cmake
+Architecture: amd64
+Version: 3.28.3-1build7
+Multi-Arch: foreign
+Priority: optional
+Section: devel
+Origin: Ubuntu
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Original-Maintainer: Debian CMake Team <pkg-cmake-team@lists.alioth.debian.org>
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Installed-Size: 36493
+Depends: libarchive13t64 (>= 3.3.3), libc6 (>= 2.38), libcurl4t64 (>= 7.16.2), libexpat1 (>= 2.0.1), libgcc-s1 (>= 3.0), libjsoncpp25 (>= 1.9.5), librhash0 (>= 1.2.6), libstdc++6 (>= 13.1), libuv1t64 (>= 1.38.0), zlib1g (>= 1:1.1.4), cmake-data (= 3.28.3-1build7), procps
+Recommends: gcc, make
+Suggests: cmake-doc, cmake-format, elpa-cmake-mode, ninja-build
+Filename: pool/main/c/cmake/cmake_3.28.3-1build7_amd64.deb
+Size: 11190006
+MD5sum: adf6332b9137fbddcaa7bcd12ff8fc44
+SHA1: da7b2496fd50fdec599ec41106929d1631d53c78
+SHA256: 4b0a7f8c0daf27b26b46997d994ae5d1ee7a3d11dfcda9f7627bb1462c162295
+SHA512: 21af3a66fe798848f71c1bf7e073ed67b6d524214a93a6226cb9b3970fb42eb54d0513c97ec77fd7b1705336e22e41effc0594000f1138d3da05f3f8450e8886
+Homepage: https://cmake.org/
+Description: cross-platform, open-source make system
+Description-md5: b60d0479b91d22665e465b5cec287c83
+
+Package: cmake-data
+Architecture: all
+Version: 3.28.3-1build7
+Multi-Arch: foreign
+Priority: optional
+Section: devel
+Source: cmake
+Origin: Ubuntu
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Original-Maintainer: Debian CMake Team <pkg-cmake-team@lists.alioth.debian.org>
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Installed-Size: 10984
+Filename: pool/main/c/cmake/cmake-data_3.28.3-1build7_all.deb
+Size: 2154936
+MD5sum: 82125d8d38ef02f611e7a2c493101854
+SHA1: b1887b82c05cb56fe4ef9f005f355eb301bb51f8
+SHA256: 20a3b644211ce82f35c24f1f5052199adeb0ac159978a8740fd6c0959611557f
+SHA512: 0d4bed4ea41453cd3a514417f2d29a46e86fd1a6cc96f80d4e56cebaad123ef47966d0270679f9e91ebc92da73adf67d34bf0a0629b4796e47624bb3771155a7
+Homepage: https://cmake.org/
+Description: CMake data files (modules, templates and documentation)
+Description-md5: 7f6054b05ba6a3b1c50fe9a6d4da8a8c
+
+Package: git
+Architecture: amd64
+Version: 1:2.43.0-1ubuntu7
+Multi-Arch: foreign
+Priority: optional
+Section: vcs
+Origin: Ubuntu
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Original-Maintainer: Jonathan Nieder <jrnieder@gmail.com>
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Installed-Size: 21684
+Provides: git-completion, git-core
+Depends: libc6 (>= 2.38), libcurl3t64-gnutls (>= 7.56.1), libexpat1 (>= 2.0.1), libpcre2-8-0 (>= 10.34), zlib1g (>= 1:1.2.2), perl, liberror-perl, git-man (>> 1:2.43.0), git-man (<< 1:2.43.0-.)
+Recommends: ca-certificates, patch, less, ssh-client
+Suggests: gettext-base, git-daemon-run | git-daemon-sysvinit, git-doc, git-email, git-gui, gitk, gitweb, git-cvs, git-mediawiki, git-svn
+Breaks: bash-completion (<< 1:1.90-1), cogito (<= 0.18.2+), dgit (<< 5.1~), git-buildpackage (<< 0.6.5), git-el (<< 1:2.32.0~rc2-1~), gitosis (<< 0.2+20090917-7), gitpkg (<< 0.15), guilt (<< 0.33), openssh-client (<< 1:6.8), stgit (<< 0.15), stgit-contrib (<< 0.15)
+Filename: pool/main/g/git/git_2.43.0-1ubuntu7_amd64.deb
+Size: 3673594
+MD5sum: 2d2f6374b0087a8be3aca2ba7bee8c31
+SHA1: af7a519c8946f7c28fce65d6a40c918559f84bbe
+SHA256: 664e394169ca5f1643b096059cf45169e360ced9e96ed378465dd03d47309074
+SHA512: 76deaddeb3edd34e1b179e48cff25ac585edb4cab7c5254b1e208d202b2156ac576c2310f9f2417b585d211e9b22dff74a78402e6f0de728d7ed872a29276ed8
+Homepage: https://git-scm.com/
+Description: fast, scalable, distributed revision control system
+Task: cloud-image, cloud-image, ubuntu-wsl, server, ubuntu-server-raspi, kubuntu-desktop, lubuntu-desktop, ubuntustudio-desktop-core, ubuntustudio-desktop
+Description-md5: c1f968556452a190fe359bffd151c012
+
+Package: jq
+Architecture: amd64
+Version: 1.7.1-3build1
+Multi-Arch: foreign
+Priority: optional
+Section: utils
+Origin: Ubuntu
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Original-Maintainer: ChangZhuo Chen (陳昌倬) <czchen@debian.org>
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Installed-Size: 112
+Depends: libc6 (>= 2.38), libjq1 (= 1.7.1-3build1)
+Filename: pool/main/j/jq/jq_1.7.1-3build1_amd64.deb
+Size: 65538
+MD5sum: 04781b1df762e96f5296334488125499
+SHA1: e55a5b42d8ca446436ee112635759fc5b9424bce
+SHA256: 36276dcac711c742776377001886f5a72293391446b5d5e7646541336f2234aa
+SHA512: d19db5057fd3acea08e0ee291e0970f13a8911e8e0b20fe8cf252186ca0971425d178e3ef76c9505639a8e1c0c883c793af9eafd3afda9c4ff704d64787a0169
+Homepage: https://jqlang.github.io/jq
+Description: lightweight and flexible command-line JSON processor
+Task: ubuntu-desktop-minimal, ubuntu-desktop, cloud-image, cloud-image, server, ubuntu-server-raspi, ubuntu-desktop-raspi, kubuntu-desktop, xubuntu-minimal, xubuntu-desktop, lubuntu-desktop, ubuntustudio-desktop-core, ubuntustudio-desktop, ubuntukylin-desktop, ubuntukylin-desktop-minimal, ubuntu-mate-core, ubuntu-mate-desktop, ubuntu-budgie-desktop-minimal, ubuntu-budgie-desktop, ubuntu-budgie-desktop-raspi, ubuntu-unity-desktop, edubuntu-desktop-gnome-minimal, edubuntu-desktop-gnome-raspi, ubuntucinnamon-desktop-minimal, ubuntucinnamon-desktop-raspi
+Description-md5: fd8d7d97b13012ce68c52772c1ce56aa
+
+Package: libjq1
+Architecture: amd64
+Version: 1.7.1-3build1
+Multi-Arch: same
+Priority: optional
+Section: utils
+Source: jq
+Origin: Ubuntu
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Original-Maintainer: ChangZhuo Chen (陳昌倬) <czchen@debian.org>
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Installed-Size: 358
+Depends: libc6 (>= 2.39), libonig5 (>= 6.8.1)
+Filename: pool/main/j/jq/libjq1_1.7.1-3build1_amd64.deb
+Size: 140506
+MD5sum: 31a5f151dd567e1151b951f1b58a1727
+SHA1: 1ead71782044a68e32a3746267297aabdcae6a22
+SHA256: aaecde9f29e7485de2e6bb12f1d322b6da7bee5a63914c40b599bce517ef3938
+SHA512: b7835a8d9714b74634b0b0cf63f3713cea4a88a504ded5530fafd66a78c36eba9a93f9e347e448fe69b41644c2ff3fed81129c3cbf1df86c14481f231e75e17d
+Homepage: https://jqlang.github.io/jq
+Description: lightweight and flexible command-line JSON processor - shared library
+Task: ubuntu-desktop-minimal, ubuntu-desktop, cloud-image, cloud-image, server, ubuntu-server-raspi, ubuntu-desktop-raspi, kubuntu-desktop, xubuntu-minimal, xubuntu-desktop, lubuntu-desktop, ubuntustudio-desktop-core, ubuntustudio-desktop, ubuntukylin-desktop, ubuntukylin-desktop-minimal, ubuntu-mate-core, ubuntu-mate-desktop, ubuntu-budgie-desktop-minimal, ubuntu-budgie-desktop, ubuntu-budgie-desktop-raspi, ubuntu-unity-desktop, edubuntu-desktop-gnome-minimal, edubuntu-desktop-gnome-raspi, ubuntucinnamon-desktop-minimal, ubuntucinnamon-desktop-raspi
+Description-md5: 1b50448818fdb22f62b863763d79f7a1
+
+Package: python3
+Architecture: amd64
+Version: 3.12.3-0ubuntu1
+Multi-Arch: allowed
+Priority: important
+Section: python
+Source: python3-defaults
+Origin: Ubuntu
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Original-Maintainer: Matthias Klose <doko@debian.org>
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Installed-Size: 82
+Provides: python3-profiler, python3-supported-max (= 3.12), python3-supported-min (= 3.12)
+Pre-Depends: python3-minimal (= 3.12.3-0ubuntu1)
+Depends: python3.12 (>= 3.12.3-0~), libpython3-stdlib (= 3.12.3-0ubuntu1)
+Suggests: python3-doc (>= 3.12.3-0ubuntu1), python3-tk (>= 3.12.3-0~), python3-venv (>= 3.12.3-0ubuntu1)
+Conflicts: python3-distutils
+Replaces: python3-minimal (<< 3.1.2-2)
+Filename: pool/main/p/python3-defaults/python3_3.12.3-0ubuntu1_amd64.deb
+Size: 24100
+MD5sum: ecfd2b6c555b35487cd6df984aa56ae8
+SHA1: 3c9eace610068d3767177675f59f033be827be57
+SHA256: 4e0327510491374556c3a1af16af1cbf27eb94d228c9391efe116a8b84261f44
+SHA512: d5c6db1993a79a4d35ef409925a3485b3c6c38dca05ea10a134f6b0e895f8adca87ddabc0e077a7f636b2b5cc37f7615d01972e5290ef00b63a6360cdb80097c
+Homepage: https://www.python.org/
+Description: interactive high-level object-oriented language (default python3 version)
+Task: cloud-minimal, minimal, server-minimal
+Description-md5: 0ecdf066f028bd0154785ab35ec2967f
+
+Package: zip
+Architecture: amd64
+Version: 3.0-13build1
+Multi-Arch: foreign
+Priority: optional
+Section: utils
+Origin: Ubuntu
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Original-Maintainer: Santiago Vila <sanvila@debian.org>
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Installed-Size: 536
+Depends: libbz2-1.0, libc6 (>= 2.34)
+Recommends: unzip
+Filename: pool/main/z/zip/zip_3.0-13build1_amd64.deb
+Size: 175418
+MD5sum: 31b4161417c3ba2f6c02c17d4775543c
+SHA1: 6b19302c15eab7c8fd7a6fcc3fab3664c74c878b
+SHA256: 5c1a2dfb052f50e7031037aa2e267839804d2254c4d282040fdfe826ffba1e38
+SHA512: 6e18366ade8761f3a86c53a3ccaa40d6e5959886266138a4c638b10783444c1f26cda774b4753b7c7721e8666c42c74c0e2b06e45f82e94e7132037979c6efa3
+Homepage: https://infozip.sourceforge.net/Zip.html
+Description: Archiver for .zip files
+Task: ubuntu-desktop-minimal, ubuntu-desktop, ubuntu-desktop-raspi, kubuntu-desktop, xubuntu-minimal, xubuntu-desktop, lubuntu-desktop, ubuntustudio-desktop-core, ubuntustudio-desktop, ubuntukylin-desktop, ubuntukylin-desktop-minimal, ubuntu-mate-core, ubuntu-mate-desktop, ubuntu-budgie-desktop-minimal, ubuntu-budgie-desktop, ubuntu-budgie-desktop-raspi, ubuntu-unity-desktop, edubuntu-desktop-gnome-minimal, edubuntu-desktop-gnome-raspi, ubuntucinnamon-desktop-minimal, ubuntucinnamon-desktop-raspi
+Description-md5: 581928d34d669e63c353cd694bd040b0
+

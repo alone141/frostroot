@@ -66,6 +66,7 @@ type fakeBootstrapper struct {
 	runCount          int
 	lastSpec          BootstrapSpec
 	stageFilesPresent map[string]bool // stage file name to whether it existed when Run was called
+	stagedSourcesList string          // the staged sources.list as Run found it; the work directory is gone afterwards
 }
 
 func (f *fakeBootstrapper) Run(_ context.Context, spec BootstrapSpec) error {
@@ -75,6 +76,9 @@ func (f *fakeBootstrapper) Run(_ context.Context, spec BootstrapSpec) error {
 	for _, stageFileName := range []string{"wsl.conf", "sudoers", "provision.sh", "sources.list", "auto-marks"} {
 		_, err := os.Stat(filepath.Join(spec.WorkDir, "stage", stageFileName))
 		f.stageFilesPresent[stageFileName] = err == nil
+	}
+	if sourcesList, err := os.ReadFile(filepath.Join(spec.WorkDir, "stage", "sources.list")); err == nil {
+		f.stagedSourcesList = string(sourcesList)
 	}
 	if f.runErr != nil {
 		return f.runErr
@@ -249,9 +253,9 @@ func TestBuildSuccessWritesLockAndTarball(t *testing.T) {
 		t.Errorf("KeyringPath = %q", spec.KeyringPath)
 	}
 	wantSourceLines := []string{
-		"deb http://archive.ubuntu.com/ubuntu jammy main universe",
-		"deb http://archive.ubuntu.com/ubuntu jammy-updates main universe",
-		"deb http://archive.ubuntu.com/ubuntu jammy-security main universe",
+		"deb http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse",
+		"deb http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse",
+		"deb http://archive.ubuntu.com/ubuntu jammy-security main restricted universe multiverse",
 	}
 	if !slices.Equal(spec.SourceLines, wantSourceLines) {
 		t.Errorf("SourceLines = %q, want the three pockets", spec.SourceLines)
@@ -898,9 +902,8 @@ func TestBuildOfflineRebuildsFromThePool(t *testing.T) {
 	if strings.Contains(strings.Join(spec.CustomizeHooks, "\n"), "copy-out") {
 		t.Errorf("hooks = %q, want no apt lists copied offline", spec.CustomizeHooks)
 	}
-	sourcesList, err := os.ReadFile(filepath.Join(spec.WorkDir, "stage", "sources.list"))
-	if err == nil && string(sourcesList) != strings.Join(lock.Sources, "\n")+"\n" {
-		t.Errorf("staged sources.list = %q, want the lock's sources", sourcesList)
+	if bootstrapper.stagedSourcesList != strings.Join(lock.Sources, "\n")+"\n" {
+		t.Errorf("staged sources.list = %q, want the lock's sources", bootstrapper.stagedSourcesList)
 	}
 	slices.Sort(bootstrapper.repositoryFiles)
 	wantFiles := []string{"Packages", "Release", "git_1%3a2.34.1-1ubuntu1.11_amd64.deb", "libc6_2.35-0ubuntu3.8_amd64.deb"}
@@ -929,6 +932,32 @@ func TestBuildOfflineRebuildsFromThePool(t *testing.T) {
 		t.Errorf("phases started = %v, want %v", started, wantStarted)
 	}
 	assertNoTemporaryFiles(t, options.RecipeDir)
+}
+
+// A lock made before v0.10 names main and universe only. Its offline rebuild
+// must write those lines into the image, not the four components a build
+// enables today, or the tarball would stop matching the one it reproduces.
+func TestBuildOfflineKeepsTheComponentsOfAnOlderLock(t *testing.T) {
+	options, _ := newTestOptions(t)
+	lock := writeVendoredLock(t, options)
+	lockPath := filepath.Join(options.RecipeDir, LockFileName)
+	lock.Sources = []string{
+		"deb http://archive.ubuntu.com/ubuntu jammy main universe",
+		"deb http://archive.ubuntu.com/ubuntu jammy-updates main universe",
+		"deb http://archive.ubuntu.com/ubuntu jammy-security main universe",
+	}
+	if err := recipe.SaveLock(lockPath, lock); err != nil {
+		t.Fatal(err)
+	}
+
+	options.Offline = true
+	bootstrapper := &offlineFakeBootstrapper{}
+	if _, err := (&Builder{Bootstrapper: bootstrapper}).Build(context.Background(), sampleRecipe(), options); err != nil {
+		t.Fatalf("an older lock must still rebuild offline: %v", err)
+	}
+	if want := strings.Join(lock.Sources, "\n") + "\n"; bootstrapper.stagedSourcesList != want {
+		t.Errorf("staged sources.list = %q, want the older lock's own lines %q", bootstrapper.stagedSourcesList, want)
+	}
 }
 
 func TestBuildOfflineOldLockFreezesAtNowWithoutPromise(t *testing.T) {

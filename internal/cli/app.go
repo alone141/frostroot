@@ -101,6 +101,10 @@ type App struct {
 	// KeyClient fetches the signing keys of extra sources; defaults to the
 	// network. Tests answer from a map.
 	KeyClient sources.Client
+	// IndexClient fetches the package index the recipe form searches; nil
+	// means a client honoring the proxy environment. Tests answer from
+	// their own server.
+	IndexClient *http.Client
 }
 
 // New returns an App wired to the real process.

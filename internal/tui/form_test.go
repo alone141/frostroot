@@ -47,7 +47,7 @@ func newFormDriver(t *testing.T, initial form.Values) *formDriver {
 // newFormDriverWithPreview drives a form whose last page shows preview.
 func newFormDriverWithPreview(t *testing.T, initial form.Values, preview PreviewFunc) *formDriver {
 	t.Helper()
-	model := newFormModel(form.Fields(noHost), initial, preview)
+	model := newFormModel(context.Background(), form.Fields(noHost), initial, preview)
 	return &formDriver{driver: newDriver(t, model), model: model}
 }
 
@@ -65,7 +65,7 @@ func (d *formDriver) pressEnterUntil(stage formStage) {
 
 func TestFormBindingCoversEveryField(t *testing.T) {
 	fields := form.Fields(noHost)
-	binding := newFormBinding(fields, form.Defaults(noHost))
+	binding := newFormBinding(context.Background(), fields, form.Defaults(noHost), unicodeGlyphs)
 	if bound := len(binding.texts) + len(binding.flags) + len(binding.lists); bound != len(fields) {
 		t.Errorf("%d fields bound, want %d", bound, len(fields))
 	}
