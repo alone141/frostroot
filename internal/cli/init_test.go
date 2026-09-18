@@ -329,3 +329,44 @@ func TestTOMLQuote(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderRecipeKeepsThePythonIndexURL: the form regenerates the whole
+// file from this template, so a field the template does not write is lost
+// the first time somebody runs frostroot edit, whatever the form carried.
+func TestRenderRecipeKeepsThePythonIndexURL(t *testing.T) {
+	const index = "https://nexus.example.com/repository/pypi/simple"
+	imageRecipe := recipe.Recipe{
+		Image:  recipe.Image{Name: "lab", Release: "24.04", Arch: "amd64"},
+		User:   recipe.User{Name: "student"},
+		Python: &recipe.Python{Include: []string{"requests"}, IndexURL: index},
+	}
+	rendered, err := renderRecipe(imageRecipe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rendered, "index_url = \""+index+"\"") {
+		t.Fatalf("the rendered recipe lost index_url:\n%s", rendered)
+	}
+	// And it survives being read back, which is what edit does next.
+	path := filepath.Join(t.TempDir(), "frostroot.toml")
+	if err := os.WriteFile(path, []byte(rendered), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := recipe.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.PythonIndexURL(); got != index {
+		t.Errorf("index_url after a round trip = %q, want %q", got, index)
+	}
+	// A recipe with no index writes no line, so nothing changes for anyone else.
+	plain := imageRecipe
+	plain.Python = &recipe.Python{Include: []string{"requests"}}
+	renderedPlain, err := renderRecipe(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(renderedPlain, "index_url") {
+		t.Errorf("a recipe naming no index must not mention one:\n%s", renderedPlain)
+	}
+}

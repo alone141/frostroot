@@ -1082,6 +1082,21 @@ func TestBuildOfflineRefusesBeforeAnyWork(t *testing.T) {
 			wantText:  "added to the recipe: ninja-build; packages removed from the recipe: build-essential",
 		},
 		{
+			// The same name can be a different project on a different index,
+			// so a rebuild that resolved elsewhere is not the image the lock
+			// describes, the way a changed apt source is not.
+			name: "recipe python index changed",
+			prepare: func(t *testing.T, options Options) recipe.Recipe {
+				t.Helper()
+				writeVendoredLock(t, options)
+				imageRecipe := sampleRecipe()
+				imageRecipe.Python = &recipe.Python{Include: []string{"requests"}, IndexURL: "https://nexus.example.com/repository/pypi/simple"}
+				return imageRecipe
+			},
+			wantError: ErrLockMismatch,
+			wantText:  "python index_url is https://nexus.example.com/repository/pypi/simple, the lock resolved from PyPI",
+		},
+		{
 			name: "pool incomplete",
 			prepare: func(t *testing.T, options Options) recipe.Recipe {
 				t.Helper()

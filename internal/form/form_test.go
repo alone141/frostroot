@@ -455,3 +455,27 @@ func TestPPAFieldRefusesTwoPPAsWithOneName(t *testing.T) {
 		t.Errorf("a long PPA = %v", err)
 	}
 }
+
+// TestEditKeepsThePythonIndexURL: [python] index_url is written by hand and
+// has no field of its own, so the form has to give it back. Dropping it
+// would silently move an image's resolution back to PyPI the first time
+// somebody ran frostroot edit.
+func TestEditKeepsThePythonIndexURL(t *testing.T) {
+	const index = "https://nexus.example.com/repository/pypi/simple"
+	original := recipe.Recipe{
+		Image:  recipe.Image{Name: "lab", Release: "24.04", Arch: "amd64"},
+		User:   recipe.User{Name: "student"},
+		Python: &recipe.Python{Include: []string{"requests"}, IndexURL: index},
+	}
+	roundTripped := ToRecipe(FromRecipe(original))
+	if got := roundTripped.PythonIndexURL(); got != index {
+		t.Errorf("index_url after an edit = %q, want %q", got, index)
+	}
+	// Removing every package removes the table, index and all: there is
+	// nothing left for an index to resolve.
+	values := FromRecipe(original)
+	values[KeyPythonPackages] = ""
+	if table := ToRecipe(values).Python; table != nil {
+		t.Errorf("python table = %+v, want none once no package is asked for", table)
+	}
+}

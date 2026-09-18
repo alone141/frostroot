@@ -249,3 +249,50 @@ func TestNormalizePythonName(t *testing.T) {
 		}
 	}
 }
+
+// TestPythonIndexURL: an internal index replaces PyPI. It must be https,
+// because PyPI has no package signing, so TLS is the only thing between the
+// resolve and whatever answers, and the hashes that first resolve writes
+// into the lock are pinned from then on. It must carry no credentials: a
+// recipe is committed and reviewed.
+func TestPythonIndexURL(t *testing.T) {
+	for _, good := range []string{
+		"https://nexus.example.com/repository/pypi/simple",
+		"https://devpi.example.com/root/pypi/+simple/",
+	} {
+		if err := CheckPythonIndexURL(good); err != nil {
+			t.Errorf("CheckPythonIndexURL(%q) = %v", good, err)
+		}
+	}
+	for _, bad := range []string{
+		"http://nexus.example.com/simple",        // no TLS, and no signing behind it
+		"https://user:pass@nexus.example/simple", // credentials in a committed file
+		"ftp://nexus.example/simple",
+		"https:///simple",
+		"https://nexus.example/a b",
+		"https://nexus.example/simple#x",
+		"",
+	} {
+		if err := CheckPythonIndexURL(bad); err == nil {
+			t.Errorf("CheckPythonIndexURL(%q) = nil, want a refusal", bad)
+		}
+	}
+	// Validate refuses a recipe that names a bad one.
+	imageRecipe := loadValidRecipe(t)
+	imageRecipe.Python = &Python{Include: []string{"requests"}, IndexURL: "http://nexus.example/simple"}
+	if problems := Validate(imageRecipe); len(problems) == 0 {
+		t.Error("Validate accepted an http index_url")
+	}
+	// And accepts a good one.
+	imageRecipe.Python.IndexURL = "https://nexus.example.com/repository/pypi/simple"
+	if problems := Validate(imageRecipe); len(problems) > 0 {
+		t.Errorf("Validate = %v", problems)
+	}
+	if got := imageRecipe.PythonIndexURL(); got != "https://nexus.example.com/repository/pypi/simple" {
+		t.Errorf("PythonIndexURL = %q", got)
+	}
+	// A recipe with no [python] table reads as PyPI, not as a missing field.
+	if got := (Recipe{}).PythonIndexURL(); got != "" {
+		t.Errorf("PythonIndexURL with no table = %q, want empty", got)
+	}
+}

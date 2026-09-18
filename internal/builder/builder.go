@@ -397,6 +397,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 				Venv:        PythonVenvPath,
 				Interpreter: pythonResult.Interpreter,
 				PipVersion:  pythonResult.PipVersion,
+				IndexURL:    imageRecipe.PythonIndexURL(),
 			}
 			lock.PyPI = pythonResult.Wheels
 			result.PythonPackageCount = len(pythonResult.Wheels)

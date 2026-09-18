@@ -100,6 +100,10 @@ const (
 	// free-text field cannot hold, because a space or a comma in them would
 	// split them, carried through an edit untouched.
 	keyOriginalCertificates = "original_certificates"
+	// keyPythonIndexURL is not a field either: [python] index_url is written
+	// by hand, and the form must give it back unchanged rather than drop it
+	// the first time someone runs frostroot edit.
+	keyPythonIndexURL = "python_index_url"
 )
 
 // The pages fields are grouped on, in order.

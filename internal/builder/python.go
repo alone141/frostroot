@@ -116,8 +116,9 @@ export HOME
 
 # pip also reads that environment: one PIP_INDEX_URL on the build host would
 # quietly resolve the recipe against another index and write its URLs into
-# the lock. What a recipe resolves to must depend on the recipe and on PyPI,
-# so every PIP_ variable is dropped and no configuration file is read.
+# the lock. What a recipe resolves to must depend on the recipe alone, so
+# every PIP_ variable is dropped and no configuration file is read; an index
+# other than PyPI is named by the recipe, below, and by nothing else.
 for pipVariable in $(env | sed -n 's/^\(PIP_[A-Za-z0-9_]*\)=.*/\1/p'); do
 	unset "$pipVariable"
 done
@@ -155,6 +156,11 @@ printf 'pip==%s --hash=sha256:%s\n' {{shellQuote .PipVersion}} {{shellQuote .Pip
 "$venv"/bin/python -m pip install --no-input --disable-pip-version-check --no-cache-dir --upgrade \
 	--no-index --find-links {{shellQuote .WheelsPath}} \
 	--require-hashes --requirement {{shellQuote .PinPath}}
+{{- else if .IndexURL -}}
+printf 'pip==%s --hash=sha256:%s\n' {{shellQuote .PipVersion}} {{shellQuote .PipSHA256}} > {{shellQuote .PinPath}}
+"$venv"/bin/python -m pip install --no-input --disable-pip-version-check --no-cache-dir --upgrade \
+	--index-url {{shellQuote .IndexURL}} \
+	{{if .CertPath}}--cert "$pipCert" {{end}}--require-hashes --requirement {{shellQuote .PinPath}}
 {{- else -}}
 printf 'pip @ %s --hash=sha256:%s\n' {{shellQuote .PipURL}} {{shellQuote .PipSHA256}} > {{shellQuote .PinPath}}
 "$venv"/bin/python -m pip install --no-input --disable-pip-version-check --no-cache-dir --upgrade \
@@ -188,7 +194,7 @@ rm -rf {{shellQuote .WheelsPath}} {{shellQuote .RequirementsPath}}
 # record what the recipe asked for.
 "$venv"/bin/python -m pip install --no-input --disable-pip-version-check --no-cache-dir \
 	--only-binary=:all: --upgrade --report {{shellQuote .ReportPath}} \
-	{{if .CertPath}}--cert "$pipCert" {{end}}{{range .Packages}}{{shellQuote .}} {{end}}
+	{{if .IndexURL}}--index-url {{shellQuote .IndexURL}} {{end}}{{if .CertPath}}--cert "$pipCert" {{end}}{{range .Packages}}{{shellQuote .}} {{end}}
 {{- if .ExtraTrustPath}}
 # Nothing this build was merely allowed to trust stays in the image.
 rm -f {{shellQuote .CertPath}} {{shellQuote .ExtraTrustPath}}
@@ -220,6 +226,7 @@ type pythonScriptValues struct {
 	PipURL           string
 	PipSHA256        string
 	PipVersion       string
+	IndexURL         string
 	Packages         []string
 	Offline          bool
 	SourceDateEpoch  int64
@@ -290,6 +297,7 @@ func RenderPythonScript(imageRecipe recipe.Recipe, options PythonOptions) (strin
 		PipURL:           pin.URL,
 		PipSHA256:        pin.SHA256,
 		PipVersion:       pin.Version,
+		IndexURL:         imageRecipe.PythonIndexURL(),
 		Packages:         packages,
 		Offline:          options.Offline,
 		SourceDateEpoch:  options.SourceDateEpoch,

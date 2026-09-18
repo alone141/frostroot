@@ -105,6 +105,9 @@ func Validate(imageRecipe Recipe) []string {
 		}
 		seenPythonNames[normalized] = true
 	}
+	if indexURL := imageRecipe.PythonIndexURL(); indexURL != "" {
+		addProblem(CheckPythonIndexURL(indexURL))
+	}
 	seenCertificateNames := map[string]bool{}
 	for _, certificatePath := range imageRecipe.CertificatePaths() {
 		if err := CheckCertificatePath(certificatePath); err != nil {
@@ -186,6 +189,23 @@ func CheckSourceURL(sourceURL string) error {
 func CheckComponent(component string) error {
 	if !componentPattern.MatchString(component) {
 		return fmt.Errorf("invalid component %q (lowercase letters, digits, dot, plus, dash)", component)
+	}
+	return nil
+}
+
+// CheckPythonIndexURL reports why indexURL cannot be the [python] index_url,
+// or nil. It must be https with a host: PyPI has no package signing, so TLS
+// is the only thing standing between the resolve and whatever answers, and
+// the hashes that first resolve writes into the lock are then pinned
+// forever. It must carry no credentials either, because a recipe is a file
+// people commit and review.
+func CheckPythonIndexURL(indexURL string) error {
+	parsed, err := url.Parse(indexURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || strings.ContainsAny(indexURL, sourceURLMetacharacters) {
+		return fmt.Errorf("invalid python index_url %q (expected https with no space or #, such as https://nexus.example.com/repository/pypi/simple)", indexURL)
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("invalid python index_url %q (it carries credentials, which must not be committed in a recipe)", indexURL)
 	}
 	return nil
 }

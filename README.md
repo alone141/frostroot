@@ -528,6 +528,35 @@ which.
 An environment of `numpy`, `pandas` and `jupyterlab` adds about 370 MB to the
 image and about 75 MB to `vendor/`.
 
+### Resolving from an internal index
+
+The networks that inspect TLS are very often the same networks that block
+pypi.org and mandate an internal mirror — Artifactory, Nexus, devpi. Name it
+in the recipe:
+
+```toml
+[python]
+include = ["requests"]
+index_url = "https://nexus.example.com/repository/pypi/simple"
+```
+
+`build` resolves through it and installs its pinned pip through it as well,
+since the direct `files.pythonhosted.org` URL that pin normally uses is
+exactly what such a network blocks. The hash still decides which file is
+accepted, so an index offering another build of that pip fails the install
+rather than passing it on. The lock records the index under `[python]`, the
+`[[pypi]]` URLs are whatever pip reported — the mirror's — and `vendor`
+fetches from there. An offline rebuild whose recipe names a different
+`index_url` than the lock is a lock mismatch, like a changed apt source.
+
+It must be `https`, because PyPI has no package signing: TLS is the only
+thing between the resolve and whatever answers, and the hashes that first
+resolve writes are pinned from then on. It must carry no credentials, since
+a recipe is committed and reviewed. It replaces PyPI rather than adding to
+it: `--extra-index-url` invites dependency confusion and is deliberately not
+offered. The field has no question in the form yet; write it by hand, and
+`frostroot edit` gives it back unchanged.
+
 ## Networks that inspect TLS
 
 Many corporate networks terminate TLS at a proxy and re-sign every response
