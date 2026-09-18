@@ -1,19 +1,19 @@
-frostroot build   cpp-lab · Ubuntu 22.04 (jammy, amd64) · http://archive.ubuntu.com/ubuntu
+frostroot build   cpp-lab · Ubuntu 22.04 (jammy, amd64) · h…
 
-  ✓  Update package index                           4s
-  ✗  Download packages                        failed5s
+  ✓  Update package index                                 4s
+  ✗  Download packages              failed                5s
   ·  Extract archives
   ·  Install essential packages
   ·  Install requested packages
-  ·  Provision user, locale and timezone
+  ·  Provision user, locale and ti…
   ·  Create tarball
   ·  Write frostroot.lock
   ·  Place tarball
 
-╭─ mmdebstrap ───────────────────────────────────────────────────────╮
-│ E: Unable to locate package ninja-buld                 │
-│                                                        │
-│                                                        │
-│                                                        │
-╰────────────────────────────────────────────────────────╯
-  9s elapsed · log: /var/tmp/frostroot-1000/build-1/mmdebstrap.log · Ctrl-C interrupts · l grows the log
+╭─ mmdebstrap ─────────────────────────────────────────────╮
+│ E: Unable to locate package ninja-buld                   │
+│                                                          │
+│                                                          │
+│                                                          │
+╰──────────────────────────────────────────────────────────╯
+  9s elapsed · Ctrl-C interrupts · l grows the log

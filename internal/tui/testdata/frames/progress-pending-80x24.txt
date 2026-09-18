@@ -1,4 +1,4 @@
-frostroot build   cpp-lab · Ubuntu 22.04 (jammy, amd64) · http://archive.ubuntu.com/ubuntu
+frostroot build   cpp-lab · Ubuntu 22.04 (jammy, amd64) · http://archive.ubuntu…
 
   ·  Update package index
   ·  Download packages
@@ -10,14 +10,14 @@ frostroot build   cpp-lab · Ubuntu 22.04 (jammy, amd64) · http://archive.ubunt
   ·  Write frostroot.lock
   ·  Place tarball
 
-╭─ mmdebstrap ───────────────────────────────────────────────────────────────────────────╮
-│                                                                            │
-│                                                                            │
-│                                                                            │
-│                                                                            │
-│                                                                            │
-│                                                                            │
-│                                                                            │
-│                                                                            │
-╰────────────────────────────────────────────────────────────────────────────╯
+╭─ mmdebstrap ─────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
   0s elapsed · Ctrl-C interrupts · l grows the log
