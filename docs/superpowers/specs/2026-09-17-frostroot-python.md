@@ -82,6 +82,19 @@ The review also found that nothing in the suite CI runs covered the new pool
 code — the wheel manifest, the unknown-size path, staging — so reverting it
 kept CI green. `internal/pool/wheel_test.go` covers it now.
 
+A second pass over the fixes themselves found two more, both in the code the
+first round added:
+
+- **The lock's pip version reached the script as shell.** The version check
+  interpolated it into a `case` pattern and an `echo`, so a lock with a
+  crafted `version` ran commands as root inside the chroot. It is assigned
+  once and single-quoted now, and compared with `[`.
+- **A lock naming no pip could not be rebuilt either.** The new "no pin step"
+  path left the environment with the pip `ensurepip` seeds, which the
+  comparison then reported as a package the lock does not name. pip belongs
+  in the seed list with setuptools, and a lock that does name it is still
+  compared.
+
 The fixes were verified the same way as the feature, on a recipe that asks
 for `requests` and `setuptools` — the package that could not be rebuilt —
 with `PIP_INDEX_URL=https://nexus.invalid/simple` exported over the build to
@@ -211,9 +224,13 @@ not the pinned one, rather than producing a lock that cannot be vendored.
 
 Offline the pin comes from the lock, not from this frostroot: the pool holds
 the pip the online build recorded, which is the pin in every ordinary case
-but is whatever the lock says. A lock that names no pip has no pin step at
-all, and the environment's own pip installs the wheels — it needs no report
-offline, and the caches are recompiled either way.
+but is whatever the lock says. It is therefore a value out of a file anyone
+can edit, so the script assigns it once, single-quoted, and only expands it
+in double quotes, as the provision script does with the recipe's. A lock that
+names no pip has no pin step at all, and the environment's own pip installs
+the wheels — it needs no report offline, the caches are recompiled either
+way, and the seeded pip is a package no lock named, which the comparison
+excuses like any other seed.
 
 ## Building
 

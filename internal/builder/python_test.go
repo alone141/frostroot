@@ -379,7 +379,7 @@ func TestRenderPythonScriptOfflineInstallsTheLocksPip(t *testing.T) {
 	if strings.Contains(script, PinnedPip.Version) {
 		t.Errorf("script mentions this frostroot's pin instead of the lock's pip:\n%s", script)
 	}
-	if !strings.Contains(script, "pip\\ 25.0\\ *)") {
+	if !strings.Contains(script, "wantPip='25.0'") {
 		t.Errorf("script checks for the wrong pip:\n%s", script)
 	}
 
@@ -393,6 +393,65 @@ func TestRenderPythonScriptOfflineInstallsTheLocksPip(t *testing.T) {
 	}
 	if !strings.Contains(withoutPip, "--require-hashes --requirement '"+PythonRequirementsPath+"'") {
 		t.Errorf("the packages are still installed from the lock:\n%s", withoutPip)
+	}
+}
+
+func TestRenderPythonScriptQuotesAPipVersionFromTheLock(t *testing.T) {
+	// The lock is written by frostroot, but it is also a text file anyone can
+	// edit, and offline the pin's version comes from it.
+	hostile := recipe.LockPyPI{Name: "pip", Version: `24.3.1) touch /pwned;; *`, SHA256: "dd", Filename: "pip.whl"}
+	script := renderPythonScript(t, pythonRecipe(), PythonOptions{Offline: true, Pip: hostile})
+	if strings.Contains(script, "touch /pwned;; *)") {
+		t.Errorf("the lock's version reached the script as shell:\n%s", script)
+	}
+	syntaxCheck := exec.Command("sh", "-n")
+	syntaxCheck.Stdin = strings.NewReader(script)
+	if output, err := syntaxCheck.CombinedOutput(); err != nil {
+		t.Errorf("sh -n: %v: %s", err, output)
+	}
+
+	// Run the version check against a pip that answers with something else:
+	// the hostile version must be compared, not executed.
+	fakeVenv := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(fakeVenv, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	check := strings.ReplaceAll(`venv='VENV'
+wantPip='24.3.1) touch /pwned;; *'
+gotPip=$("$venv"/bin/python -m pip --version | cut -d' ' -f2)
+if [ "$gotPip" != "$wantPip" ]; then
+	echo "refused"
+fi`, "VENV", fakeVenv)
+	fakePython := filepath.Join(fakeVenv, "bin", "python")
+	if err := os.WriteFile(fakePython, []byte("#!/bin/sh\necho 'pip 24.3.1 from /x (python 3.12)'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command("sh", "-c", check).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, output)
+	}
+	if !strings.Contains(string(output), "refused") {
+		t.Errorf("the check did not refuse a pip that is not the lock's: %s", output)
+	}
+	if _, err := os.Stat("/pwned"); err == nil {
+		t.Fatal("the lock's version was executed as shell")
+	}
+}
+
+func TestComparePythonWithLockExcusesTheEnvironmentsOwnPip(t *testing.T) {
+	// A lock that names no pip is rebuilt by the environment's own, seeded by
+	// ensurepip: it is a package nothing asked for, not a difference.
+	lock := recipe.Lockfile{PyPI: []recipe.LockPyPI{{Name: "numpy", Version: "2.5.3"}}}
+	installed := []PythonInstalled{{Name: "numpy", Version: "2.5.3"}, {Name: "pip", Version: "24.0"}}
+	if err := ComparePythonWithLock(lock, installed); err != nil {
+		t.Errorf("ComparePythonWithLock = %v, want no difference for the seeded pip", err)
+	}
+
+	// A lock that does name pip still compares it.
+	locked := recipe.Lockfile{PyPI: []recipe.LockPyPI{{Name: "pip", Version: "24.3.1"}}}
+	err := ComparePythonWithLock(locked, []PythonInstalled{{Name: "pip", Version: "24.0"}})
+	if !errors.Is(err, ErrImageDiffersFromLock) || !strings.Contains(err.Error(), "pip is 24.0 in the environment and 24.3.1 in the lock") {
+		t.Errorf("ComparePythonWithLock = %v, want the locked pip compared", err)
 	}
 }
 

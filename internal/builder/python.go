@@ -139,14 +139,15 @@ printf 'pip @ %s --hash=sha256:%s\n' {{shellQuote .PipURL}} {{shellQuote .PipSHA
 rm -f {{shellQuote .PinPath}}
 
 # That pip must be the one that does the rest. An older one cannot report what
-# it installed, and it compiles the caches its own way.
-case "$("$venv"/bin/python -m pip --version)" in
-pip\ {{.PipVersion}}\ *) ;;
-*)
-	echo "frostroot: pip {{.PipVersion}} did not replace this release's pip" >&2
+# it installed, and it compiles the caches its own way. Offline the version
+# comes from the lock, which is a text file anyone can edit, so it is assigned
+# once, single-quoted, and only expanded in double quotes afterwards.
+wantPip={{shellQuote .PipVersion}}
+gotPip=$("$venv"/bin/python -m pip --version | cut -d' ' -f2)
+if [ "$gotPip" != "$wantPip" ]; then
+	echo "frostroot: pip $wantPip did not replace this release's pip; it is $gotPip" >&2
 	exit 1
-	;;
-esac
+fi
 {{end}}
 {{if .Offline -}}
 "$venv"/bin/python -m pip install --no-input --disable-pip-version-check --no-cache-dir \
@@ -434,12 +435,13 @@ type PythonInstalled struct {
 }
 
 // pythonSeedPackages are what python3 -m venv puts in an environment before
-// frostroot installs anything: 22.04 and 20.04 seed setuptools beside pip,
-// 24.04 seeds pip alone. Finding one the lock does not name is not a
-// difference, because nothing asked for it. A lock that does name one is
-// another matter: pip installed that version, and it is compared like any
-// other package.
-var pythonSeedPackages = []string{"setuptools", "wheel", "pkg-resources"}
+// frostroot installs anything: pip always, and setuptools beside it on 22.04
+// and 20.04. Finding one the lock does not name is not a difference, because
+// nothing asked for it — a lock with no pip of its own is rebuilt by the
+// environment's, which is then exactly such a package. A lock that does name
+// one is another matter: pip installed that version, and it is compared like
+// any other.
+var pythonSeedPackages = []string{"pip", "setuptools", "wheel", "pkg-resources"}
 
 // ParsePipList reads the package list an offline build downloads out of the
 // image, written by "pip list --format=json".

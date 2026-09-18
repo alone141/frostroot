@@ -20,18 +20,19 @@ import (
 
 const vendorUsageText = `usage: frostroot vendor [--mirror URL] [--prune] [--plain]
 
-Download every package frostroot.lock names into vendor/debs/, checked against
-the lock's checksums, so that "frostroot build --offline" can rebuild the exact
-image without the archive. Files already there and correct are kept, so
-rerunning resumes an interrupted download. Packages the archive has since
-dropped are fetched from Launchpad, which keeps every file ever published.
+Download every package frostroot.lock names into vendor/debs/, and every Python
+wheel it names into vendor/wheels/, checked against the lock's checksums, so
+that "frostroot build --offline" can rebuild the exact image without the archive
+or PyPI. Files already there and correct are kept, so rerunning resumes an
+interrupted download. Packages the archive has since dropped are fetched from
+Launchpad, which keeps every file ever published.
 
 `
 
 func (a *App) runVendor(args []string) int {
 	flags := a.newFlagSet("vendor", vendorUsageText)
 	mirrorURL := flags.String("mirror", "", "download from this archive base `URL` instead of the one recorded in the lock")
-	prune := flags.Bool("prune", false, "remove .deb files in vendor/debs that the lock does not name")
+	prune := flags.Bool("prune", false, "remove files in vendor/debs and vendor/wheels that the lock does not name")
 	plain := flags.Bool("plain", false, "print progress as lines instead of showing the full-screen progress screen")
 	if exitCode, stop := a.parseFlags(flags, args); stop {
 		return exitCode
