@@ -82,6 +82,17 @@ The review also found that nothing in the suite CI runs covered the new pool
 code — the wheel manifest, the unknown-size path, staging — so reverting it
 kept CI green. `internal/pool/wheel_test.go` covers it now.
 
+The fixes were verified the same way as the feature, on a recipe that asks
+for `requests` and `setuptools` — the package that could not be rebuilt —
+with `PIP_INDEX_URL=https://nexus.invalid/simple` exported over the build to
+prove the sweep: `build` in 435 s resolved against PyPI all the same, no URL
+in the lock names that index, and the lock records `setuptools 84.0.0`.
+`vendor` fetched 7 wheels and claimed no size for them. Two offline rebuilds
+of that lock, 406 s and 404 s, produced one tarball byte for byte, left the
+lock alone, and gave an image of 23,475 entries whose only home directories
+are `home/` and `home/student`, with setuptools in the environment and
+nothing the step used left behind.
+
 ## Why
 
 A programming lab is the project's own example, and the Python half of it
