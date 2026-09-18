@@ -6,6 +6,7 @@
 package form
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -68,15 +69,16 @@ const (
 	KeyPythonPackages = "python_packages" // free text: PyPI names, separated by spaces or commas
 	KeySources        = "sources"         // catalog source names
 	KeyPPAs           = "ppas"            // free text: owner/name, separated by spaces or commas
+	KeyCertificates   = "certificates"    // free text: PEM files beside the recipe, separated by spaces or commas
 	// keyOriginalInclude is not a field: edit keeps the recipe's package
 	// order here so an unchanged recipe is written back as it was.
 	keyOriginalInclude = "original_include"
 	// keyOriginalSources is not a field either: the recipe's sources as they
 	// were, so hand-written ones survive an edit and the order is kept.
 	keyOriginalSources = "original_sources"
-	// keyOriginalCertificates is not a field either. The form asks nothing
-	// about certificate authorities, so edit's job is to write back exactly
-	// the ones the recipe came with rather than to drop them.
+	// keyOriginalCertificates is not a field either: certificate paths the
+	// free-text field cannot hold, because a space or a comma in them would
+	// split them, carried through an edit untouched.
 	keyOriginalCertificates = "original_certificates"
 )
 
@@ -87,16 +89,22 @@ const (
 	PageSystem   = "System"
 	PagePackages = "Packages"
 	PageSources  = "Sources"
+	PageTrust    = "Trust"
 )
 
 // Pages returns the page titles in order.
-func Pages() []string { return []string{PageImage, PageUser, PageSystem, PagePackages, PageSources} }
+func Pages() []string {
+	return []string{PageImage, PageUser, PageSystem, PagePackages, PageSources, PageTrust}
+}
 
 // Host is what the form reads from the machine it runs on.
 type Host struct {
 	// ReadFile reads a file; os.ReadFile in production. It supplies the
 	// timezone list and the host's own timezone.
 	ReadFile func(name string) ([]byte, error)
+	// RecipeDir is where the recipe lives, so that a field naming files
+	// beside it can check them as they are typed; "" checks paths only.
+	RecipeDir string
 }
 
 // Fields returns every question, in the order they are asked.
@@ -178,6 +186,35 @@ func Fields(host Host) []Field {
 			Placeholder: "none",
 			Validate:    checkPPAList,
 		},
+		{
+			Key: KeyCertificates, Page: PageTrust, Kind: KindInput,
+			Title:       "Certificate authorities",
+			Description: "PEM files next to the recipe, separated by spaces or commas. The image trusts them, and so does the build: what a network that inspects TLS needs",
+			Placeholder: "none",
+			Validate:    checkCertificateList(host),
+		},
+	}
+}
+
+// checkCertificateList validates a free-text list of certificate files:
+// the path rule always, and, when the host says where the recipe is, that
+// each file is there and holds a certificate. A private key pasted in
+// place of one is worth saying before the summary, not by build.
+func checkCertificateList(host Host) func(string) error {
+	return func(text string) error {
+		paths := splitPackageList(text)
+		for _, path := range paths {
+			if err := recipe.CheckCertificatePath(path); err != nil {
+				return err
+			}
+		}
+		if host.RecipeDir == "" {
+			return nil
+		}
+		if problems := recipe.CheckCertificateFiles(host.RecipeDir, paths); len(problems) > 0 {
+			return errors.New(problems[0])
+		}
+		return nil
 	}
 }
 

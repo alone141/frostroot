@@ -18,7 +18,7 @@ import (
 )
 
 // host is what the form may read from this machine.
-func (a *App) host() form.Host { return form.Host{ReadFile: a.ReadFile} }
+func (a *App) host() form.Host { return form.Host{ReadFile: a.ReadFile, RecipeDir: a.RecipeDir} }
 
 // useFullScreen reports whether a command should show the full-screen
 // interface: only when the user asked for nothing else and both standard
