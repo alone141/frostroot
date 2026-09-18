@@ -83,9 +83,9 @@ suite = 'jammy'
 arch = 'amd64'
 mirror = 'http://archive.ubuntu.com/ubuntu'
 sources = [
-  'deb http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse',
-  'deb http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse',
-  'deb http://archive.ubuntu.com/ubuntu jammy-security main restricted universe multiverse'
+  'deb http://archive.ubuntu.com/ubuntu jammy main universe',
+  'deb http://archive.ubuntu.com/ubuntu jammy-updates main universe',
+  'deb http://archive.ubuntu.com/ubuntu jammy-security main universe'
 ]
 frostroot_version = '0.6.0'
 requested = [
@@ -116,7 +116,9 @@ filename = 'pool/main/g/git/git_2.34.1-1ubuntu1.17_amd64.deb'
 That is an excerpt of a real lock: this recipe produced 341 `[[packages]]`
 entries, 123 of them marked `auto` (pulled in by `build-essential`, as
 `binutils` was), and a 222 MB tarball. `source_date_epoch` is the instant
-the image is frozen at, 2026-09-17 16:20:22 UTC here.
+the image is frozen at, 2026-09-17 16:20:22 UTC here. (It was written by
+v0.6.0; since v0.10 the `sources` lines name all four components, `main
+restricted universe multiverse`.)
 
 The recipe is **intent** and you edit it. The lock is **fact** and the build
 writes it. Versions never appear in the recipe.
@@ -168,8 +170,9 @@ frostroot init
 release; the user name and whether it gets passwordless sudo; the timezone
 (type `ist` to filter the list down to `Europe/Istanbul`), locale and whether
 the image boots with systemd; the packages, picked with Space from a catalog
-grouped by category (C/C++, Python, editors, tools...), plus a line for any
-other apt package names; then third-party apt sources, picked from a catalog
+grouped by category (C/C++, Python, editors, tools...), and any other package
+of the release, found by typing into a search over the whole archive (see
+[Finding packages](#finding-packages)); then third-party apt sources, picked from a catalog
 (deadsnakes, git-core, Docker, NodeSource, GitHub CLI, Kitware, LLVM, VS
 Code), plus a line for other PPAs as `owner/name`; and last the certificate
 files the image should trust, for a network that inspects TLS, each checked
@@ -247,9 +250,9 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 
 | Command | What it does |
 |---|---|
-| `frostroot init [--force] [--plain]` | Opens the form and writes a commented `frostroot.toml`, then fetches the signing keys of the sources you picked into `keys/`. Refuses to overwrite a recipe without `--force`. Writes nothing unless the answers validate and you confirm. |
-| `frostroot edit [--plain]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back; fetches any missing source keys. The file is regenerated from the template, so your own comments in it do not survive. |
-| `frostroot capture [--root DIR] [--force] [--plain]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, starting with a page of what it found and what a recipe cannot carry, writes `frostroot.toml` and the signing keys of the third-party sources it could carry, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys; needs no root. |
+| `frostroot init [--force] [--plain] [--mirror URL] [--ca-bundle FILE] [--refresh-index]` | Opens the form and writes a commented `frostroot.toml`, then fetches the signing keys of the sources you picked into `keys/`. Refuses to overwrite a recipe without `--force`. Writes nothing unless the answers validate and you confirm. |
+| `frostroot edit [--plain] [--mirror URL] [--ca-bundle FILE] [--refresh-index]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back; fetches any missing source keys. The file is regenerated from the template, so your own comments in it do not survive. |
+| `frostroot capture [--root DIR] [--force] [--plain] [--mirror URL] [--ca-bundle FILE] [--refresh-index]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, starting with a page of what it found and what a recipe cannot carry, writes `frostroot.toml` and the signing keys of the third-party sources it could carry, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys; needs no root. |
 | `frostroot validate` | Checks `frostroot.toml`, including that every source's key file is there and is a key, and prints every problem. No network, no root. |
 | `frostroot build [--mirror URL] [--ca-bundle FILE] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-ubuntu-<release>-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. |
 | `frostroot vendor [--mirror URL] [--ca-bundle FILE] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, and every wheel it names into `vendor/wheels/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name. |
@@ -263,7 +266,10 @@ mirror; for `vendor` it replaces the mirror recorded in the lock.
 `--keep-work` keeps the work directory after a successful build (it is always
 kept after a failure). `--ca-bundle` names a PEM file of certificate
 authorities to trust while fetching, for a network that inspects TLS; see
-[Networks that inspect TLS](#networks-that-inspect-tls).
+[Networks that inspect TLS](#networks-that-inspect-tls). For `init`, `edit` and
+`capture`, `--mirror` and `--ca-bundle` say where the form's package index
+comes from and whom to trust for it, and `--refresh-index` fetches it again
+before its week is up.
 
 | Exit code | Meaning |
 |---|---|
@@ -296,6 +302,59 @@ strictly because they reach shell scripts. Whether the timezone and locale
 actually exist can only be checked inside the image, so `build` fails if they
 do not. Files saved by Windows editors are fine: CRLF line endings and a UTF-8
 byte order mark are both accepted.
+
+## Finding packages
+
+The catalog on the Packages page is thirty-odd names. "Other packages", under
+it, is the rest of the release: type, and the list shows the packages whose
+name or one-line description holds what you typed — the exact name first,
+then names that start with it, then the others, shorter names before longer.
+Space adds the highlighted row or takes it out again, `/` narrows to an
+archive section (`devel`, `python`, `libs`...), Esc clears the search, and an
+empty search lists what you have chosen. A comma after a name, or a pasted
+list, adds names the way the old free-text line took them.
+
+```
+┃ Other packages
+┃ type to search the release's archive, or a name; Space adds the row
+┃ > cmake
+┃ 26 found · all sections · noble · 85,574 packages · fetched just now
+┃ > [ ] cmake         3.28.3-1build7    cross-platform, open-source make system
+┃   [ ] cmake-doc     3.28.3-1build7    extended documentation in various formats…
+┃   [ ] cmake-data    3.28.3-1build7    CMake data files (modules, templates and…
+┃   [ ] cmake-extras  1.7-2             Extra CMake utility modules
+┃ chosen (1): ninja-build
+```
+
+**A name the archive does not have is a warning, never a refusal.** What you
+typed is offered as the first row whenever it is not an exact match, so Space
+after a whole name adds that name and never a neighbor; `docker-ce`, `code`
+and `gh` come from third-party sources, which the index knows nothing about.
+The last page lists such names with the nearest ones the archive does have
+(`ninja-buld  nearest: ninja-build`) and says whether the recipe has a source
+that could provide them. The question below it still defaults to Write.
+
+**Where the index comes from.** The archive's own `Packages` files, for the
+release pocket and `-updates`, in the four components a build enables: about
+21 MB for 24.04, fetched the first time the field is reached, with a progress
+line, in three to seven seconds here. It is reduced to names, versions,
+sections and one-line descriptions and kept as one 1.7 MB file a release under
+`$XDG_CACHE_HOME/frostroot/index/` (or `~/.cache/frostroot/index/`) for a
+week; `--refresh-index` fetches it sooner. The recipe directory is never
+written to. `--mirror` fetches from another archive, `--ca-bundle` trusts an
+authority for an HTTPS one, and `http_proxy` is honored as everywhere else.
+
+**Offline is not an error.** With no cached index and no archive in reach the
+field says so and is a list editor: type a name, Space adds it, `build` checks
+it. `--plain` never fetches; it asks for the names on one line as before, and
+warns about the ones a cached index lacks when there is a cached index.
+
+**The index only suggests.** Each file is checked against the size and
+SHA-256 in the pocket's `InRelease`, which catches a cut or half-published
+download, but `InRelease` is read without verifying its signature. A hostile
+mirror could make the search lie about what exists. It could not make a build
+install anything: `build` never reads this index, and apt verifies every
+package against Ubuntu's signed archive exactly as before.
 
 ## Third-party sources
 
@@ -575,6 +634,12 @@ tarball or in an archive; add it to `.gitignore` unless you use git LFS.
 - Packages from the release, `-updates` and `-security` pockets: patched
   versions, not release-day ones. The same three lines are in
   `/etc/apt/sources.list`.
+- All four components, `main restricted universe multiverse`, as a stock
+  Ubuntu install and the official WSL image enable them, so that
+  `nvidia-cuda-toolkit` or `unrar` is a line in the recipe like any other.
+  Up to v0.9 it was `main universe`. A lock made then still rebuilds offline
+  to the same bytes: the lock records the image's `deb` lines, and an offline
+  build writes those.
 - Your user with a home directory and bash; passwordless sudo through
   `/etc/sudoers.d/90-frostroot`.
 - `/etc/wsl.conf` with systemd on, your user as the default, and
@@ -823,7 +888,8 @@ the frames stand in for it until it is run.
 | [Python plan](docs/superpowers/plans/2026-09-17-frostroot-python.md) | The nine tasks v0.7 was built from. |
 | [Certificates spec](docs/superpowers/specs/2026-09-18-frostroot-certificates.md) | v0.8: `[certificates]`, `--ca-bundle`, what a TLS inspection proxy breaks and where the trust is applied; with the spike and the verification. |
 | [Certificates plan](docs/superpowers/plans/2026-09-18-frostroot-certificates.md) | The ten tasks v0.8 was built from. |
-| [TUI plan, second round](docs/superpowers/plans/2026-09-18-frostroot-tui-2.md) | What a walk through the interface found, the six tasks v0.9 was built from, and the package picker planned after it. |
+| [Picker spec](docs/superpowers/specs/2026-09-18-frostroot-picker.md) | v0.10: the package picker and the index behind it, all four components in builds; with the spike, the decisions and the verification. |
+| [TUI plan, second round](docs/superpowers/plans/2026-09-18-frostroot-tui-2.md) | What a walk through the interface found, the six tasks v0.9 was built from, and the tasks of v0.10's package picker. |
 | [Implementation plan](docs/superpowers/plans/2026-09-15-frostroot-v1.md) | The 13 tasks v1 was built from, with the spike's amendments. |
 | [TUI plan](docs/superpowers/plans/2026-09-17-frostroot-tui.md) | The seven tasks v0.2 was built from. |
 | [Plan review](docs/superpowers/reviews/2026-09-14-frostroot-plan-review.md) | Found four defects that would have shipped a non-booting image |
@@ -836,12 +902,13 @@ the frames stand in for it until it is run.
 cmd/frostroot/      main
 internal/cli/       init, edit, capture, validate, build, vendor, version; flags, exit codes, the plain line interface
 internal/capture/   reading an installed system: packages asked for, user, locale, and the report of the gaps
-internal/form/      the questions as data: fields, package catalog, timezones, locales, recipe mapping
+internal/form/      the questions as data: fields, package catalog, timezones, locales, recipe mapping, what a package search needs of an index
+internal/index/     the packages of a release: the archive's Packages files fetched, checked, reduced, cached and searched
 internal/sources/   the catalog of third-party repositories, PPAs, and fetching and checking their keys
 internal/pgp/       OpenPGP public keys: armor, the primary key's fingerprint; nothing else
-internal/tui/       the full-screen form and progress screen (the only package using the Charm libraries)
+internal/tui/       the full-screen form with its package picker, and the progress screen (the only package using the Charm libraries)
 internal/recipe/    frostroot.toml and frostroot.lock: types, strict parsing, validation
-internal/distro/    Ubuntu releases, archive URL, the three pocket lines
+internal/distro/    Ubuntu releases, archive URL, components, the three pocket lines
 internal/builder/   orchestration, mmdebstrap runner and progress parser, provisioning, the Python step, dpkg status, lock checksums, offline builds
 internal/pool/      the vendored pools: manifests from the lock, verify, fetch, prune, stage as a flat repository or a directory of wheels
 internal/deb/       Debian formats: control stanzas, Packages indexes, .deb control files, flat repository index

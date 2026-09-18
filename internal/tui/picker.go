@@ -584,7 +584,9 @@ func (p *pickerField) status() string {
 	}
 	if progress, loading := p.loading(); loading {
 		if progress[1] <= 0 {
-			return "fetching the package index" + p.glyphs.ellipsis
+			// Nothing downloaded yet: a cached index opens in a blink, and
+			// "fetching" would be a claim about the network.
+			return "opening the package index" + p.glyphs.ellipsis
 		}
 		filled := int(float64(pickerBarWidth) * float64(progress[0]) / float64(progress[1]))
 		filled = min(max(filled, 0), pickerBarWidth)

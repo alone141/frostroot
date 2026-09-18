@@ -145,8 +145,9 @@ packages of a release; a fetch is 3.4 to 6.7 s, a reopen from the cache under 90
 renderings:
 
 - **Plain** (`--plain`, a pipe, `TERM=dumb`): the free-text question it is
-  today. It never fetches. With a cache present, names the index lacks get a
-  note after the answer; without one, nothing is said.
+  today. It never fetches. With a cache present, names the index lacks are
+  warned about in its summary, as on the last page; without one, nothing is
+  said.
 - **Full screen**: the component below. See "Decision B" for why this
   replaces the free-text field rather than sitting beside it.
 
@@ -159,7 +160,7 @@ type PackageIndex interface {
     Search(query, section string, limit int) ([]Match, int)
     Has(name string) bool
     Nearest(name string, limit int) []string
-    Sections() []SectionCount
+    SectionsMatching(query string) []SectionCount
     Describe() string
 }
 
@@ -175,47 +176,69 @@ user goes back and changes it.
 ### The component — `internal/tui/picker.go`
 
 A `huh.Field`, so it lives in the Packages group between the catalog and
-"Python packages", moves on with the form's own Tab and Enter, takes the
-form's theme and glyph set, and zooms to the form's height while focused.
-A sketch, not a frame; the rows are illustrative:
+"Python packages", moves on with the form's own Tab and Enter, and takes the
+form's theme and glyph set. It keeps its place on the page rather than
+zooming: the catalog above it is what its marks refer to. This is a frame
+of the real binary against the real archive (the verification below), cut
+to the field:
 
 ```
- Other packages
- > ninja▏                                   all sections · noble · 85,855 packages
- [x] ninja-build      1.11.1-2          small build system closest in spirit to Make
- [ ] ninja-build-doc  1.11.1-2          documentation for ninja-build
- [ ] python3-ninja    1.11.1.1-1        Python bindings for ninja
- [ ] gn               0.0~git2023…      meta-build system that generates build files for Ninja
-   + add "ninja" as typed (not in noble's archive)
- chosen: ninja-build valgrind-dbg
- type to search · ↑/↓ move · space add/remove · / section · enter continue
+┃ Other packages
+┃ type to search the release's archive, or a name; Space adds the row
+┃ > cmake
+┃ 26 found · all sections · noble · 85,574 packages · fetched just now
+┃   [ ] cmake         3.28.3-1build7    cross-platform, open-source make system
+┃ > [•] cmake-doc     3.28.3-1build7    extended documentation in various formats for CMake
+┃   [ ] cmake-data    3.28.3-1build7    CMake data files (modules, templates and documentation)
+┃   [ ] cmake-extras  1.7-2             Extra CMake utility modules
+┃ chosen (2): ninja-buld cmake-doc
+┃
 ```
 
-- **Typing searches.** Every printable character but Space and `/` goes to
-  the query. Package names hold neither.
+- **Typing searches.** Every printable character but Space, `/` and the
+  comma goes to the query. Package names hold none of them.
 - **Space adds or removes the highlighted row**, as it does in the catalog
-  above it. Chosen names that are catalog entries are shown as chosen and
-  are toggled in the catalog's answer, not duplicated.
-- **An empty query lists what is chosen**, so picks can be reviewed and
-  dropped; with none, a line says what to do. Nothing in the archive is
-  highlighted until something is typed, so a stray Space adds nothing.
-- **A name the index lacks can still be added**: the last row offers the
-  query as typed, when it is a valid package name. Chosen names the index
-  does not have are marked `?` in the chosen line.
+  above it. A name typed in full and added clears the query, so `git`,
+  Space, `curl`, Space works as typing a list always did; a row picked out
+  of a search leaves the query, because its neighbors may be wanted too.
+- **What was typed is the first row whenever it is not an exact match.**
+  The draft of this spec had it last. But then Space after `code`, which
+  Ubuntu's archive lacks, would add whatever the search ranked first. With
+  it first, Space after a whole name adds that name and never a neighbor;
+  someone searching is looking at the list and presses Down.
+- **An empty query lists what is chosen**, so picks can be looked over and
+  dropped; a chosen name the index lacks is marked `? not in the archive`.
+- **Names chosen in the catalog are marked and left alone.** huh's list
+  keeps its own state and writes it back on every toggle, so the picker can
+  read the catalog's answer but not change it; Space on such a row says
+  where the name is chosen. `MergePackages` has always removed duplicates.
+- **Enter is held back once** when a name was typed and never added: the
+  free-text field kept what Enter left behind, and here it would be dropped
+  without a word. The second Enter means it.
 - **`/` opens the section list** in place of the results: "all sections"
   first, then the sections that have matches for the query, with counts.
-  Enter picks, Esc leaves it as it was.
-- **A paste of several names** (spaces, commas, newlines) adds each, the way
-  the free-text field took them.
-- **Loading.** On first focus: "fetching noble's package index · 12.3 /
-  19.4 MB" with the build screen's bar. Tab and Enter work throughout; the
-  fetch is cancelled when the form ends.
+  Enter picks and does not leave the field; Esc closes. Esc outside it
+  clears the query, then the section.
+- **A comma after a name, or a paste of several names**, adds each, the way
+  the free-text field took them; what is not a package name is left out
+  and named.
+- **Loading.** "opening the package index…" until a byte has been
+  downloaded — a cached index opens in under 90 ms, and "fetching" would be
+  a claim about the network — then "fetching the package index", a bar, and
+  "12.3 MB / 21.4 MB". Typing and adding work throughout; the fetch is
+  cancelled when the form ends. huh hands messages to the page on screen,
+  and the fetch may end on another one, so the result lives in state the
+  field shares with the command and the message only asks for a redraw; the
+  redraw tick carries a number, because huh hands its focused field every
+  message twice.
 - **No index** (no cache and no network, or `OpenIndex` nil): the field says
-  "archive index not available; names are added as typed and checked by
+  "archive index not available: names are added as typed and checked by
   build", and is a list editor: type a name, Space adds it. Offline is not
   an error.
-- ASCII glyphs and the 60-column layout follow v0.9's rules: the version
-  column goes first, then the description is cut.
+- ASCII glyphs and the 60-column layout follow v0.9's rules: below 72
+  columns the version column goes, then the description is cut. The field
+  is always the same height, so the page does not jump as matches come and
+  go.
 
 ### The warning
 
@@ -224,13 +247,16 @@ summary page, above the preview, in both interfaces:
 
 ```
 Not in Ubuntu's noble archive:
-  ninja-buld   nearest: ninja-build
+  ninja-buld  nearest: ninja-build
   docker-ce
-A third-party source on the Sources page may provide them; otherwise build
-will stop at "Unable to locate package".
+The recipe has no other source that could provide them, so build will
+stop at "Unable to locate package" unless one is added.
 ```
 
-With no sources and no PPAs chosen the second sentence is the first. The
+With a catalog source, a PPA or a hand-written `[[sources]]` in the answers
+it says instead that one of them may provide the names. On a 24-row
+terminal the preview pane gives way to the warning, since what scrolls off
+a full screen is its top. The
 write question is unchanged and still defaults to Write: a warning, never a
 refusal. No index, no warning. "Python packages" are PyPI names, which no
 apt index knows; they stay pattern-checked and the summary says nothing
