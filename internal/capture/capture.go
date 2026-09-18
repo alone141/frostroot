@@ -226,7 +226,15 @@ func (s *Snapshot) readUser(root systemRoot, accounts []account) (homeDir string
 	primaryGID := -1
 	if chosen != nil {
 		primaryGID = chosen.gid
-		homeDir = filepath.Join(string(root), filepath.FromSlash(chosen.home))
+		// The home directory comes out of the captured passwd file, so with
+		// --root DIR it is a path that tree chose. Only entry names are ever
+		// read from it, but they should be that tree's names and not this
+		// machine's.
+		if resolved, inside := root.pathInRoot(chosen.home); inside {
+			homeDir = resolved
+		} else {
+			s.note("home directory %q is outside %s, so it was not read", chosen.home, root)
+		}
 	}
 	groups = root.groupsOf(s.UserName, primaryGID)
 	hasSudo, evidence := root.sudoEvidence(s.UserName, groups)

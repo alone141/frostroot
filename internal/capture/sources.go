@@ -58,8 +58,15 @@ func (root systemRoot) aptSources() []aptSource {
 func parseOneLineSources(file, content string) []aptSource {
 	var entries []aptSource
 	for _, line := range strings.Split(content, "\n") {
+		// Apt takes "#" as a comment to the end of the line wherever it
+		// sits, not only at the start, so a hand-added "# vendor" after the
+		// components is not two more components. Cutting there also matches
+		// what apt does with a "#" inside the URL: the rest of the line
+		// goes with it, and what is left names no suite, so nothing is
+		// carried. Verified against apt 2.8.3 with apt-get indextargets.
+		line, _, _ = strings.Cut(line, "#")
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+		if line == "" {
 			continue
 		}
 		fields := strings.Fields(line)
@@ -284,7 +291,11 @@ func (root systemRoot) sourceKey(signedBy string) (armored []byte, origin string
 		}
 		return pgp.Armor(key.Binary), "inline in the source file", nil
 	}
-	data, err := os.ReadFile(root.path(strings.TrimPrefix(signedBy, "/")))
+	keyPath, inside := root.pathInRoot(strings.TrimPrefix(signedBy, "/"))
+	if !inside {
+		return nil, "", fmt.Errorf("the signed-by key %s is outside %s, so it belongs to this machine rather than the one being captured", signedBy, root)
+	}
+	data, err := os.ReadFile(keyPath)
 	if err != nil {
 		return nil, "", fmt.Errorf("the signed-by key %s could not be read: %w", signedBy, err)
 	}

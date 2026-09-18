@@ -540,3 +540,69 @@ func TestAptIndexOf(t *testing.T) {
 		t.Error("a name without a dists segment must not be attributed")
 	}
 }
+
+// TestCaptureKeepsSignedByInsideTheRoot: with --root DIR the tree was
+// written by another machine, so a Signed-By that climbs out of it, or a
+// symlink that leaves it without climbing, must not read this machine's
+// files into the recipe.
+func TestCaptureKeepsSignedByInsideTheRoot(t *testing.T) {
+	outside := t.TempDir()
+	hostKey := filepath.Join(outside, "host.asc")
+	if err := os.WriteFile(hostKey, pgp.Armor(fakeKeyPacket), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := buildRoot(t, map[string]string{
+		"etc/apt/sources.list.d/climb.list": "deb [signed-by=/etc/apt/keyrings/../../../../" +
+			strings.TrimPrefix(hostKey, "/") + "] https://climb.example/ubuntu noble main\n",
+		"etc/apt/sources.list.d/link.list": "deb [signed-by=/etc/apt/keyrings/link.asc] https://link.example/ubuntu noble main\n",
+		"etc/apt/keyrings/link.asc":        "-> " + hostKey,
+	})
+	carried, left := systemRoot(root).sourcesForRecipe("noble")
+	if len(carried) != 0 {
+		t.Fatalf("a key outside the root was carried: %+v", carried)
+	}
+	if len(left) != 2 {
+		t.Fatalf("left = %+v", left)
+	}
+	for _, source := range left {
+		if !strings.Contains(source.reason, "outside") {
+			t.Errorf("reason = %q, want it to say the key is outside the root", source.reason)
+		}
+	}
+}
+
+// A Signed-By with a harmless ".." that stays inside the root still works:
+// the rule is about leaving, not about the characters.
+func TestCaptureAllowsDotDotThatStaysInsideTheRoot(t *testing.T) {
+	root := buildRoot(t, map[string]string{
+		"etc/apt/sources.list.d/x.list": "deb [signed-by=/etc/apt/keyrings/../keyrings/x.asc] https://x.example/ubuntu noble main\n",
+		"etc/apt/keyrings/x.asc":        string(pgp.Armor(fakeKeyPacket)),
+	})
+	carried, left := systemRoot(root).sourcesForRecipe("noble")
+	if len(carried) != 1 || len(left) != 0 {
+		t.Fatalf("carried %+v, left %+v", carried, left)
+	}
+}
+
+// TestParseOneLineSourcesStripsComments: apt takes "#" as a comment to the
+// end of the line wherever it sits, so a hand-added note after the
+// components is not two more components. It used to make CheckSource refuse
+// the source, which reported a working repository as one it could not carry.
+func TestParseOneLineSourcesStripsComments(t *testing.T) {
+	entries := parseOneLineSources("/etc/apt/sources.list", strings.Join([]string{
+		"deb [signed-by=/k.gpg] https://example.com noble main # vendor said so",
+		"# a whole-line comment",
+		"   ",
+		"deb [signed-by=/k.gpg] https://two.example noble main universe",
+		"deb [signed-by=/k.gpg] https://hash.example/a#b noble main", // apt drops this line
+	}, "\n"))
+	if len(entries) != 2 {
+		t.Fatalf("entries = %+v, want the two apt would use", entries)
+	}
+	if !slices.Equal(entries[0].components, []string{"main"}) {
+		t.Errorf("components = %v, want [main]", entries[0].components)
+	}
+	if !slices.Equal(entries[1].components, []string{"main", "universe"}) {
+		t.Errorf("components = %v, want [main universe]", entries[1].components)
+	}
+}
