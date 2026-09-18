@@ -22,6 +22,7 @@ const (
 	PhaseInstallEssential
 	PhaseInstallRequested
 	PhaseProvision
+	PhaseInstallPython
 	PhaseCreateTarball
 	PhaseWriteLock
 	PhasePlaceTarball
@@ -42,6 +43,7 @@ var phaseTitles = [phaseCount]string{
 	PhaseInstallEssential:  "Install essential packages",
 	PhaseInstallRequested:  "Install requested packages",
 	PhaseProvision:         "Provision user, locale and timezone",
+	PhaseInstallPython:     "Install Python packages",
 	PhaseCreateTarball:     "Create tarball",
 	PhaseWriteLock:         "Write frostroot.lock",
 	PhasePlaceTarball:      "Place tarball",
@@ -65,14 +67,25 @@ func (p Phase) Title() string {
 // String returns the phase's title.
 func (p Phase) String() string { return p.Title() }
 
-// Phases returns the phases of an online build, in order.
-func Phases() []Phase {
-	return []Phase{PhaseUpdateIndex, PhaseDownload, PhaseExtract, PhaseInstallEssential, PhaseInstallRequested, PhaseProvision, PhaseCreateTarball, PhaseWriteLock, PhasePlaceTarball}
+// Phases returns the phases of an online build, in order. python adds the
+// step that fills the image's virtual environment, which a recipe without
+// Python packages never runs.
+func Phases(python bool) []Phase {
+	phases := []Phase{PhaseUpdateIndex, PhaseDownload, PhaseExtract, PhaseInstallEssential, PhaseInstallRequested, PhaseProvision}
+	if python {
+		phases = append(phases, PhaseInstallPython)
+	}
+	return append(phases, PhaseCreateTarball, PhaseWriteLock, PhasePlaceTarball)
 }
 
-// OfflinePhases returns the phases of a build from vendor/debs, in order.
-func OfflinePhases() []Phase {
-	return []Phase{PhaseVerifyVendored, PhasePrepareRepository, PhaseUpdateIndex, PhaseDownload, PhaseExtract, PhaseInstallEssential, PhaseInstallRequested, PhaseProvision, PhaseCreateTarball, PhaseCheckLock, PhasePlaceTarball}
+// OfflinePhases returns the phases of a build from the vendored pools, in
+// order.
+func OfflinePhases(python bool) []Phase {
+	phases := []Phase{PhaseVerifyVendored, PhasePrepareRepository, PhaseUpdateIndex, PhaseDownload, PhaseExtract, PhaseInstallEssential, PhaseInstallRequested, PhaseProvision}
+	if python {
+		phases = append(phases, PhaseInstallPython)
+	}
+	return append(phases, PhaseCreateTarball, PhaseCheckLock, PhasePlaceTarball)
 }
 
 // VendorPhases returns the phases of the vendor command, in order. The prune
@@ -332,6 +345,10 @@ func phaseOfInfoMessage(message string) (Phase, bool) {
 		return PhaseInstallEssential, true
 	case message == "installing remaining packages inside the chroot...":
 		return PhaseInstallRequested, true
+	case strings.HasPrefix(message, "running --customize-hook") && strings.Contains(message, pythonScriptName):
+		// The hook that runs the Python script names it, which is the only
+		// announcement that tells the two steps apart.
+		return PhaseInstallPython, true
 	case strings.HasPrefix(message, "running special hook: "), strings.HasPrefix(message, "running --customize-hook"):
 		return PhaseProvision, true
 	case message == "cleaning package lists and apt cache...", message == "creating tarball...":
@@ -354,6 +371,12 @@ func (parser *progressParser) startPhase(phase Phase) {
 		parser.finishCurrent()
 	}
 	for skipped := nextPhase; skipped < phase; skipped++ {
+		if skipped == PhaseInstallPython {
+			// The only phase a build may not have at all. A recipe without
+			// Python packages never announces it, and a display it was never
+			// listed for must not be told it finished.
+			continue
+		}
 		parser.progress.Report(ProgressEvent{Phase: skipped, Kind: EventPhaseFinished})
 	}
 	parser.current = phase

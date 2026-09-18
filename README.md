@@ -2,16 +2,18 @@
 
 **Freeze an Ubuntu root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
 
-> **Status: v0.6.0.** `init`, `edit`, `capture`, `validate`, `build`,
+> **Status: v0.7.0.** `init`, `edit`, `capture`, `validate`, `build`,
 > `vendor` and `build --offline` work, a recipe can add third-party apt
-> sources (PPAs, Docker, Node.js, VS Code...), and two offline rebuilds of
-> one lock produce the same bytes. In a terminal, `init`, `edit` and
-> `capture` are a full-screen form driven with the arrow keys; `build` and
-> `vendor` are a progress screen with bars. Every path in this README was
-> run for real: images for Ubuntu 20.04, 22.04 and 24.04 were built with
-> `frostroot build`, imported with `wsl --import` on Windows 11, and logged
-> into; a lock was vendored and rebuilt offline twice, to one `sha256sum`.
-> See [Verification](#verification).
+> sources (PPAs, Docker, Node.js, VS Code...) and Python packages from PyPI,
+> and two offline rebuilds of one lock produce the same bytes. In a terminal,
+> `init`, `edit` and `capture` are a full-screen form driven with the arrow
+> keys; `build` and `vendor` are a progress screen with bars. Every path in
+> this README was run for real: images for Ubuntu 20.04, 22.04 and 24.04 were
+> built with `frostroot build`, imported with `wsl --import` on Windows 11,
+> and logged into; a lock was vendored and rebuilt offline twice, to one
+> `sha256sum`; and a 24.04 image with `requests` and `numpy` imported both
+> from its own environment on the first login. See
+> [Verification](#verification).
 
 ---
 
@@ -229,8 +231,8 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 | `frostroot edit [--plain]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back; fetches any missing source keys. The file is regenerated from the template, so your own comments in it do not survive. |
 | `frostroot capture [--root DIR] [--force] [--plain]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, writes `frostroot.toml` and the signing keys of the third-party sources it could carry, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys; needs no root. |
 | `frostroot validate` | Checks `frostroot.toml`, including that every source's key file is there and is a key, and prints every problem. No network, no root. |
-| `frostroot build [--mirror URL] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-ubuntu-<release>-amd64.tar.gz`. Never prompts. Overwrites the previous lock and tarball. |
-| `frostroot vendor [--mirror URL] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name. |
+| `frostroot build [--mirror URL] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-ubuntu-<release>-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. |
+| `frostroot vendor [--mirror URL] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, and every wheel it names into `vendor/wheels/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name. |
 | `frostroot build --offline [--keep-work] [--plain]` | Rebuilds the image from `frostroot.lock` and `vendor/debs/`, without the archive. Fails unless the result has exactly the lock's packages. The lock is read, not written. |
 | `frostroot version` | Prints the version and the commit it was built from. |
 
@@ -262,6 +264,7 @@ kept after a failure).
 | `locale.lang` | e.g. `en_US.UTF-8`, `tr_TR.UTF-8`, `C.UTF-8` | `en_US.UTF-8` |
 | `locale.timezone` | e.g. `UTC`, `Europe/Istanbul`, `America/Argentina/Buenos_Aires` | `UTC` |
 | `packages.include` | apt package names only; no versions, no suites | preset plus extras |
+| `python.include` | PyPI names only; see [Python packages](#python-packages) | none |
 | `[[sources]]` | extra apt repositories; see [Third-party sources](#third-party-sources) | none |
 
 Unknown fields are an error, so a `[package]` typo fails loudly instead of
@@ -320,6 +323,75 @@ recipe holds plain apt names, whether they came from the catalog or were
 typed. The catalog lives in `internal/form/catalog.go`; adding a package is
 adding a line, and an integration test checks that every entry exists in all
 three releases.
+
+## Python packages
+
+apt has `python3-numpy`, but not the version a course pins, and nothing from
+PyPI that Ubuntu does not package. A recipe can name PyPI packages beside its
+apt ones:
+
+```toml
+[packages]
+include = ["python3", "git"]
+
+[python]
+include = ["numpy", "pandas", "jupyterlab", "requests"]
+```
+
+`build` creates one virtual environment in the image, at
+`/opt/frostroot/venv`, installs those packages into it, and puts it on `PATH`
+for every login shell, so `python` in the image is the environment's python
+and `import numpy` works without activating anything. Ubuntu 24.04 refuses
+`pip install` outside a virtual environment (PEP 668); this is the
+environment, made once, at build time.
+
+The lock records every wheel that ended up inside, the way `[[packages]]`
+records every `.deb`:
+
+```toml
+[python]
+requested = ['numpy', 'pandas', 'jupyterlab', 'requests']
+venv = '/opt/frostroot/venv'
+interpreter = '3.12.3'
+pip_version = '24.3.1'
+
+[[pypi]]
+name = 'numpy'
+version = '2.5.3'
+sha256 = 'b7e18c623bb5c95acb3b3328861272816ba199fb531921c5d6d0b675f1fde9e3'
+filename = 'numpy-2.5.3-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl'
+url = 'https://files.pythonhosted.org/packages/65/af/aa78d1a88805456e212b65461354cd943197fb9acecc4c90fd12295123a3/numpy-2.5.3-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl'
+```
+
+Those four names pulled in 93 entries on 24.04: the four themselves, the 88
+packages they depend on, and the pip below. Everything the recipe did not
+ask for carries `auto = true`, as dependencies do on the apt side. `vendor`
+downloads every one of those wheels into `vendor/wheels/`, checked against
+these checksums, and `build --offline` reinstalls exactly them.
+
+Three rules, each for a reason:
+
+- **Names in the recipe, versions in the lock.** `numpy==2.5.3` in a recipe
+  is an error that says so. The recipe is what you want; the lock is what you
+  got.
+- **Wheels only.** A package with no wheel for the image's Python would be
+  compiled during the build, which needs a compiler in the image and produces
+  files no second build can reproduce. The build fails instead, naming the
+  package.
+- **One pinned pip does the work.** 22.04 ships pip 22.0.2 and 20.04 pip
+  20.0.2, and neither can say what it installed, which is where the lock's
+  checksums come from. So frostroot installs one pinned pip (24.3.1, by
+  checksum) into the environment first, on every release. It is part of the
+  environment, so the lock records it and `vendor` fetches it like any other
+  wheel.
+
+Which versions you get still depends on the release's Python: 24.04 resolves
+`numpy` to 2.5.3 for Python 3.12, 22.04 to 2.2.6 for 3.10, and 20.04 to
+1.24.4 for 3.8, since that is the last one with wheels for it. The lock says
+which.
+
+An environment of `numpy`, `pandas` and `jupyterlab` adds about 370 MB to the
+image and about 75 MB to `vendor/`.
 
 ## Capturing a machine you already have
 
@@ -417,9 +489,14 @@ The online build also records which packages apt installed on its own as
 `auto = true` in the lock, and the offline build restores those marks, so
 `apt autoremove` and `frostroot capture` see the same image either way.
 
-`vendor/debs/` is a few hundred megabytes to a gigabyte. Ship it beside the
-tarball or in an archive; add `vendor/` to `.gitignore` unless you use git
-LFS.
+A recipe with `[python]` vendors its wheels the same way, into
+`vendor/wheels/`, each checked against the lock and fetched from PyPI, which
+never drops a file it has published. The offline build hands that directory
+to pip with every wheel pinned to its checksum, and compares the environment
+with the lock afterwards, as it does the packages.
+
+`vendor/` is a few hundred megabytes to a gigabyte. Ship it beside the
+tarball or in an archive; add it to `.gitignore` unless you use git LFS.
 
 ## What is in the image
 
@@ -436,8 +513,12 @@ LFS.
   `useWindowsTimezone=false` so the recipe's timezone sticks (WSL otherwise
   resets it to the Windows zone at every start).
 - Your locale and timezone.
-- No `/etc/resolv.conf` or `/etc/hostname` from the build machine, and an empty
-  `/etc/machine-id`, so every import gets its own.
+- With `[python]`: a virtual environment at `/opt/frostroot/venv`, root-owned
+  and readable by everyone, with your packages and a pinned pip in it, and
+  one line in `/etc/profile.d` that puts it on `PATH`.
+- No `/etc/resolv.conf` or `/etc/hostname` from the build machine, an empty
+  `/etc/machine-id` so every import gets its own, and no home directory but
+  your user's.
 
 ## Pipeline
 
@@ -456,9 +537,13 @@ sudoers drop-in and run one generated provisioning script (user, sudo,
 locale, timezone, cleanup), copy out the apt indexes the chroot verified
 (the lock's checksums come from them), download apt's `extended_states`
 (the lock's `auto` marks come from it), then download the image's dpkg
-status, which frostroot parses into the lock. The tarball is moved into
-`dist/` first and the lock renamed into place second, so a lock never
-describes an image that does not exist. A failed build writes neither.
+status, which frostroot parses into the lock. A recipe with `[python]` gets
+one more hook in between, which creates the environment and installs into
+it, and whose report becomes the lock's `[[pypi]]` entries; the build host's
+`/etc/resolv.conf` is removed after it, since that hook is the one that
+needs to resolve a name. The tarball is moved into `dist/` first and the
+lock renamed into place second, so a lock never describes an image that does
+not exist. A failed build writes neither.
 
 Offline, the three `deb http://…` lines become one
 `deb [trusted=yes] copy://<work>/pool ./` pointing at a flat repository
@@ -466,7 +551,10 @@ frostroot writes in the work directory from the vendored files (their own
 control files, plus a `Release` naming the suite, which mmdebstrap needs to
 find the essential set), every locked package goes into `--include`, and
 hooks restore the archive's lines in the image's `sources.list` and the
-lock's `auto` marks in its `extended_states`.
+lock's `auto` marks in its `extended_states`. The Python step works the same
+way: the wheels are copied in, pip installs from that directory with every
+checksum pinned and no index to reach, and the environment is compared with
+the lock before anything is placed.
 
 Work happens in `$XDG_CACHE_HOME/frostroot` if that is set, otherwise in
 `/var/tmp/frostroot-<uid>` (one per user, so a `sudo` build cannot leave a
@@ -505,7 +593,8 @@ an old release is a legitimate use of this tool; prefer 22.04 or 24.04 unless
 you specifically need focal.
 
 **Python on 24.04.** PEP 668 makes `pip install` outside a virtual environment
-fail by design. Use `python3 -m venv .venv`.
+fail by design. Name the packages in the recipe's `[python]` table and the
+image has one; for anything installed after import, `python3 -m venv .venv`.
 
 **`systemctl is-system-running` says `degraded`, not `running`.** On 24.04 the
 failed units are gettys (`getty@tty1`, sometimes `console-getty`), because WSL
@@ -542,11 +631,12 @@ user, WSL-ready images.
 **Since then:** the arrow-key form and progress screen (v0.2), `frostroot
 capture` (v0.3), vendoring and offline rebuilds with a release process
 (v0.4), third-party apt sources (v0.5), byte-identical offline rebuilds
-(v0.6).
+(v0.6), Python packages from PyPI (v0.7).
 
 **Deliberately not yet:** Fedora or any non-Ubuntu family · flat or unsigned
-apt repositories · pip / npm / cargo lockfiles · bare-metal disk or ISO
-images · a native Windows binary · architectures other than amd64.
+apt repositories · npm and cargo lockfiles · Python source distributions ·
+bare-metal disk or ISO images · a native Windows binary · architectures other
+than amd64.
 
 Each exclusion has a door left open in the design. Adding Fedora means a new
 `internal/distro` implementation, not a rewrite.
@@ -569,7 +659,13 @@ server (fresh, resumed, corrupt, dropped from the mirror, mismatched,
 interrupted), offline builds against the fake bootstrapper, including every
 refusal and the final comparison with the lock, and the frozen instant: taken
 from the environment or the clock online, from the lock offline, refused
-when unusable, with apt's marks parsed and rendered in its own format.
+when unusable, with apt's marks parsed and rendered in its own format. For
+the Python step it covers pip's own installation report parsed into lock
+entries, every refusal (a source distribution, a missing checksum, a report
+version frostroot does not know, a requested package the report never
+mentions), the two rendered scripts through a real shell with a hostile
+package name, the hook order online and offline, and the comparison of an
+image's environment with the lock.
 
 ```sh
 go test -tags=integration -run TestIntegration -v -timeout 30m ./...
@@ -583,8 +679,12 @@ phase in order with a real download total, and that every package in the
 `init` catalog exists in all three releases. A second test builds an image
 online, vendors it, rebuilds it offline twice and requires one SHA-256, no
 entry dated after the lock's instant, and the online image's apt marks in
-the offline one. It needs Linux, mmdebstrap, ubuntu-keyring, network, and
-user namespaces or root, and takes about ten minutes.
+the offline one. A third does the same for a recipe with Python packages: it
+checks the lock's `[python]` table and `[[pypi]]` entries, that the
+environment and its `profile.d` line are in the tarball, that nothing the
+Python step used was left in the image, and that two offline rebuilds have
+one SHA-256. They need Linux, mmdebstrap, ubuntu-keyring, network, and user
+namespaces or root, and take about twenty minutes.
 
 **The WSL boot check is manual**, because no CI runner can run `wsl --import`.
 For every release you ship, import the tarball and check: `whoami` is your
@@ -594,6 +694,14 @@ has no warnings, and `date` shows the recipe's timezone. For v0.1.0 this was
 done on Windows 11 with WSL 2.6.3 for all three releases, along with the
 failure paths; the results are recorded in the
 [feasibility analysis](docs/superpowers/reviews/2026-09-15-frostroot-feasibility.md#release-verification-v010-2026-09-16).
+
+For v0.7.0 a 24.04 image with `requests` and `numpy` was imported the same
+way: every check above passed, `systemctl is-system-running` said `running`,
+and in a login shell `python3` was the environment's
+(`/opt/frostroot/venv/bin/python3`, 3.12.3), `import numpy, requests` gave
+the locked 2.5.3 and 2.34.2, and `pip --version` was the pinned 24.3.1. The
+[Python spec](docs/superpowers/specs/2026-09-17-frostroot-python.md#verification)
+records it.
 
 ## Documentation
 
@@ -605,6 +713,8 @@ failure paths; the results are recorded in the
 | [Vendor spec](docs/superpowers/specs/2026-09-17-frostroot-vendor.md) | v0.4: checksums in the lock, `vendor`, `build --offline`, releases; with the spike results. |
 | [Sources spec](docs/superpowers/specs/2026-09-17-frostroot-sources.md) | v0.5: `[[sources]]`, the catalog and PPAs, keys, how `build`, the lock, `vendor` and `capture` handle them. |
 | [Reproducible spec](docs/superpowers/specs/2026-09-17-frostroot-reproducible.md) | v0.6: the frozen instant in the lock, apt's auto marks, what byte identity does and does not cover; with the spike and the verification. |
+| [Python spec](docs/superpowers/specs/2026-09-17-frostroot-python.md) | v0.7: `[python]`, the image's virtual environment, the pinned pip, `[[pypi]]` in the lock, wheels in `vendor/`; with the spike and the verification. |
+| [Python plan](docs/superpowers/plans/2026-09-17-frostroot-python.md) | The nine tasks v0.7 was built from. |
 | [Implementation plan](docs/superpowers/plans/2026-09-15-frostroot-v1.md) | The 13 tasks v1 was built from, with the spike's amendments. |
 | [TUI plan](docs/superpowers/plans/2026-09-17-frostroot-tui.md) | The seven tasks v0.2 was built from. |
 | [Plan review](docs/superpowers/reviews/2026-09-14-frostroot-plan-review.md) | Found four defects that would have shipped a non-booting image |
@@ -623,8 +733,8 @@ internal/pgp/       OpenPGP public keys: armor, the primary key's fingerprint; n
 internal/tui/       the full-screen form and progress screen (the only package using the Charm libraries)
 internal/recipe/    frostroot.toml and frostroot.lock: types, strict parsing, validation
 internal/distro/    Ubuntu releases, archive URL, the three pocket lines
-internal/builder/   orchestration, mmdebstrap runner and progress parser, provisioning, dpkg status, lock checksums, offline builds
-internal/pool/      the vendored pool: manifest from the lock, verify, fetch, prune, stage as a flat repository
+internal/builder/   orchestration, mmdebstrap runner and progress parser, provisioning, the Python step, dpkg status, lock checksums, offline builds
+internal/pool/      the vendored pools: manifests from the lock, verify, fetch, prune, stage as a flat repository or a directory of wheels
 internal/deb/       Debian formats: control stanzas, Packages indexes, .deb control files, flat repository index
 internal/export/    tarball naming and atomic placement
 testdata/           recipe fixtures

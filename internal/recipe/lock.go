@@ -28,7 +28,41 @@ type Lockfile struct {
 	// Repositories are the recipe's extra sources as the build used them,
 	// with the checksum of each signing key file. Absent without sources.
 	Repositories []LockRepository `toml:"repositories,omitempty"`
-	Packages     []LockPackage    `toml:"packages"` // every installed package, sorted
+	// Python records the recipe's [python] table as the build used it, and
+	// the tools that resolved the wheels. Absent without Python packages.
+	Python   *LockPython   `toml:"python,omitempty"`
+	Packages []LockPackage `toml:"packages"` // every installed package, sorted
+	// PyPI is every package in the image's virtual environment, sorted, with
+	// the wheel each came from. Absent without Python packages.
+	PyPI []LockPyPI `toml:"pypi,omitempty"`
+}
+
+// LockPython is the Python side of a build: what the recipe asked for, where
+// the virtual environment went, and which tools resolved the wheels. The
+// versions matter for the same reason mmdebstrap's does: another pip may
+// resolve another set.
+type LockPython struct {
+	Requested   []string `toml:"requested"`             // the recipe's python.include, as written
+	Venv        string   `toml:"venv"`                  // absolute path of the virtual environment in the image
+	Interpreter string   `toml:"interpreter"`           // the interpreter that created it, as it reports itself
+	PipVersion  string   `toml:"pip_version,omitempty"` // the pip that resolved the wheels
+}
+
+// LockPyPI is one package in the image's virtual environment and the wheel it
+// was installed from. The URL is absolute: PyPI serves files from a
+// content-addressed host rather than from a base URL with a pool layout, so
+// there is no mirror to join a relative name to.
+type LockPyPI struct {
+	Name    string `toml:"name"`    // the distribution name as PyPI spells it
+	Version string `toml:"version"` // the version resolved, never a range
+	// Auto marks a package the resolver pulled in to satisfy a dependency,
+	// as opposed to one the recipe asked for by name. It is the same
+	// distinction LockPackage.Auto records for apt.
+	Auto     bool   `toml:"auto,omitempty"`
+	SHA256   string `toml:"sha256"`         // hex digest of the wheel
+	Size     int64  `toml:"size,omitempty"` // bytes of the wheel, when the resolver reported it
+	Filename string `toml:"filename"`       // the wheel's file name, as vendor/wheels holds it
+	URL      string `toml:"url"`            // where the wheel was downloaded from
 }
 
 // LockRepository is one extra source the build installed from.
@@ -80,6 +114,19 @@ func (l Lockfile) HasChecksums() bool {
 	}
 	for _, locked := range l.Packages {
 		if locked.SHA256 == "" || locked.Size <= 0 || locked.Filename == "" {
+			return false
+		}
+	}
+	return true
+}
+
+// HasWheelChecksums reports whether every Python package carries what
+// vendoring needs: a checksum, a file name and the URL to fetch it from. A
+// lock with no Python packages has nothing to vendor and reports true, so
+// callers can check it before deciding to fetch.
+func (l Lockfile) HasWheelChecksums() bool {
+	for _, wheel := range l.PyPI {
+		if wheel.SHA256 == "" || wheel.Filename == "" || wheel.URL == "" {
 			return false
 		}
 	}

@@ -24,6 +24,9 @@ const (
 	retryDelay            = time.Second
 	responseHeaderTimeout = 30 * time.Second
 	copyBufferBytes       = 256 << 10
+	// maxUnknownFileBytes bounds a download whose size the lock does not
+	// record. The largest wheel on PyPI is a few hundred megabytes.
+	maxUnknownFileBytes = 2 << 30
 )
 
 // Errors of a fetch. Compare with errors.Is; a *FetchError wraps them and
@@ -202,11 +205,12 @@ func (f *fetcher) addProgress(bytesWritten int64) {
 // fetchOne downloads one entry from the mirror, or from the fallback when
 // the mirror has dropped it, and puts it in place.
 func (f *fetcher) fetchOne(ctx context.Context, entry Entry) error {
-	baseURL := entry.BaseURL
-	if entry.Source == "" && f.options.MirrorURL != "" {
-		baseURL = f.options.MirrorURL
+	mirrorURL := entry.DownloadURL()
+	if entry.URL == "" && entry.Source == "" && f.options.MirrorURL != "" {
+		// Only a file named relative to the archive moves with --mirror; a
+		// wheel carries its own whole address.
+		mirrorURL = strings.TrimRight(f.options.MirrorURL, "/") + "/" + entry.URLPath
 	}
-	mirrorURL := strings.TrimRight(baseURL, "/") + "/" + entry.URLPath
 	sourceURL := mirrorURL
 	err := f.downloadWithRetry(ctx, entry, mirrorURL)
 	if errors.Is(err, ErrNotFound) && f.options.Fallback != nil {
@@ -263,7 +267,7 @@ func (f *fetcher) download(ctx context.Context, entry Entry, url string) (err er
 		return ErrNotFound
 	case response.StatusCode != http.StatusOK:
 		return fmt.Errorf("HTTP %s", response.Status)
-	case response.ContentLength >= 0 && response.ContentLength != entry.Size:
+	case entry.Size > 0 && response.ContentLength >= 0 && response.ContentLength != entry.Size:
 		return fmt.Errorf("%w: the server offers %d bytes, the lock says %d", ErrMismatch, response.ContentLength, entry.Size)
 	}
 
@@ -281,12 +285,23 @@ func (f *fetcher) download(ctx context.Context, entry Entry, url string) (err er
 		}
 	}()
 	digest := sha256.New()
-	written, err := io.CopyBuffer(&progressWriter{writer: io.MultiWriter(temporary, digest), report: f.addProgress}, io.LimitReader(response.Body, entry.Size+1), make([]byte, copyBufferBytes))
+	// A lock that records no size, as it does for a wheel, still bounds the
+	// download: nothing frostroot installs is anywhere near the cap, and an
+	// endless body would otherwise fill the disk before the checksum could
+	// refuse it.
+	readLimit := int64(maxUnknownFileBytes)
+	if entry.Size > 0 {
+		readLimit = entry.Size + 1
+	}
+	written, err := io.CopyBuffer(&progressWriter{writer: io.MultiWriter(temporary, digest), report: f.addProgress}, io.LimitReader(response.Body, readLimit), make([]byte, copyBufferBytes))
 	if err != nil {
 		return err
 	}
-	if written != entry.Size {
+	if entry.Size > 0 && written != entry.Size {
 		return fmt.Errorf("%w: received %d bytes, the lock says %d", ErrMismatch, written, entry.Size)
+	}
+	if entry.Size == 0 && written >= maxUnknownFileBytes {
+		return fmt.Errorf("%w: the file is larger than %d bytes, which nothing frostroot installs is", ErrMismatch, maxUnknownFileBytes)
 	}
 	if got := hex.EncodeToString(digest.Sum(nil)); got != entry.SHA256 {
 		return fmt.Errorf("%w: SHA-256 %s, the lock says %s", ErrMismatch, got, entry.SHA256)

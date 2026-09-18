@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -61,6 +62,10 @@ type App struct {
 	// has, or "" for nowhere; nil means Launchpad for the archive and PPAs.
 	// Tests point it at their own server.
 	VendorFallback func(pool.Entry) string
+	// VendorClient fetches the vendored files; nil means a client honoring
+	// the proxy environment. Tests answer from their own server, whose
+	// certificate only its own client trusts.
+	VendorClient *http.Client
 	// KeyClient fetches the signing keys of extra sources; defaults to the
 	// network. Tests answer from a map.
 	KeyClient sources.Client

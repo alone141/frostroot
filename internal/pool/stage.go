@@ -52,6 +52,33 @@ func Stage(poolDir string, entries []Entry, repositoryDir string, release deb.Fl
 	return nil
 }
 
+// StageFiles puts the verified files of poolDir into destinationDir, which
+// it creates 0755, without writing any index: an offline build hands the
+// directory to pip, which needs the wheels and nothing else. As in Stage,
+// each file is hard-linked when it can be and copied otherwise, and the
+// caller verifies the pool first.
+func StageFiles(poolDir string, entries []Entry, destinationDir string, onProgress StageProgress) error {
+	if err := os.MkdirAll(destinationDir, 0o755); err != nil {
+		return err
+	}
+	if err := os.Chmod(destinationDir, 0o755); err != nil {
+		return err
+	}
+	totalBytes := TotalSize(entries)
+	var doneBytes int64
+	for _, entry := range entries {
+		source := filepath.Join(poolDir, entry.FileName)
+		if err := linkOrCopy(source, filepath.Join(destinationDir, entry.FileName)); err != nil {
+			return fmt.Errorf("staging %s: %w", entry.FileName, err)
+		}
+		doneBytes += entry.Size
+		if onProgress != nil {
+			onProgress(doneBytes, totalBytes)
+		}
+	}
+	return nil
+}
+
 // linkOrCopy makes destination hold the content of source: a hard link when
 // the filesystem allows and the source is already world-readable, a copy
 // otherwise. A link shares the source's mode, and changing that would change

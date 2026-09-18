@@ -20,6 +20,12 @@ var EssentialPackages = []string{
 	"sudo", "locales", "tzdata", "passwd", "ca-certificates",
 }
 
+// PythonPackages are the apt packages a virtual environment needs, installed
+// only when the recipe asks for Python packages. python3-venv brings both
+// python3 and the pip it seeds the environment with; python3 is named too so
+// that a reader of the lock can see why it is there.
+var PythonPackages = []string{"python3", "python3-venv"}
+
 const (
 	defaultLocale       = "en_US.UTF-8"
 	defaultTimezone     = "UTC"
@@ -27,9 +33,9 @@ const (
 	provisionScriptName = "frostroot-provision" // $0 of the script, shown in its error messages
 )
 
-// PackagesToInstall returns the recipe's requested packages followed by the
-// essential packages, without duplicates.
-func PackagesToInstall(requestedPackages []string) []string {
+// PackagesToInstall returns the recipe's requested packages, then what its
+// Python packages need, then the essential packages, without duplicates.
+func PackagesToInstall(imageRecipe recipe.Recipe) []string {
 	var packages []string
 	alreadyListed := map[string]bool{}
 	addOnce := func(packageName string) {
@@ -39,8 +45,13 @@ func PackagesToInstall(requestedPackages []string) []string {
 		alreadyListed[packageName] = true
 		packages = append(packages, packageName)
 	}
-	for _, packageName := range requestedPackages {
+	for _, packageName := range imageRecipe.Packages.Include {
 		addOnce(packageName)
+	}
+	if len(imageRecipe.PythonPackages()) > 0 {
+		for _, packageName := range PythonPackages {
+			addOnce(packageName)
+		}
 	}
 	for _, packageName := range EssentialPackages {
 		addOnce(packageName)
@@ -117,9 +128,6 @@ if ! have_locale; then
 	fi
 fi
 update-locale "LANG=$lang"
-
-# mmdebstrap copies these from the build host and leaves them behind.
-rm -f /etc/resolv.conf /etc/hostname
 `))
 
 // provisionScriptValues are the values the provision script template needs.
@@ -191,6 +199,23 @@ type Stage struct {
 	// host and for upload into the image. KeyNames lists them in order.
 	KeyringDir string
 	KeyNames   []string
+	// PythonScriptPath is the rendered script that creates the image's
+	// virtual environment and installs its packages; empty when the recipe
+	// asks for no Python packages, which is what says the build has no
+	// Python step.
+	PythonScriptPath string
+	// PipReportPath is where an online build downloads pip's installation
+	// report to, for the wheels the lock records.
+	PipReportPath string
+	// PipListPath is where an offline build downloads the environment's
+	// package list to, to compare with the lock.
+	PipListPath string
+	// RequirementsPath is the rendered requirements file an offline build
+	// uploads, pinning every wheel to its version and checksum.
+	RequirementsPath string
+	// WheelsDir is the directory of vendored wheels an offline build copies
+	// into the image. Its base name is what the image sees.
+	WheelsDir string
 }
 
 // StageOptions say what WriteStage renders besides the provisioning files.
@@ -212,6 +237,14 @@ type StageOptions struct {
 	// Keys are the extra sources' signing keys in binary form, by source
 	// name, to stage for apt and upload into the image.
 	Keys map[string][]byte
+	// Python says how the Python step runs, when the recipe has one.
+	Python PythonOptions
+	// Requirements is the requirements file an offline build installs the
+	// image's Python packages from, rendered from the lock; "" online.
+	Requirements string
+	// WheelsDir is the directory of vendored wheels an offline build copies
+	// into the image; "" online.
+	WheelsDir string
 }
 
 // WriteStage renders every provisioning file for imageRecipe into stageDir.
@@ -251,6 +284,22 @@ func WriteStage(stageDir string, imageRecipe recipe.Recipe, options StageOptions
 		stage.AutoMarksPath = filepath.Join(stageDir, "auto-marks")
 		contentByPath[stage.AutoMarksPath] = options.AutoMarks
 	}
+	pythonScript, err := RenderPythonScript(imageRecipe, options.Python)
+	if err != nil {
+		return Stage{}, err
+	}
+	if pythonScript != "" {
+		stage.PythonScriptPath = filepath.Join(stageDir, "python.sh")
+		contentByPath[stage.PythonScriptPath] = pythonScript
+		if options.Python.Offline {
+			stage.PipListPath = filepath.Join(stageDir, "pip-list.json")
+			stage.RequirementsPath = filepath.Join(stageDir, "requirements.txt")
+			contentByPath[stage.RequirementsPath] = options.Requirements
+			stage.WheelsDir = options.WheelsDir
+		} else {
+			stage.PipReportPath = filepath.Join(stageDir, "pip-report.json")
+		}
+	}
 	for path, content := range contentByPath {
 		if err := writeStageFile(path, []byte(content)); err != nil {
 			return Stage{}, err
@@ -272,6 +321,34 @@ func WriteStage(stageDir string, imageRecipe recipe.Recipe, options StageOptions
 		}
 	}
 	return stage, nil
+}
+
+// pythonHooks place what the Python step needs, run it after the user and
+// the locale exist, and take back what the lock is written from or checked
+// against. Nothing the step used stays in the image: the script deletes the
+// wheels and the requirements it installed from, and the last hook deletes
+// the files frostroot downloaded.
+func pythonHooks(stage Stage) []string {
+	if stage.PythonScriptPath == "" {
+		return nil
+	}
+	var hooks []string
+	if stage.RequirementsPath != "" {
+		hooks = append(hooks, "upload "+shellQuote(stage.RequirementsPath)+" "+PythonRequirementsPath)
+	}
+	if stage.WheelsDir != "" {
+		// copy-in places the directory inside the destination, so the image
+		// gets /<base name>, which is what PythonWheelsPath is.
+		hooks = append(hooks, "copy-in "+shellQuote(stage.WheelsDir)+" /")
+	}
+	hooks = append(hooks, `chroot "$1" /bin/sh -c "$(cat `+shellQuote(stage.PythonScriptPath)+`)" `+pythonScriptName)
+	if stage.PipReportPath != "" {
+		hooks = append(hooks, "download "+PythonReportPath+" "+shellQuote(stage.PipReportPath))
+	}
+	if stage.PipListPath != "" {
+		hooks = append(hooks, "download "+PythonListPath+" "+shellQuote(stage.PipListPath))
+	}
+	return append(hooks, `rm -f "$1`+PythonReportPath+`" "$1`+PythonListPath+`"`)
 }
 
 // writeStageFile writes a world-readable stage file whatever the umask.
@@ -311,6 +388,12 @@ func CustomizeHooks(stage Stage) []string {
 		hooks = append(hooks, "upload "+shellQuote(stage.SourcesListPath)+" /etc/apt/sources.list")
 	}
 	hooks = append(hooks, `chroot "$1" /bin/sh -c "$(cat `+shellQuote(stage.ProvisionScriptPath)+`)" `+provisionScriptName)
+	hooks = append(hooks, pythonHooks(stage)...)
+	// mmdebstrap copies these from the build host and leaves them behind.
+	// They go last, because they are also how anything running in the chroot
+	// resolves a name: deleting them in the provision script left pip with no
+	// DNS, and that is what the Python step needs the network for.
+	hooks = append(hooks, `rm -f "$1/etc/resolv.conf" "$1/etc/hostname"`)
 	if stage.AutoMarksPath != "" {
 		// upload makes the file root's, mode 0644, as apt's own would be.
 		hooks = append(hooks, "upload "+shellQuote(stage.AutoMarksPath)+" "+aptExtendedStatesPath)

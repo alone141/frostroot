@@ -495,6 +495,13 @@ apt, still one locker.
 **Language lockfiles**
 Optional `[python]`, `[node]`, `[rust]` in the recipe; separate lock arrays
 (`[[pypi]]`, …). Run after apt provision. Never mix with `[[packages]]`.
+Python is done in v0.7: see
+[`2026-09-17-frostroot-python.md`](2026-09-17-frostroot-python.md). It settled
+the shape the other two reuse — one recipe table, one lock array, one install
+step after provisioning, one vendored pool — and added a rule of its own:
+wheels only, because a source distribution would need a compiler in the image
+and produce files no second build reproduces. `[node]` and `[rust]` are still
+ahead.
 
 **Fedora / other families**
 New `internal/distro` implementation: `dnf --installroot` + `rpm -qa`. Recipe

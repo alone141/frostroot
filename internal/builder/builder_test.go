@@ -275,8 +275,8 @@ func TestBuildSuccessWritesLockAndTarball(t *testing.T) {
 	if !bootstrapper.stageFilesPresent["sources.list"] {
 		t.Error("every build uploads the image's sources.list, so the lines the image keeps are the archive's")
 	}
-	if len(spec.CustomizeHooks) != 8 {
-		t.Errorf("CustomizeHooks = %q, want upload, upload, upload sources.list, provision, copy-out, ensure and download extended_states, download status", spec.CustomizeHooks)
+	if len(spec.CustomizeHooks) != 9 {
+		t.Errorf("CustomizeHooks = %q, want upload, upload, upload sources.list, provision, remove the host's files, copy-out, ensure and download extended_states, download status", spec.CustomizeHooks)
 	}
 	if spec.Trusted || spec.KeyringPath == "" {
 		t.Errorf("an online build verifies the archive with a keyring: %+v", spec)
