@@ -365,7 +365,10 @@ func WriteStage(stageDir string, imageRecipe recipe.Recipe, options StageOptions
 			stage.CertificateFileNames = append(stage.CertificateFileNames, certificate.FileName)
 		}
 	}
-	if len(options.ExtraTrust) > 0 && stage.PythonScriptPath != "" {
+	// Only the online Python step fetches, and only it deletes the file
+	// again: staging this for an offline rebuild would upload a file nothing
+	// removes, and --ca-bundle would change the image's bytes.
+	if len(options.ExtraTrust) > 0 && stage.PythonScriptPath != "" && !options.Python.Offline {
 		stage.ExtraTrustPath = filepath.Join(stageDir, "extra-ca.pem")
 		if err := writeStageFile(stage.ExtraTrustPath, options.ExtraTrust); err != nil {
 			return Stage{}, err

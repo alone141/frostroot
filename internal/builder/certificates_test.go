@@ -312,6 +312,24 @@ func TestWriteStageKeepsTheBuildsOwnTrustOutOfTheImage(t *testing.T) {
 	if withoutPython.ExtraTrustPath != "" {
 		t.Error("a recipe with no Python step staged the build's own trust anyway")
 	}
+
+	// Offline nothing fetches, so the step neither uses the file nor deletes
+	// it: uploading it would leave it in the image, and --ca-bundle would
+	// change the bytes of a rebuild.
+	offline, err := WriteStage(filepath.Join(t.TempDir(), "stage"), withPython, StageOptions{
+		ExtraTrust: extra,
+		Python:     PythonOptions{Offline: true, Pip: PinnedPip},
+		WheelsDir:  t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("WriteStage: %v", err)
+	}
+	if offline.ExtraTrustPath != "" {
+		t.Error("an offline rebuild staged a file nothing would remove from the image")
+	}
+	if hooks := strings.Join(CustomizeHooks(offline), "\n"); strings.Contains(hooks, PythonExtraTrustPath) {
+		t.Errorf("an offline rebuild uploads the build's own trust:\n%s", hooks)
+	}
 }
 
 func TestWriteStageUploadsTheCertificatesBeforeProvisioning(t *testing.T) {
