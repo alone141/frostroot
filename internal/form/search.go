@@ -8,7 +8,8 @@ import (
 	"frostroot/internal/recipe"
 )
 
-// Match is one package a Search field offers.
+// Match is one package a Search field offers. An index that publishes no
+// version, section or description — PyPI does not — fills Name alone.
 type Match struct {
 	Name        string
 	Version     string
@@ -24,53 +25,66 @@ type SectionCount struct {
 }
 
 // PackageIndex is what a Search field looks names up in: the packages of
-// one Ubuntu release. internal/index implements it; the form knows nothing
-// of archives, caches or the network.
+// one Ubuntu release, or the projects on PyPI. internal/index implements
+// both; the form knows nothing of archives, caches or the network.
 type PackageIndex interface {
 	// Search returns the best matches for query, at most limit, and how
-	// many matched in all. section, when not empty, narrows to one section.
+	// many matched in all. section, when not empty, narrows to one section;
+	// an index without sections ignores it.
 	Search(query, section string, limit int) (matches []Match, total int)
 	// SectionsMatching returns the sections holding matches for query,
-	// largest first.
+	// largest first. An index without sections returns none.
 	SectionsMatching(query string) []SectionCount
 	// Lookup returns the package of exactly this name, cheaply.
 	Lookup(name string) (Match, bool)
-	// Has reports whether the release has a package of exactly this name.
+	// Has reports whether the index has a package of exactly this name.
 	Has(name string) bool
-	// Nearest returns names close to one the release lacks, closest first.
+	// Nearest returns names close to one the index lacks, closest first.
 	Nearest(name string, limit int) []string
 	// Describe says what the index is in a few words.
 	Describe() string
 }
 
-// IndexOpener opens the index of an Ubuntu release such as "24.04".
-// progress is told how the download goes, from another goroutine. An error
-// means there is no index to be had, which is never the form's failure: the
-// field goes on as a list of typed names.
+// PackageSummaries is an index that can also say what a package is, one
+// name at a time, because it publishes no descriptions in bulk. The apt
+// index carries its descriptions already and implements none of this; the
+// PyPI one implements all of it.
+type PackageSummaries interface {
+	// Summary returns what is already known about name, never blocking: it
+	// is what a View draws from. known distinguishes a summary known to be
+	// empty from a name nobody has asked about.
+	Summary(name string) (summary string, known bool)
+	// FetchSummary looks one up and remembers it. It blocks, so a caller
+	// runs it away from the drawing.
+	FetchSummary(ctx context.Context, name string)
+}
+
+// IndexOpener opens an index for the Ubuntu release such as "24.04" that
+// the form has been told about. progress is told how the download goes,
+// from another goroutine. An error means there is no index to be had, which
+// is never the form's failure: the field goes on as a list of typed names.
 type IndexOpener func(ctx context.Context, releaseVersion string, progress func(doneBytes, totalBytes int64)) (PackageIndex, error)
 
 // nearestCount is how many "did you mean" names a warning offers.
 const nearestCount = 3
 
-// UnknownPackage is a requested name the release's archive does not have.
+// UnknownPackage is a requested name its index does not have.
 type UnknownPackage struct {
 	Name    string
-	Nearest []string // close names the archive does have, or none
+	Nearest []string // close names the index does have, or none
 }
 
-// UnknownPackages returns the names of the "Other packages" answer that
-// index lacks, in the order they were given. Catalog names are not checked:
-// the catalog's own integration test proves them. A nil index knows nothing
-// and so objects to nothing. Names a recipe could not hold anyway are left
-// to validation, which refuses them.
-func UnknownPackages(values Values, index PackageIndex) []UnknownPackage {
+// unknownIn returns the names index lacks, in the order they were given.
+// A nil index knows nothing and so objects to nothing. Names a recipe could
+// not hold anyway are left to validation, which refuses them outright.
+func unknownIn(names []string, index PackageIndex, check func(string) error) []UnknownPackage {
 	if index == nil {
 		return nil
 	}
 	var unknown []UnknownPackage
 	seen := map[string]bool{}
-	for _, name := range splitPackageList(values.String(KeyOtherPackages)) {
-		if seen[name] || recipe.CheckPackageName(name) != nil || index.Has(name) {
+	for _, name := range names {
+		if seen[name] || check(name) != nil || index.Has(name) {
 			continue
 		}
 		seen[name] = true
@@ -79,32 +93,78 @@ func UnknownPackages(values Values, index PackageIndex) []UnknownPackage {
 	return unknown
 }
 
-// UnknownPackagesWarning renders unknown for the summary, or "" when there
-// is nothing to say. It is a warning and never a refusal: a third-party
-// source may well provide docker-ce, and the index cannot know.
+// UnknownPackages returns the apt names of the "Other packages" answer that
+// index lacks. Catalog names are not checked: the catalog's own integration
+// test proves them.
+func UnknownPackages(values Values, index PackageIndex) []UnknownPackage {
+	return unknownIn(splitPackageList(values.String(KeyOtherPackages)), index, recipe.CheckPackageName)
+}
+
+// UnknownPythonPackages returns the PyPI names of the "Python packages"
+// answer that index lacks. Names are compared as PEP 503 compares them, by
+// the index, so Flask_SQLAlchemy is not reported missing.
+func UnknownPythonPackages(values Values, index PackageIndex) []UnknownPackage {
+	return unknownIn(splitPackageList(values.String(KeyPythonPackages)), index, recipe.CheckPythonPackageName)
+}
+
+// Warnings is what the last page says above the recipe, or "": the names
+// no archive has, then the names no Python index has. Each is a warning and
+// never a refusal — a third-party source may provide docker-ce, and a
+// private index or a project published this morning may provide a PyPI name
+// — so the write question below is unchanged either way.
+func Warnings(values Values, apt, python PackageIndex) string {
+	var blocks []string
+	if warning := UnknownPackagesWarning(UnknownPackages(values, apt), values); warning != "" {
+		blocks = append(blocks, warning)
+	}
+	if warning := unknownPythonWarning(UnknownPythonPackages(values, python)); warning != "" {
+		blocks = append(blocks, warning)
+	}
+	return strings.Join(blocks, "\n\n")
+}
+
+// UnknownPackagesWarning renders apt names unknown to the archive, or "".
 func UnknownPackagesWarning(unknown []UnknownPackage, values Values) string {
 	if len(unknown) == 0 {
 		return ""
 	}
 	var warning strings.Builder
 	fmt.Fprintf(&warning, "Not in Ubuntu's %s archive:\n", releaseSuite(values.String(KeyRelease)))
-	width := 0
-	for _, item := range unknown {
-		width = max(width, len(item.Name))
-	}
-	for _, item := range unknown {
-		if len(item.Nearest) == 0 {
-			fmt.Fprintf(&warning, "  %s\n", item.Name)
-			continue
-		}
-		fmt.Fprintf(&warning, "  %-*s  nearest: %s\n", width, item.Name, strings.Join(item.Nearest, ", "))
-	}
+	writeUnknownNames(&warning, unknown)
 	if hasThirdPartySources(values) {
 		warning.WriteString("One of the recipe's other sources may provide them; otherwise build will\nstop at \"Unable to locate package\".")
 	} else {
 		warning.WriteString("The recipe has no other source that could provide them, so build will\nstop at \"Unable to locate package\" unless one is added.")
 	}
 	return warning.String()
+}
+
+// unknownPythonWarning renders PyPI names no index has, or "".
+func unknownPythonWarning(unknown []UnknownPackage) string {
+	if len(unknown) == 0 {
+		return ""
+	}
+	var warning strings.Builder
+	warning.WriteString("Not on PyPI:\n")
+	writeUnknownNames(&warning, unknown)
+	warning.WriteString("build will stop when pip cannot resolve them, unless they come from an\nindex of your own.")
+	return warning.String()
+}
+
+// writeUnknownNames lists the names with their suggestions, the names
+// padded to one width so the suggestions line up.
+func writeUnknownNames(warning *strings.Builder, unknown []UnknownPackage) {
+	width := 0
+	for _, item := range unknown {
+		width = max(width, len(item.Name))
+	}
+	for _, item := range unknown {
+		if len(item.Nearest) == 0 {
+			fmt.Fprintf(warning, "  %s\n", item.Name)
+			continue
+		}
+		fmt.Fprintf(warning, "  %-*s  nearest: %s\n", width, item.Name, strings.Join(item.Nearest, ", "))
+	}
 }
 
 // hasThirdPartySources reports whether the answers name any apt source

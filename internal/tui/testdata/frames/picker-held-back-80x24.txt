@@ -1,7 +1,4 @@
 Packages
-    [ ] python3  the interpreter
-    [ ] python3-pip  package installer (use a venv on 24.04)
-
 ┃ Other packages
 ┃ type to search the release's archive, or a name; Space adds the row
 ┃ > valgrind
@@ -18,8 +15,11 @@ Packages
 ┃ "valgrind" is not added: Space adds it, Enter again leaves it out
 
   Python packages
-  installed from PyPI into the image's virtual environment, separated by spaces
-  or commas
-  > none
+  type to search PyPI, or a name; installed into the image's virtual environment
+  > type to search, or a name
+  no package index: names are added as typed and checked by build
+  nothing chosen yet
+
+
 
 ↑/↓ move • space add/remove • / section • shift+tab back • enter next

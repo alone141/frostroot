@@ -47,9 +47,7 @@ func newSummaryServer(t *testing.T) (*Summaries, *summaryServer) {
 		_, _ = response.Write([]byte(`{"info":{"summary":` + quoteJSON(summary) + `}}`))
 	}))
 	t.Cleanup(server.Close)
-	summaries := NewSummaries(server.Client(), nil)
-	summaries.baseURL = server.URL + "/pypi"
-	return summaries, served
+	return NewSummaries(server.Client(), nil, server.URL), served
 }
 
 func quoteJSON(text string) string {
@@ -160,5 +158,21 @@ func TestSummariesReadAMalformedBodyAsNothing(t *testing.T) {
 	summaries.Fetch(context.Background(), "broken")
 	if summary, known := summaries.Cached("broken"); !known || summary != "" {
 		t.Errorf("Cached = %q, %v; want a known-empty summary", summary, known)
+	}
+}
+
+func TestSummaryBaseURL(t *testing.T) {
+	// Whoever the index belongs to is who gets asked: pointing frostroot at
+	// a private index must not have it telling pypi.org what was looked up.
+	for indexURL, want := range map[string]string{
+		"":                                "https://pypi.org/pypi",
+		PyPIIndexURL:                      "https://pypi.org/pypi",
+		"https://devpi.corp/root/simple/": "https://devpi.corp/root/pypi",
+		"https://devpi.corp/root/simple":  "https://devpi.corp/root/pypi",
+		"http://127.0.0.1:8099":           "http://127.0.0.1:8099/pypi",
+	} {
+		if got := SummaryBaseURL(indexURL); got != want {
+			t.Errorf("SummaryBaseURL(%q) = %q, want %q", indexURL, got, want)
+		}
 	}
 }
