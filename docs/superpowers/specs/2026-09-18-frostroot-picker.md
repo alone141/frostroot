@@ -90,9 +90,10 @@ type Options struct {
 }
 
 func (*Index) Search(query, section string, limit int) (matches []Entry, total int)
+func (*Index) Lookup(name string) (Entry, bool)  // the exact name, by binary search
 func (*Index) Has(name string) bool
 func (*Index) Nearest(name string, limit int) []string
-func (*Index) Sections() []SectionCount   // for the current release, largest first
+func (*Index) SectionsMatching(query string) []SectionCount // largest first
 func (*Index) Describe() string           // "noble · 85,855 packages · fetched 2 days ago"
 ```
 
@@ -336,8 +337,43 @@ component with the driver: search, add, remove, the as-typed row, the
 section list, paste, loading, no index, Tab away mid-fetch. Golden frames at
 80×24, 120×40, 60×20 and ASCII.
 
-On the build host: a first `init` that fetches with the progress line on
-screen; a second that starts from the cache with no network traffic; one
-with the network cut and no cache; one with `ninja-buld` typed, seeing the
-warning and the recipe still written; `--plain` with and without a cache;
-`--mirror` pointed at a local copy of the archive.
+On the build host, all of it done (2026-09-18):
+
+- **The form, through a pseudo-terminal.** `script` never drew anything,
+  because lipgloss asks the terminal for its background color (OSC 11) and
+  Bubble Tea for the cursor position, and `script` answers neither. A driver
+  that answers both, sends keys when the screen shows what each step waits
+  for, and renders what comes back, ran `init` at 100×32 and 80×24: the
+  first run showed "fetching the package index" and 22 readings up to
+  `21.4 MB`, and had the index 3.6 s after the field was reached; a second
+  run had it from the cache when the field appeared. `ninja-buld` was
+  offered as typed, added, marked `? not in the archive`, and warned about
+  on the last page with `nearest: ninja-build` — the recipe was written all
+  the same. `cmake` found 26 packages, `/` listed the sections holding them
+  with counts, and Down then Space picked `cmake-doc` with the query left
+  standing. The summary with its warning fitted 24 rows.
+- **Where the index comes from.** With `--mirror` at a local copy of the
+  archive the form made exactly ten requests — two `InRelease`, eight
+  `Packages.xz` — and the cache file's header named that mirror, so the
+  default archive's cache was not used for it and the other way round. With
+  `--mirror` at a dead port and no cache the field said the index was not
+  available, took `htop` as typed, and the recipe was written. `--plain`
+  made no request at all: silent without a cache, and with one printing the
+  same warning between the summary and the recipe, in `init` and in `edit`.
+- **The components, on images.** The lock v0.8.0 wrote, naming
+  `main universe`, rebuilt offline by this version to `1ff441b7…`, the
+  `sha256sum` v0.8.0 produced, with its own two-component `sources.list`
+  inside: an existing lock is untouched. A new recipe with `git` and
+  `unrar` built online in 433 s, locking `unrar` as
+  `pool/multiverse/u/unrar-nonfree/…` and its other 258 packages from
+  `main`, with four components in the lock's `sources` and in the image's
+  `sources.list`; vendored and rebuilt offline twice to one `sha256sum`
+  (`2f888fc2…`), `/usr/bin/unrar` inside. The online build differs from its
+  offline rebuild, as it always has.
+- **What four components change.** Of everything in noble's `main` and
+  `universe`, 28 packages recommend something only `restricted` or
+  `multiverse` provides: blends and games, none in `main`, none in the
+  catalog, none in any lock built so far.
+
+Not checked by a person: how the picker feels in Windows Terminal. The
+driver sees what is drawn, not whether it is pleasant.
