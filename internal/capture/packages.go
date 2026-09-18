@@ -89,10 +89,53 @@ func (root systemRoot) autoInstalled() (auto map[string]bool, found bool) {
 	return auto, len(auto) > 0
 }
 
+// Packages that belong to the machine rather than to the image: a kernel, a
+// bootloader, firmware, drivers and the tools that assemble a disk. An
+// installer marks them manual, so they read as packages someone asked for,
+// but WSL brings its own kernel and has no bootloader and no disks to
+// assemble. In an image they are dead weight, and their maintainer scripts
+// (update-initramfs, grub hooks) make every build slower.
+//
+// Matched by whole name, by prefix and by suffix rather than by a bare
+// "linux-" prefix, because linux-tools-* is perf and friends, which are
+// useful inside WSL and must not be swept up with the rest.
+var (
+	machinePackageNames = []string{
+		"linux-firmware", "shim-signed", "ubuntu-drivers-common", "efibootmgr",
+		"os-prober", "initramfs-tools", "cryptsetup-initramfs", "mdadm", "lvm2",
+	}
+	machinePackagePrefixes = []string{
+		"linux-image-", "linux-headers-", "linux-modules-", "linux-generic",
+		"grub-", "nvidia-driver-", "nvidia-dkms-",
+	}
+	machinePackageSuffixes = []string{"-microcode"}
+)
+
+// belongsToTheMachine reports whether a package describes the hardware the
+// system runs on rather than the software an image should hold.
+func belongsToTheMachine(name string) bool {
+	if slices.Contains(machinePackageNames, name) {
+		return true
+	}
+	for _, prefix := range machinePackagePrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	for _, suffix := range machinePackageSuffixes {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 // requestedPackages returns the packages someone asked for, in name order:
 // installed, not automatic, not part of the base a build provides anyway.
-// dropped lists names that fail the recipe's package rule.
-func requestedPackages(installed []installedPackage, auto map[string]bool) (requested, dropped []string) {
+// dropped lists names that fail the recipe's package rule, and machine lists
+// the ones that belong to the hardware; both are reported rather than
+// written, since the form's free-text field has no "present but unselected".
+func requestedPackages(installed []installedPackage, auto map[string]bool) (requested, dropped, machine []string) {
 	for _, pkg := range installed {
 		switch {
 		case auto[pkg.name],
@@ -105,9 +148,13 @@ func requestedPackages(installed []installedPackage, auto map[string]bool) (requ
 			dropped = append(dropped, pkg.name)
 			continue
 		}
+		if belongsToTheMachine(pkg.name) {
+			machine = append(machine, pkg.name)
+			continue
+		}
 		requested = append(requested, pkg.name)
 	}
-	return requested, dropped
+	return requested, dropped, machine
 }
 
 // dpkgArchitecture returns the architecture of the dpkg package itself,

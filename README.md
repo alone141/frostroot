@@ -598,6 +598,17 @@ reads would find them. `/etc/ssl/certs` is not copied: `update-ca-certificates`
 regenerates it from that directory and from the `ca-certificates` package, so
 a certificate only found there is reported instead, with what to do about it.
 
+A machine installed from the Ubuntu installer needs two things said about
+it. Its package list is long, because the installer marks much of its seed
+as manually installed and capture cannot tell those from what you chose.
+And its kernel, bootloader, firmware and drivers — `linux-image-*`,
+`grub-*`, `linux-firmware`, `*-microcode`, `nvidia-driver-*`, `mdadm`,
+`lvm2` and the rest — belong to the machine, not to an image: WSL supplies
+its own kernel and has no bootloader or disks to assemble. Capture leaves
+those out and lists every one under "Packages that belong to the machine",
+so you can put back any you meant. `linux-tools-*` is not among them: perf
+is useful inside WSL. Snaps stay report-only.
+
 Two rules, both deliberate:
 
 - **It reports what it could not see.** apt is the only thing a recipe

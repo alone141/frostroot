@@ -24,6 +24,7 @@ type Finding struct {
 const (
 	AreaThirdPartySources  = "Third-party apt sources"
 	AreaUnaccountedTrust   = "Certificate authorities not carried"
+	AreaMachinePackages    = "Packages that belong to the machine"
 	AreaThirdPartyPackages = "Packages from third-party sources"
 	AreaUnsourcedPackages  = "Packages from no known source"
 	AreaModifiedConfig     = "Modified configuration files"
@@ -104,6 +105,22 @@ func thirdPartyPackageFindings(requested []string, origins packageOrigins, carri
 	}
 	thirdParty.Count, unsourced.Count = len(thirdParty.Examples), len(unsourced.Examples)
 	return thirdParty, unsourced
+}
+
+// machinePackageFinding lists the packages capture left out because they
+// describe the hardware rather than the image: a kernel, a bootloader,
+// firmware, drivers and the tools that assemble a disk. An installer marks
+// them manual, so a recipe captured from a physical machine or a VM would
+// otherwise carry them, and WSL has its own kernel and no bootloader.
+//
+// They are left out rather than written, and never silently: the form's
+// "Other packages" field has no "present but unselected" state, so listing
+// every one here is what lets a person put back any they meant.
+func machinePackageFinding(machinePackages []string) Finding {
+	return Finding{
+		Area: AreaMachinePackages, Count: len(machinePackages), Examples: machinePackages,
+		Advice: "These were left out of the recipe: WSL supplies its own kernel and has no bootloader or disks to assemble, so in an image they are dead weight whose maintainer scripts slow every build. Add back any you meant under \"Other packages\" in the form.",
+	}
 }
 
 // modifiedConfigFinding lists edited package configuration files.

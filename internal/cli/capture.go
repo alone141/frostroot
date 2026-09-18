@@ -94,7 +94,11 @@ func captureNoteText(snapshot capture.Snapshot) string {
 	if count := len(snapshot.Certificates); count > 0 {
 		fmt.Fprintf(&text, ", %d certificate authorities", count)
 	}
-	text.WriteString(".\n\nA recipe cannot carry:\n")
+	text.WriteString(".\n")
+	if machine := snapshot.Finding(capture.AreaMachinePackages); machine.Count > 0 {
+		fmt.Fprintf(&text, "\n%d packages belong to the machine, not the image (kernel, bootloader, firmware,\ndrivers). They are left out; the report lists every one.\n", machine.Count)
+	}
+	text.WriteString("\nA recipe cannot carry:\n")
 	for _, line := range snapshot.Summary() {
 		text.WriteString("  " + line + "\n")
 	}

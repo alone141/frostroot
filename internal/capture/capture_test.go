@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -685,5 +686,78 @@ func TestCaptureReportsTrustNoPackageOwns(t *testing.T) {
 	// Without dpkg's file lists the area is unavailable, not empty.
 	if unavailable := root.unaccountedTrustFinding(nil, false, nil); unavailable.Unavailable == "" {
 		t.Error("with no ownership data the area must say it could not be checked")
+	}
+}
+
+// TestCaptureLeavesOutPackagesThatBelongToTheMachine: capture works on any
+// amd64 Ubuntu root, including one installed from the Ubuntu installer,
+// which marks its kernel, bootloader, firmware and drivers as manual. Those
+// read as packages someone asked for, and WSL has its own kernel and no
+// bootloader, so carrying them is dead weight whose maintainer scripts slow
+// every build. They are left out, and never silently.
+func TestCaptureLeavesOutPackagesThatBelongToTheMachine(t *testing.T) {
+	var status strings.Builder
+	machine := []string{
+		"linux-image-generic", "linux-headers-6.8.0-45", "linux-modules-6.8.0-45",
+		"linux-generic-hwe-24.04", "linux-firmware", "grub-efi-amd64", "shim-signed",
+		"intel-microcode", "amd64-microcode", "nvidia-driver-550", "nvidia-dkms-550",
+		"ubuntu-drivers-common", "efibootmgr", "os-prober", "initramfs-tools",
+		"cryptsetup-initramfs", "mdadm", "lvm2",
+	}
+	// linux-tools-* is perf and friends, useful inside WSL: a bare "linux-"
+	// prefix would sweep it up with the kernel, and must not.
+	keep := []string{"build-essential", "git", "linux-tools-generic", "linux-tools-common"}
+	for _, name := range append(append([]string{}, machine...), keep...) {
+		fmt.Fprintf(&status, "Package: %s\nStatus: install ok installed\nPriority: optional\nArchitecture: amd64\n\n", name)
+	}
+	fmt.Fprint(&status, "Package: dpkg\nStatus: install ok installed\nPriority: required\nArchitecture: amd64\n\n")
+
+	root := buildRoot(t, map[string]string{
+		"etc/os-release":      "ID=ubuntu\nVERSION_ID=\"24.04\"\n",
+		"etc/hostname":        "server\n",
+		"etc/passwd":          "root:x:0:0::/root:/bin/bash\nadmin:x:1000:1000::/home/admin:/bin/bash\n",
+		"var/lib/dpkg/status": status.String(),
+	})
+	snapshot, err := Read(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range machine {
+		if slices.Contains(snapshot.Packages, name) {
+			t.Errorf("%s belongs to the machine and must not be in the recipe", name)
+		}
+	}
+	for _, name := range keep {
+		if !slices.Contains(snapshot.Packages, name) {
+			t.Errorf("%s is useful in an image and must stay in the recipe", name)
+		}
+	}
+	finding := snapshot.Finding(AreaMachinePackages)
+	if finding.Count != len(machine) {
+		t.Errorf("finding count = %d, want %d: %v", finding.Count, len(machine), finding.Examples)
+	}
+	for _, name := range machine {
+		if !slices.Contains(finding.Examples, name) {
+			t.Errorf("%s was left out without being reported", name)
+		}
+	}
+}
+
+// A WSL root has none of them, and the area reports nothing found rather
+// than going missing.
+func TestCaptureMachinePackagesAreNothingOnAWSLRoot(t *testing.T) {
+	root := buildRoot(t, map[string]string{
+		"etc/os-release":      "ID=ubuntu\nVERSION_ID=\"24.04\"\n",
+		"etc/hostname":        "wsl\n",
+		"etc/passwd":          "root:x:0:0::/root:/bin/bash\nmelik:x:1000:1000::/home/melik:/bin/bash\n",
+		"var/lib/dpkg/status": "Package: dpkg\nStatus: install ok installed\nPriority: required\nArchitecture: amd64\n\nPackage: git\nStatus: install ok installed\nPriority: optional\nArchitecture: amd64\n\n",
+	})
+	snapshot, err := Read(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finding := snapshot.Finding(AreaMachinePackages)
+	if finding.Area != AreaMachinePackages || finding.Count != 0 {
+		t.Errorf("finding = %+v, want the area present with nothing found", finding)
 	}
 }

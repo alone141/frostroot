@@ -116,7 +116,7 @@ func Read(rootDir string) (Snapshot, error) {
 	snapshot.InstalledCount = len(installed)
 
 	auto, haveAutoMarks := root.autoInstalled()
-	requested, dropped := requestedPackages(installed, auto)
+	requested, dropped, machinePackages := requestedPackages(installed, auto)
 	snapshot.Packages = requested
 	switch {
 	case haveAutoMarks:
@@ -126,6 +126,9 @@ func Read(rootDir string) (Snapshot, error) {
 	}
 	if len(dropped) > 0 {
 		snapshot.note("dropped %d installed names that are not valid apt package names: %v", len(dropped), dropped)
+	}
+	if len(machinePackages) > 0 {
+		snapshot.note("left out %d packages that belong to the machine rather than the image (kernel, bootloader, firmware, drivers)", len(machinePackages))
 	}
 
 	snapshot.readIdentity(root)
@@ -167,6 +170,7 @@ func Read(rootDir string) (Snapshot, error) {
 	snapshot.Findings = []Finding{
 		thirdPartySourceFinding(left),
 		unaccounted,
+		machinePackageFinding(machinePackages),
 		thirdParty,
 		unsourced,
 		modifiedConfigFinding(root.modifiedConffiles(installed)),
@@ -286,4 +290,15 @@ func (s *Snapshot) readLocaleAndTimezone(root systemRoot) {
 		s.Timezone = fallbackTimezone
 		s.note("timezone %q: neither /etc/timezone nor the /etc/localtime link names a zone", fallbackTimezone)
 	}
+}
+
+// Finding returns the finding for an area, or the zero Finding when the
+// snapshot has none for it. The intro note asks for one area by name.
+func (s Snapshot) Finding(area string) Finding {
+	for _, finding := range s.Findings {
+		if finding.Area == area {
+			return finding
+		}
+	}
+	return Finding{}
 }
