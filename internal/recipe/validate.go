@@ -7,6 +7,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"frostroot/internal/distro"
@@ -158,7 +159,7 @@ func CheckSource(source Source) []error {
 // "deb" line.
 func CheckSourceURL(sourceURL string) error {
 	parsed, err := url.Parse(sourceURL)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || strings.ContainsAny(sourceURL, " \t\r\n[]") {
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.Fragment != "" || strings.ContainsAny(sourceURL, " \t\r\n[]") {
 		return fmt.Errorf("invalid source url %q (expected http or https, such as https://download.docker.com/linux/ubuntu)", sourceURL)
 	}
 	return nil
@@ -206,6 +207,18 @@ func CertificateName(certificatePath string) string {
 	return strings.TrimSuffix(base, path.Ext(base))
 }
 
+// CertificateInstallFileName is the file name a certificate lands under in
+// /usr/local/share/ca-certificates: the first certificate of a file keeps
+// CertificateName plus .crt; later ones get -2, -3 and so on. index is
+// zero-based inside that file.
+func CertificateInstallFileName(certificatePath string, index int) string {
+	name := CertificateName(certificatePath)
+	if index <= 0 {
+		return name + ".crt"
+	}
+	return name + "-" + strconv.Itoa(index+1) + ".crt"
+}
+
 // CertificatePath returns the absolute path of a recipe's certificate file.
 func CertificatePath(recipeDir, certificatePath string) string {
 	return filepath.Join(recipeDir, filepath.FromSlash(certificatePath))
@@ -216,6 +229,7 @@ func CertificatePath(recipeDir, certificatePath string) string {
 // failing file. Validate cannot do this: it has no directory.
 func CheckCertificateFiles(recipeDir string, certificatePaths []string) []string {
 	var problems []string
+	takenFileNames := map[string]string{}
 	for _, certificatePath := range certificatePaths {
 		if CheckCertificatePath(certificatePath) != nil {
 			continue // already reported by Validate
@@ -225,8 +239,18 @@ func CheckCertificateFiles(recipeDir string, certificatePaths []string) []string
 			problems = append(problems, fmt.Sprintf("certificate %s: %v", certificatePath, err))
 			continue
 		}
-		if _, err := pki.ParseCertificates(data); err != nil {
+		certificates, err := pki.ParseCertificates(data)
+		if err != nil {
 			problems = append(problems, fmt.Sprintf("certificate %s: %v", certificatePath, err))
+			continue
+		}
+		for index := range certificates {
+			fileName := CertificateInstallFileName(certificatePath, index)
+			if owner, taken := takenFileNames[fileName]; taken {
+				problems = append(problems, fmt.Sprintf("certificate %s and %s would both install as %s", owner, certificatePath, fileName))
+				continue
+			}
+			takenFileNames[fileName] = certificatePath
 		}
 	}
 	return problems

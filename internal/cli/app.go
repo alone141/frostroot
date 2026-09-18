@@ -51,6 +51,17 @@ func (a *App) trustPool(path string) (*x509.CertPool, bool) {
 	return trusted, true
 }
 
+// applyKeyClientTrust sets the default signing-key HTTPS client to verify
+// against trusted. Tests that inject their own KeyClient are left alone.
+func (a *App) applyKeyClientTrust(trusted *x509.CertPool) {
+	client, isHTTP := a.KeyClient.(sources.HTTPClient)
+	if !isHTTP {
+		return
+	}
+	client.RootCAs = trusted
+	a.KeyClient = client
+}
+
 // recipeFileName is the recipe every command works on, in App.RecipeDir.
 const recipeFileName = "frostroot.toml"
 
@@ -248,9 +259,22 @@ func (a *App) parseFlags(flags *flag.FlagSet, args []string) (exitCode int, stop
 	return exitSuccess, false
 }
 
-// loadRecipe loads and validates the recipe, printing every problem. ok is
-// false when the command should stop with exitUserError.
+// loadRecipe loads and validates the recipe, including that every source
+// key and certificate file is in place. ok is false when the command should
+// stop with exitUserError. edit uses loadRecipeForEdit instead, so it can
+// fetch missing keys.
 func (a *App) loadRecipe() (imageRecipe recipe.Recipe, ok bool) {
+	return a.loadRecipeChecking(true)
+}
+
+// loadRecipeForEdit loads a syntactically valid recipe even when key or
+// certificate files are not there yet. fetchMissingKeys writes the keys
+// after the form; a missing certificate is reported by the form field.
+func (a *App) loadRecipeForEdit() (imageRecipe recipe.Recipe, ok bool) {
+	return a.loadRecipeChecking(false)
+}
+
+func (a *App) loadRecipeChecking(requireFiles bool) (imageRecipe recipe.Recipe, ok bool) {
 	recipePath := filepath.Join(a.RecipeDir, recipeFileName)
 	imageRecipe, err := recipe.Load(recipePath)
 	if err != nil {
@@ -262,7 +286,7 @@ func (a *App) loadRecipe() (imageRecipe recipe.Recipe, ok bool) {
 		return recipe.Recipe{}, false
 	}
 	problems := recipe.Validate(imageRecipe)
-	if len(problems) == 0 {
+	if requireFiles && len(problems) == 0 {
 		// Only once the fields are right: a bad key path is reported above.
 		problems = recipe.CheckSourceKeys(a.RecipeDir, imageRecipe.Sources)
 		if len(problems) > 0 {

@@ -266,6 +266,14 @@ func MergeSources(selected []string, ppasText string, original []recipe.Source, 
 		if (isRecognized && !wantedByName[source.Name]) || listed[source.Name] {
 			continue // deselected, or a duplicate
 		}
+		if entry, isCatalog := sources.Lookup(source.Name); isCatalog && catalogDefaultForAnySuite(entry, source) {
+			// Still the catalog row, possibly for an older release: resolve
+			// it for the release being written. A URL or suite the user
+			// edited by hand is not equal to any catalog default and is kept.
+			listed[source.Name] = true
+			merged = append(merged, entry.Source(releaseSuite))
+			continue
+		}
 		listed[source.Name] = true
 		merged = append(merged, source)
 	}
@@ -276,6 +284,26 @@ func MergeSources(selected []string, ppasText string, original []recipe.Source, 
 		}
 	}
 	return merged
+}
+
+// catalogDefaultForAnySuite reports whether source is the catalog entry as
+// resolved for some Ubuntu release frostroot builds. That is the unedited
+// row init writes; edit that only changes the release must rewrite it.
+func catalogDefaultForAnySuite(entry sources.Entry, source recipe.Source) bool {
+	for _, version := range distro.SupportedVersions() {
+		release, err := distro.Lookup(version, distro.SupportedArch)
+		if err != nil {
+			continue
+		}
+		if sourcesEqual(source, entry.Source(release.Suite)) {
+			return true
+		}
+	}
+	return false
+}
+
+func sourcesEqual(left, right recipe.Source) bool {
+	return left.Name == right.Name && left.URL == right.URL && left.Suite == right.Suite && left.Key == right.Key && slices.Equal(left.Components, right.Components)
 }
 
 // MergePackages returns the package list a recipe should carry: every

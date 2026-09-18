@@ -277,6 +277,26 @@ func TestMergeSources(t *testing.T) {
 	}
 }
 
+func TestMergeSourcesRewritesUneditedCatalogEntriesForTheNewRelease(t *testing.T) {
+	// edit that only changes the Ubuntu release must not leave LLVM on
+	// jammy: the catalog URL and suite embed {suite}. A hand-edited URL
+	// stays as typed.
+	llvm, _ := sources.Lookup("llvm")
+	docker, _ := sources.Lookup("docker")
+	custom := recipe.Source{Name: "corp", URL: "https://apt.corp.example/ubuntu", Key: "keys/corp.asc"}
+	editedDocker := recipe.Source{Name: "docker", URL: "https://mirror.example/docker", Components: []string{"stable"}, Key: "keys/docker.asc"}
+	got := MergeSources([]string{"llvm", "docker"}, "", []recipe.Source{llvm.Source("jammy"), custom, editedDocker}, "noble")
+	want := []recipe.Source{llvm.Source("noble"), custom, editedDocker}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("MergeSources =\n%+v\nwant\n%+v", got, want)
+	}
+	// Docker's catalog row has no {suite}; jammy and noble resolve the same.
+	got = MergeSources([]string{"docker"}, "", []recipe.Source{docker.Source("jammy")}, "noble")
+	if !reflect.DeepEqual(got, []recipe.Source{docker.Source("noble")}) {
+		t.Errorf("docker = %+v, want the catalog row for noble", got)
+	}
+}
+
 func TestToRecipeResolvesSourcesForTheRelease(t *testing.T) {
 	values := Defaults(noHost)
 	values[KeyRelease] = "22.04"

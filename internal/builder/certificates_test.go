@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -188,6 +189,26 @@ func TestWriteAptCaInfoPutsTheHostsCertificatesFirst(t *testing.T) {
 	hostPEM, hostErr := os.ReadFile(HostTrustPath)
 	if hostErr == nil && !strings.HasPrefix(string(written), string(hostPEM)) {
 		t.Error("the host's own certificates are not at the front of the bundle")
+	}
+}
+
+func TestWriteAptCaInfoIsWorldReadableWhateverTheUmask(t *testing.T) {
+	// apt inside mmdebstrap unshare is "other" to this file. WriteFile's
+	// mode is masked by the umask; chmod after write is what writeStageFile
+	// already does for the provision scripts.
+	previous := syscall.Umask(0o077)
+	t.Cleanup(func() { syscall.Umask(previous) })
+
+	path, err := writeAptCaInfo(t.TempDir(), certificatePEM(t, "Corp Root CA"))
+	if err != nil {
+		t.Fatalf("writeAptCaInfo: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o644 {
+		t.Errorf("mode = %v, want 0644 so unshare apt can read Acquire::https::CaInfo", mode)
 	}
 }
 

@@ -90,6 +90,7 @@ func TestValidateSources(t *testing.T) {
 		{"ftp url", func(source *Source) { source.URL = "ftp://x/y" }, "source url"},
 		{"url without host", func(source *Source) { source.URL = "https:///y" }, "source url"},
 		{"url with space", func(source *Source) { source.URL = "https://x/a b" }, "source url"},
+		{"url with fragment", func(source *Source) { source.URL = "https://download.docker.com/linux/ubuntu#stable" }, "source url"},
 		{"url with bracket", func(source *Source) { source.URL = "https://x/a]" }, "source url"},
 		{"empty url", func(source *Source) { source.URL = "" }, "source url"},
 		{"suite with space", func(source *Source) { source.Suite = "noble main" }, "suite"},

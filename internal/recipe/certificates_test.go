@@ -164,3 +164,26 @@ func TestCheckCertificateFilesReadsWhatIsThere(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckCertificateFilesReportsInstallNameCollisionsAfterABundleSplit(t *testing.T) {
+	// corp.pem holding two certificates installs as corp.crt and corp-2.crt;
+	// a second file named corp-2.pem would also install as corp-2.crt.
+	recipeDir := t.TempDir()
+	writeCertificate(t, filepath.Join(recipeDir, "certs", "corp.pem"))
+	writeCertificate(t, filepath.Join(recipeDir, "certs", "corp-2.pem"))
+	first, err := os.ReadFile(filepath.Join(recipeDir, "certs", "corp.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := os.ReadFile(filepath.Join(recipeDir, "certs", "corp-2.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(recipeDir, "certs", "corp.pem"), append(first, second...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	problems := CheckCertificateFiles(recipeDir, []string{"certs/corp.pem", "certs/corp-2.pem"})
+	if len(problems) != 1 || !strings.Contains(problems[0], "corp-2.crt") {
+		t.Errorf("CheckCertificateFiles reported %v, want a collision on corp-2.crt", problems)
+	}
+}
