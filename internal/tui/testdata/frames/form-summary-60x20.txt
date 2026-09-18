@@ -1,0 +1,13 @@
+  Summary
+  Image     lab, Ubuntu 24.04 amd64
+  User      student, passwordless sudo
+  System    UTC, enUS.UTF-8, systemd on
+  Packages  none
+  Sources   Ubuntu's archive only
+
+
+┃ Write frostroot.toml?
+┃
+┃   Write     Cancel
+
+←/→ toggle • enter submit • y Write • n Cancel
