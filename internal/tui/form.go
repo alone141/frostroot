@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
@@ -140,10 +141,20 @@ func (m *formModel) View() string {
 func newSummaryForm(summary string, write *bool) *huh.Form {
 	*write = true
 	return huh.NewForm(huh.NewGroup(
-		huh.NewNote().Title("Summary").Description(summary),
+		huh.NewNote().Title("Summary").Description(noteText(summary)),
 		huh.NewConfirm().Title("Write frostroot.toml?").Affirmative("Write").Negative("Cancel").Value(write),
 	))
 }
+
+// noteMarkup escapes what a huh note reads as markup. Its description is
+// rendered with a small markup language in which "_" and "*" toggle italic
+// and bold and "`" opens a code span, so the summary showed en_US.UTF-8 as
+// enUS.UTF-8 with everything after it in italics. A backslash makes the
+// next character literal.
+var noteMarkup = strings.NewReplacer(`\`, `\\`, "_", `\_`, "*", `\*`, "`", "\\`")
+
+// noteText returns text as a huh note shows it verbatim.
+func noteText(text string) string { return noteMarkup.Replace(text) }
 
 // formTheme is the look of every form. Base16 uses the terminal's own
 // sixteen colors, so it follows the user's palette on light and dark
