@@ -439,11 +439,20 @@ func (p *pickerField) refresh() {
 		}
 	}
 	exact := len(p.rows) > 0 && p.rows[0].name == query
-	if query != "" && !exact && recipe.CheckPackageName(query) == nil {
-		// What was typed comes first, so that Space after a whole name adds
-		// that name and never a neighbor the search ranked first.
-		p.rows = append([]pickerRow{{name: query, asTyped: true}}, p.rows...)
+	if query == "" || exact || recipe.CheckPackageName(query) != nil {
+		return
 	}
+	// What was typed comes first, so that Space after a whole name adds that
+	// name and never a neighbor the search ranked first. The archive may
+	// well have it: a section filter hides a package of another section
+	// from the search, and that is no reason to call it missing.
+	first := pickerRow{name: query, asTyped: true}
+	if index != nil {
+		if match, isThere := index.Lookup(query); isThere {
+			first = pickerRow{name: match.Name, version: match.Version, description: match.Description}
+		}
+	}
+	p.rows = append([]pickerRow{first}, p.rows...)
 }
 
 // chosenRow describes a chosen name for the list.
