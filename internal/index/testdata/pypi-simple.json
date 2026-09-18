@@ -1,0 +1,53 @@
+{
+ "meta": {
+  "_last-serial": 41214155,
+  "api-version": "1.4"
+ },
+ "projects": [
+  {
+   "name": "requests"
+  },
+  {
+   "name": "requests-oauthlib"
+  },
+  {
+   "name": "requests-toolbelt"
+  },
+  {
+   "name": "requests-cache"
+  },
+  {
+   "name": "numpy"
+  },
+  {
+   "name": "Django"
+  },
+  {
+   "name": "Flask"
+  },
+  {
+   "name": "Flask-SQLAlchemy"
+  },
+  {
+   "name": "pytest"
+  },
+  {
+   "name": "httpx"
+  },
+  {
+   "name": "pillow"
+  },
+  {
+   "name": "scikit-learn"
+  },
+  {
+   "name": "zope.interface"
+  },
+  {
+   "name": "rich"
+  },
+  {
+   "name": "urllib3"
+  }
+ ]
+}
