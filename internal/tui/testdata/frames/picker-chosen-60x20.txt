@@ -4,7 +4,7 @@ Packages
 ┃ > type to search, or a name
 ┃ all sections · noble · 85,574 packages · fetched 2 days a…
 ┃ > [•] valgrind    instrumentation framework for building …
-┃   [•] ninja-buld  ? not in the archive
+┃   [•] ninja-buld  ? not in the index
 ┃   [•] meson       high-productivity build system
 ┃
 ┃
@@ -15,7 +15,7 @@ Packages
 ┃
 
   Python packages
-  installed from PyPI into the image's virtual environment,
-  separated by spaces or commas
+  type to search PyPI, or a name; installed into the image'…
+  > type to search, or a name
 
 ↑/↓ move • space add/remove • / section • shift+tab back …
