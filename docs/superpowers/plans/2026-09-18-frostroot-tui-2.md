@@ -1,4 +1,4 @@
-# frostroot TUI Improvement Plan: v0.10 and v0.11
+# frostroot TUI Improvement Plan: v0.9 and v0.10
 
 What the full-screen interface should do next, in two releases, from a
 walk-through of what it does today. Branch `feature/tui-2`, from `master`
@@ -11,9 +11,9 @@ form writes `frostroot.toml` and nothing else; `build` never prompts; the
 recipe stays the only source of truth, so anything the form can produce is
 also hand-writable and reviewable in git. Every task below respects it.
 
-**Two releases, because they are two kinds of work.** v0.10 is a set of
+**Two releases, because they are two kinds of work.** v0.9 is a set of
 small, independent improvements to what already exists, each an afternoon,
-none needing a spike. v0.11 is one feature — the package picker issue #10
+none needing a spike. v0.10 is one feature — the package picker issue #10
 asked for — and it needs a spike, a cache and a new widget.
 
 ## What the interface does today, and where it falls short
@@ -45,7 +45,8 @@ and stays. What does not:
 4. **The form cannot say everything a recipe can.** `[certificates]` has no
    field — v0.8 carries it through `edit` invisibly, so a user cannot *add*
    one in the form. A hand-written `[[sources]]` entry is likewise carried
-   but not editable. `index_url` will join this list when v0.9 lands.
+   but not editable. `index_url` will join this list when the parked
+   internal-index work lands.
 5. **`capture` decides before it tells you.** The findings — what capture
    saw and what a recipe cannot carry — go to `frostroot-capture.md` and to
    a list printed *after* the form closes. The user answers the packages
@@ -77,7 +78,7 @@ Solid; `vendor` reuses it. What does not work as well:
    cannot be fixed with confidence, and a Charm upgrade can move things
    without a test noticing.
 
-## v0.10: see what you are about to do, and why it failed
+## v0.9: see what you are about to do, and why it failed
 
 Six tasks. Task 0 is the enabler for every other; after it they are
 independent and can land in any order.
@@ -172,7 +173,7 @@ as they are.
   · 0:12 left`), from a ten-second window of the progress events, hidden
   until the window is full. Counts and spinners are unchanged.
 
-### v0.10 verification
+### v0.9 verification
 
 `go test ./...` offline. Then, for real, in Windows Terminal running the
 WSL distribution and in VS Code's integrated terminal, light and dark: the
@@ -182,7 +183,7 @@ misspelled package, checking the `E:` line is on screen after the teardown
 without opening the log; a build under `LANG=C`; and Ctrl-C mid-build,
 which must still wait. The README's "Verification" section records it.
 
-## v0.11: the package picker (issue #10)
+## v0.10: the package picker (issue #10)
 
 One feature: on the Packages page, a **Find a package** field that searches
 the release's whole archive by name and description as you type, adds with
