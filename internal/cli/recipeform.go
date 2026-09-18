@@ -3,19 +3,22 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"frostroot/internal/form"
 	"frostroot/internal/pgp"
 	"frostroot/internal/recipe"
 	"frostroot/internal/sources"
+	"frostroot/internal/textdiff"
 	"frostroot/internal/tui"
 )
 
 // host is what the form may read from this machine.
-func (a *App) host() form.Host { return form.Host{ReadFile: a.ReadFile} }
+func (a *App) host() form.Host { return form.Host{ReadFile: a.ReadFile, RecipeDir: a.RecipeDir} }
 
 // useFullScreen reports whether a command should show the full-screen
 // interface: only when the user asked for nothing else and both standard
@@ -43,15 +46,17 @@ func isCharacterDevice(stream any) bool {
 // Nothing is written unless every answer validates and the user confirms.
 // providedKeys are armored signing keys by source name that the caller
 // already has (capture read them from the machine); other missing keys are
-// fetched.
-func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath string, plainRequested bool, providedKeys map[string][]byte) int {
-	fields := form.Fields(a.host())
+// fetched. intro is shown before the questions: what capture has to say,
+// or nothing.
+func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath string, plainRequested bool, providedKeys map[string][]byte, intro []form.Field) int {
+	fields := slices.Concat(intro, form.Fields(a.host()))
 	fullScreen := a.useFullScreen(plainRequested)
+	preview := recipePreview(recipePath)
 	var values form.Values
 	var problems []string
 	var err error
 	if fullScreen {
-		values, err = tui.RunForm(context.Background(), fields, initial, a.Stdin, a.Stdout)
+		values, err = tui.RunForm(context.Background(), fields, initial, preview, a.Stdin, a.Stdout)
 	} else {
 		values, problems, err = a.askFieldsPlain(fields, initial)
 	}
@@ -74,17 +79,25 @@ func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath 
 		return exitUserError
 	}
 	if !fullScreen {
-		// The full-screen form confirmed on its summary page; the plain
-		// interface confirms here.
-		a.stdoutf("\n%s\n\n", form.Summary(values))
-		write, err := a.askYesNo("Write "+recipeFileName+"?", true)
+		// The full-screen form confirmed on its summary page, with the
+		// preview above the question; the plain interface shows the same
+		// and confirms here.
+		shown := preview(values)
+		a.stdoutf("\n%s\n\n%s\n", form.Summary(values), shown.Heading)
+		if shown.Text != "" {
+			a.stdoutf("\n%s\n", strings.TrimRight(shown.Text, "\n"))
+		}
+		question := "Write " + recipeFileName + "?"
+		if shown.Unchanged {
+			question = "Nothing changes. Write anyway?"
+		}
+		write, err := a.askYesNo(question, !shown.Unchanged)
 		if err != nil {
 			a.stderrf("frostroot %s: %v\n", commandName, err)
 			return exitUserError
 		}
 		if !write {
-			a.stderrf("frostroot %s: nothing written\n", commandName)
-			return exitUserError
+			return a.declineToWrite(commandName, shown.Unchanged)
 		}
 	}
 
@@ -101,6 +114,66 @@ func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath 
 		a.stdoutf("Note: Ubuntu 24.04 enforces PEP 668, so pip install outside a virtual environment fails by design. Use: python3 -m venv .venv\n")
 	}
 	return exitSuccess
+}
+
+// declineToWrite reports that the recipe was not written. Declining to
+// rewrite a file that would not change is not an error: nothing was asked
+// for that did not happen.
+func (a *App) declineToWrite(commandName string, unchanged bool) int {
+	if unchanged {
+		a.stdoutf("frostroot %s: nothing changes; nothing written\n", commandName)
+		return exitSuccess
+	}
+	a.stderrf("frostroot %s: nothing written\n", commandName)
+	return exitUserError
+}
+
+// recipePreview returns what the last page of the form shows for the
+// answers so far: the recipe as it will be written when recipePath does
+// not exist yet, and otherwise how the file there will change, because
+// edit and init --force replace it — comments of the user's own included,
+// which the preview says when it sees any.
+func recipePreview(recipePath string) tui.PreviewFunc {
+	current, err := os.ReadFile(recipePath)
+	replacing := err == nil
+	return func(values form.Values) tui.Preview {
+		rendered, err := renderRecipe(form.ToRecipe(values))
+		if err != nil {
+			return tui.Preview{Heading: err.Error()}
+		}
+		if !replacing {
+			return tui.Preview{Heading: "This is what " + recipeFileName + " will say:", Text: rendered}
+		}
+		difference := textdiff.Lines(string(current), rendered)
+		if difference.Changed() == 0 {
+			return tui.Preview{Heading: "Nothing changes: " + recipeFileName + " already says this.", Text: rendered, Unchanged: true}
+		}
+		heading := fmt.Sprintf("%d lines change:", difference.Changed())
+		if difference.Changed() == 1 {
+			heading = "1 line changes:"
+		}
+		if hasOwnComments(string(current), rendered) {
+			heading = strings.TrimSuffix(heading, ":") + "; your own comments in the file are replaced by the template's:"
+		}
+		return tui.Preview{Heading: heading, Text: difference.String()}
+	}
+}
+
+// hasOwnComments reports whether current holds a comment line that the
+// rendered recipe does not: something a person wrote, which the template
+// will not write back.
+func hasOwnComments(current, rendered string) bool {
+	renderedLines := map[string]bool{}
+	for _, line := range strings.Split(rendered, "\n") {
+		renderedLines[strings.TrimSpace(line)] = true
+	}
+	for _, line := range strings.Split(current, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") && !renderedLines[trimmed] {
+			return true
+		}
+	}
+	return false
 }
 
 // fetchMissingKeys writes the signing key of every source whose key file is

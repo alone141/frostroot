@@ -1,0 +1,23 @@
+frostroot build   cpp-lab · Ubuntu 22.04 (jammy, amd64) · http://archive.ubuntu…
+
+  ·  Update package index
+  ·  Download packages
+  ·  Extract archives
+  ·  Install essential packages
+  ·  Install requested packages
+  ·  Provision user, locale and timezone
+  ·  Create tarball
+  ·  Write frostroot.lock
+  ·  Place tarball
+
+╭─ mmdebstrap ─────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+  0s elapsed · Ctrl-C interrupts · l grows the log

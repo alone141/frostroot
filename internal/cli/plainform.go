@@ -33,12 +33,23 @@ func (a *App) askFieldsPlain(fields []form.Field, initial form.Values) (form.Val
 			err = a.askConfirmPlain(field, values, &problems)
 		case form.KindMultiSelect:
 			err = a.askMultiSelectPlain(field, values, &problems)
+		case form.KindNote:
+			a.showNotePlain(field)
 		}
 		if err != nil {
 			return nil, nil, err
 		}
 	}
 	return values, problems, nil
+}
+
+// showNotePlain prints a note: its title, then its text indented, the way
+// the options of a select are.
+func (a *App) showNotePlain(field form.Field) {
+	a.stdoutf("  %s\n", field.Title)
+	for _, line := range strings.Split(strings.TrimRight(field.Description, "\n"), "\n") {
+		a.stdoutf("  %s\n", line)
+	}
 }
 
 func (a *App) askInputPlain(field form.Field, values form.Values, problems *[]string) error {

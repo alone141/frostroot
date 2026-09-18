@@ -90,10 +90,10 @@ func TestValidateReportsAPrivateKeyWhereACertificateBelongs(t *testing.T) {
 	}
 }
 
-func TestEditKeepsCertificatesItNeverAsksAbout(t *testing.T) {
-	// The form has no question about certificate authorities, so an edit
-	// that regenerates the recipe from the template has to write them back
-	// rather than quietly drop the image's trust.
+func TestEditKeepsCertificatesWhenTheAnswerIsKept(t *testing.T) {
+	// An edit regenerates the recipe from the template; keeping the
+	// certificates question's answer has to write the image's trust back
+	// rather than quietly drop it.
 	recipeDir := newRecipeDir(t, "certificates.toml")
 	writeTestCertificate(t, recipeDir, "certs/corp-root.pem")
 

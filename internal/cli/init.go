@@ -89,15 +89,25 @@ func (a *App) runInit(args []string) int {
 		a.stderrf("frostroot: %s already exists; use --force to overwrite it, or frostroot edit to change it\n", recipePath)
 		return exitUserError
 	}
-	return a.runRecipeForm("init", form.Defaults(a.host()), recipePath, *plain, nil)
+	return a.runRecipeForm("init", form.Defaults(a.host()), recipePath, *plain, nil, nil)
+}
+
+// renderRecipe returns imageRecipe as the file init and edit write, byte
+// for byte: the form shows this before asking whether to write it.
+func renderRecipe(imageRecipe recipe.Recipe) (string, error) {
+	var rendered strings.Builder
+	if err := recipeTemplate.Execute(&rendered, imageRecipe); err != nil {
+		return "", fmt.Errorf("rendering recipe: %w", err)
+	}
+	return rendered.String(), nil
 }
 
 // writeRecipe renders imageRecipe to a temporary file next to recipePath,
 // proves that it parses back to the same recipe, and renames it into place.
 func writeRecipe(recipePath string, imageRecipe recipe.Recipe) (err error) {
-	var rendered strings.Builder
-	if err := recipeTemplate.Execute(&rendered, imageRecipe); err != nil {
-		return fmt.Errorf("rendering recipe: %w", err)
+	renderedText, err := renderRecipe(imageRecipe)
+	if err != nil {
+		return err
 	}
 	temporary, err := export.CreateTemp(filepath.Dir(recipePath), ".frostroot.toml.*.tmp")
 	if err != nil {
@@ -112,7 +122,7 @@ func writeRecipe(recipePath string, imageRecipe recipe.Recipe) (err error) {
 			_ = os.Remove(temporaryPath)
 		}
 	}()
-	if _, err = temporary.WriteString(rendered.String()); err != nil {
+	if _, err = temporary.WriteString(renderedText); err != nil {
 		return err
 	}
 	if err = temporary.Close(); err != nil {
@@ -123,7 +133,7 @@ func writeRecipe(recipePath string, imageRecipe recipe.Recipe) (err error) {
 		return err
 	}
 	if !reflect.DeepEqual(reloaded, imageRecipe) {
-		return fmt.Errorf("internal error: the rendered recipe does not parse back to the same recipe:\n%s", rendered.String())
+		return fmt.Errorf("internal error: the rendered recipe does not parse back to the same recipe:\n%s", renderedText)
 	}
 	return os.Rename(temporaryPath, recipePath)
 }

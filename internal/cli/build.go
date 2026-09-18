@@ -216,7 +216,7 @@ func (a *App) reportBuildFailure(err error, interrupted bool, archiveURL, keptWo
 		a.stderrf("frostroot: %v\n", err)
 		return exitUserError
 	default:
-		a.stderrf("frostroot: build failed: %v\n", err)
+		a.reportBuildError(err, keptWorkDir)
 		if archiveURL != vendorDebsDisplayName && containsAny(err.Error(), archiveUnreachableMessages) {
 			a.stderrf("frostroot: could not fetch from %s; check the network, or retry with --mirror URL\n", archiveURL)
 		}
@@ -279,6 +279,26 @@ func formatMegabytes(sizeInBytes int64) string {
 // the reproducible-builds convention reads.
 func formatInstant(epoch int64) string {
 	return time.Unix(epoch, 0).UTC().Format("2006-01-02 15:04:05 UTC")
+}
+
+// reportBuildError prints why the build failed. When mmdebstrap failed, the
+// line of its log that explains it comes first — the whole log is searched,
+// because the explanation is often followed by more output than the tail
+// holds, pip's traceback or apt's cleanup — and the tail of its output
+// after, as before. Any other error is printed as it is.
+func (a *App) reportBuildError(err error, keptWorkDir string) {
+	var bootstrapErr *builder.BootstrapError
+	if !errors.As(err, &bootstrapErr) {
+		a.stderrf("frostroot: build failed: %v\n", err)
+		return
+	}
+	a.stderrf("frostroot: build failed: mmdebstrap failed: %v\n", bootstrapErr.Err)
+	if keptWorkDir != "" {
+		if line, found := builder.FirstErrorLine(filepath.Join(keptWorkDir, builder.LogFileName)); found {
+			a.stderrf("frostroot: the first error in %s, line %d:\n  %s\n", builder.LogFileName, line.Number, line.Text)
+		}
+	}
+	a.stderrf("--- last lines of mmdebstrap output ---\n%s\n", bootstrapErr.Tail)
 }
 
 // reportKeptWorkDir tells the user where a kept work directory and its

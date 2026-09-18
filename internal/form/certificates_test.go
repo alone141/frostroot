@@ -8,8 +8,8 @@ import (
 )
 
 func TestAnEditKeepsTheRecipesCertificates(t *testing.T) {
-	// The form asks nothing about certificate authorities, so a round trip
-	// through it must leave them exactly as they were rather than drop them.
+	// A round trip through the form with the certificates answer untouched
+	// must leave them exactly as they were rather than drop them.
 	original := recipe.Recipe{
 		Image:        recipe.Image{Name: "lab", Release: "24.04", Arch: "amd64"},
 		User:         recipe.User{Name: "student", Sudo: true},

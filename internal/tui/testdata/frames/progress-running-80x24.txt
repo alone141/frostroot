@@ -1,0 +1,23 @@
+frostroot build   cpp-lab · Ubuntu 22.04 (jammy, amd64) · http://archive.ubuntu…
+
+  ✓  Update package index                     9 files                         4s
+  ⣽  Download packages                        ██████████████░░░░░░  68%      16s
+  ·  Extract archives
+  ·  Install essential packages
+  ·  Install requested packages
+  ·  Provision user, locale and timezone
+  ·  Create tarball
+  ·  Write frostroot.lock
+  ·  Place tarball
+
+╭─ mmdebstrap ─────────────────────────────────────────────────────────────────╮
+│ Get:6 http://archive.ubuntu.com/ubuntu jammy/main amd64 libc6 amd64 2.35-0u… │
+│ Get:7 http://archive.ubuntu.com/ubuntu jammy/main amd64 libgcc-s1 amd64 12.… │
+│ Get:8 http://archive.ubuntu.com/ubuntu jammy/main amd64 libcrypt1 amd64 1:4… │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+  20s elapsed · Ctrl-C interrupts · l grows the log · log: …ild-1/mmdebstrap.log
