@@ -6,3 +6,14 @@
 *.tar.gz
 workdir/
 .frostroot-work/
+
+# Trying frostroot on frostroot's own checkout leaves a user's recipe here:
+# the recipe, its lock, the keys and certificates it names, capture's report
+# and the vendored pools. None of them belong to this repository, and
+# /vendor/ in particular is hundreds of megabytes of .deb files.
+/vendor/
+/frostroot.toml
+/frostroot.lock
+/frostroot-capture.md
+/keys/
+/certs/
