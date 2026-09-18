@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
@@ -22,7 +23,7 @@ The details go to frostroot-capture.md, written beside the recipe.`
 
 func TestANoteOpensTheFormAndAsksNothing(t *testing.T) {
 	fields := slices.Concat([]form.Field{form.NoteField(form.PageCaptured, "What capture found", captureNote)}, form.Fields(noHost))
-	model := newFormModel(fields, form.Defaults(noHost), nil)
+	model := newFormModel(context.Background(), fields, form.Defaults(noHost), nil)
 	d := &formDriver{driver: newDriver(t, model), model: model}
 	d.press(tea.WindowSizeMsg{Width: 100, Height: 40})
 
@@ -52,7 +53,7 @@ func TestANoteOpensTheFormAndAsksNothing(t *testing.T) {
 
 func TestCaptureNoteFrame(t *testing.T) {
 	fields := slices.Concat([]form.Field{form.NoteField(form.PageCaptured, "What capture found", captureNote)}, form.Fields(noHost))
-	model := newFormModel(fields, form.Defaults(noHost), nil)
+	model := newFormModel(context.Background(), fields, form.Defaults(noHost), nil)
 	d := &formDriver{driver: newDriver(t, model), model: model}
 	d.press(tea.WindowSizeMsg{Width: 80, Height: 24})
 	assertFrame(t, frameName("form-capture-note", 80, 24), d.model.View())

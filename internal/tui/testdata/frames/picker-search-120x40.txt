@@ -1,0 +1,34 @@
+Packages
+  Packages
+  Space selects, Enter continues, / filters
+  > [ ] build-essential  gcc, g++, make and the C library headers
+    [ ] cmake  cross-platform build system
+    [ ] gdb  the GNU debugger
+    [ ] pkg-config  compiler and linker flags for installed libraries
+    [ ] clang  the LLVM C/C++ compiler
+    [ ] clang-format  source code formatter
+    [ ] valgrind  memory error detector and profiler
+    [ ] ninja-build  small, fast build tool CMake can drive
+    [ ] python3  the interpreter
+    [ ] python3-pip  package installer (use a venv on 24.04)
+
+┃ Other packages
+┃ type to search the release's archive, or a name; Space adds the row
+┃ > cmake
+┃ 5 found · all sections · noble · 85,574 packages · fetched 2 days ago
+┃ > [ ] cmake                3.28.3-1build7    cross-platform, open-source make system
+┃   [ ] cmake-data           3.28.3-1build7    CMake data files (modules, templates and documentation)
+┃   [ ] cmake-extras         1.7-2             Extra CMake utility modules
+┃   [ ] cmake-format         0.6.13-5          source code formatter for cmake listfiles
+┃   [ ] extra-cmake-modules  5.115.0-0ubuntu5  Extra modules and scripts for CMake
+┃
+┃
+┃
+┃ chosen: none
+┃
+
+  Python packages
+  installed from PyPI into the image's virtual environment, separated by spaces or commas
+  > none
+
+↑/↓ move • space add/remove • / section • shift+tab back • enter next

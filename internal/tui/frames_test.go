@@ -244,6 +244,10 @@ var summaryScenarios = []struct {
 	{name: "form-summary-unchanged", preview: func(form.Values) Preview {
 		return Preview{Heading: "Nothing changes: frostroot.toml already says this.", Text: sampleRecipeText, Unchanged: true}
 	}},
+	{name: "form-summary-warning", preview: func(values form.Values) Preview {
+		unknown := []form.UnknownPackage{{Name: "ninja-buld", Nearest: []string{"ninja-build"}}, {Name: "docker-ce"}}
+		return Preview{Heading: "This is what frostroot.toml will say:", Text: sampleRecipeText, Warning: form.UnknownPackagesWarning(unknown, values)}
+	}},
 }
 
 // TestASCIIFrames pins the screens on a terminal whose locale is not UTF-8:

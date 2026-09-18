@@ -49,6 +49,7 @@ type Preview struct {
 	Heading   string // one line above the text
 	Text      string // the rendered recipe, or a line diff of it; "" shows the summary alone
 	Unchanged bool   // writing would leave the file exactly as it is
+	Warning   string // what is worth knowing before writing, shown above the heading; "" says nothing
 }
 
 // PreviewFunc renders the preview for the answers so far. nil means the
@@ -59,7 +60,11 @@ type PreviewFunc func(form.Values) Preview
 // starting from initial, then a summary page with the preview that asks to
 // write the recipe. It returns the answers, or ErrCanceled.
 func RunForm(ctx context.Context, fields []form.Field, initial form.Values, preview PreviewFunc, input io.Reader, output io.Writer) (form.Values, error) {
-	model := newFormModel(fields, initial, preview)
+	// The form's context ends with the form, so that a package index still
+	// being fetched when the user finishes or leaves is not fetched further.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	model := newFormModel(ctx, fields, initial, preview)
 	program := tea.NewProgram(model, tea.WithInput(input), tea.WithOutput(output), tea.WithContext(ctx))
 	finalModel, err := program.Run()
 	switch {
@@ -102,9 +107,9 @@ type formModel struct {
 	height  int
 }
 
-func newFormModel(fields []form.Field, initial form.Values, preview PreviewFunc) *formModel {
-	binding := newFormBinding(fields, initial)
+func newFormModel(ctx context.Context, fields []form.Field, initial form.Values, preview PreviewFunc) *formModel {
 	glyphs := glyphsForTerminal()
+	binding := newFormBinding(ctx, fields, initial, glyphs)
 	return &formModel{
 		binding: binding,
 		preview: preview,
@@ -191,6 +196,7 @@ func (m *formModel) View() string {
 type summaryModel struct {
 	summary  string
 	heading  string
+	warning  string
 	text     string // the preview, whole; the pane shows it cut to its width
 	glyphs   glyphSet
 	pane     viewport.Model
@@ -210,6 +216,7 @@ func newSummaryModel(summary string, preview Preview, glyphs glyphSet, width, he
 	page := &summaryModel{
 		summary: summary,
 		heading: preview.Heading,
+		warning: strings.TrimRight(preview.Warning, "\n"),
 		text:    strings.TrimRight(preview.Text, "\n"),
 		glyphs:  glyphs,
 		hasPane: preview.Text != "",
@@ -235,8 +242,16 @@ func (s *summaryModel) resize(width, height int) {
 		return
 	}
 	summaryRows := strings.Count(s.summary, "\n") + 2 // its lines and the title
+	minimumHeight := previewMinimumHeight
+	if s.warning != "" {
+		summaryRows += strings.Count(s.warning, "\n") + 2 // its lines and the blank one above
+		// On a 24-row terminal the warning and a three-row pane do not both
+		// fit, and what scrolls off is the top: the warning. The pane gives
+		// way; it still scrolls.
+		minimumHeight = 1
+	}
 	s.pane.Width = max(previewMinimumWidth, width-4)
-	s.pane.Height = max(previewMinimumHeight, height-summaryRows-previewFrameRows-questionRows)
+	s.pane.Height = max(minimumHeight, height-summaryRows-previewFrameRows-questionRows)
 	s.pane.SetContent(fitLines(s.text, s.pane.Width, s.glyphs.ellipsis))
 }
 
@@ -272,6 +287,11 @@ func (s *summaryModel) View() string {
 	view.WriteByte('\n')
 	view.WriteString(s.summary)
 	view.WriteByte('\n')
+	if s.warning != "" {
+		view.WriteByte('\n')
+		view.WriteString(warningStyle.Render(s.warning))
+		view.WriteByte('\n')
+	}
 	if s.heading != "" {
 		view.WriteByte('\n')
 		view.WriteString(s.heading)
@@ -307,8 +327,11 @@ func formTheme(glyphs glyphSet) *huh.Theme {
 		styles.NextIndicator = styles.NextIndicator.SetString(">")
 		styles.PrevIndicator = styles.PrevIndicator.SetString("<")
 	}
-	theme.Help.ShortSeparator = theme.Help.ShortSeparator.SetString(" | ")
-	theme.Help.FullSeparator = theme.Help.FullSeparator.SetString(" | ")
+	// The help line renders its own " • " through this style, so the bullet
+	// is replaced rather than joined by a second separator.
+	asciiSeparator := func(string) string { return " | " }
+	theme.Help.ShortSeparator = theme.Help.ShortSeparator.Transform(asciiSeparator)
+	theme.Help.FullSeparator = theme.Help.FullSeparator.Transform(asciiSeparator)
 	return theme
 }
 
@@ -330,19 +353,23 @@ type formBinding struct {
 	texts   map[string]*string
 	flags   map[string]*bool
 	lists   map[string]*[]string
+	ctx     context.Context // ends with the form
+	glyphs  glyphSet
 }
 
-func newFormBinding(fields []form.Field, initial form.Values) *formBinding {
+func newFormBinding(ctx context.Context, fields []form.Field, initial form.Values, glyphs glyphSet) *formBinding {
 	binding := &formBinding{
 		fields:  fields,
 		initial: initial,
 		texts:   map[string]*string{},
 		flags:   map[string]*bool{},
 		lists:   map[string]*[]string{},
+		ctx:     ctx,
+		glyphs:  glyphs,
 	}
 	for _, field := range fields {
 		switch field.Kind {
-		case form.KindInput, form.KindSelect:
+		case form.KindInput, form.KindSelect, form.KindSearch:
 			text := initial.String(field.Key)
 			binding.texts[field.Key] = &text
 		case form.KindConfirm:
@@ -408,6 +435,8 @@ func (b *formBinding) huhField(field form.Field) huh.Field {
 	case form.KindConfirm:
 		return huh.NewConfirm().Key(field.Key).Title(field.Title).Description(field.Description).
 			Affirmative("Yes").Negative("No").Value(b.flags[field.Key])
+	case form.KindSearch:
+		return newPickerField(b.ctx, field, b.texts[field.Key], b.answeredRelease, b.chosenInCatalog, b.glyphs)
 	case form.KindNote:
 		// The text is escaped: a note renders its own markup, and what
 		// capture found is full of underscores. A button to move on makes
@@ -416,6 +445,25 @@ func (b *formBinding) huhField(field form.Field) huh.Field {
 			Next(true).NextLabel("Continue")
 	}
 	return huh.NewNote().Title(field.Title).Description("unsupported field kind")
+}
+
+// answeredRelease is the Ubuntu release as answered so far: what the
+// package picker opens the index of.
+func (b *formBinding) answeredRelease() string {
+	if release, isAsked := b.texts[form.KeyRelease]; isAsked {
+		return *release
+	}
+	return b.initial.String(form.KeyRelease)
+}
+
+// chosenInCatalog is the catalog's answer so far. huh writes it on every
+// toggle, so the picker can mark those names as chosen; it cannot change
+// them, because the catalog keeps its own state and would write it back.
+func (b *formBinding) chosenInCatalog() []string {
+	if chosen, isAsked := b.lists[form.KeyPackages]; isAsked {
+		return *chosen
+	}
+	return b.initial.Strings(form.KeyPackages)
 }
 
 // values returns the answers: everything in initial, overwritten by what
