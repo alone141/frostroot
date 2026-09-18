@@ -263,6 +263,10 @@ func (a *App) reportBuildSuccess(imageRecipe recipe.Recipe, result builder.Resul
 	}
 	if !result.Offline {
 		a.stdoutf("\nTo be able to rebuild this exact image later, offline:\n  frostroot vendor\n")
+	} else {
+		// An offline build read vendor/, so the pools are there to trip a Go
+		// module in the same directory.
+		a.stdoutf("%s", goModuleVendorNote(a.RecipeDir))
 	}
 	if result.CleanupErr != nil {
 		a.stderrf("warning: could not remove the work directory: %v\n", result.CleanupErr)

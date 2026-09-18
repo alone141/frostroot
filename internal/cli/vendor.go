@@ -172,6 +172,7 @@ func (a *App) reportVendorSuccess(run *vendorRun) {
 		}
 	}
 	a.stdoutf("\nRebuild the exact image without the archive:\n  frostroot build --offline\n")
+	a.stdoutf("%s", goModuleVendorNote(a.RecipeDir))
 }
 
 // subtitleParts describes the run above the progress screen: how many files,

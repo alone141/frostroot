@@ -114,6 +114,33 @@ func TestVendorFillsBothPools(t *testing.T) {
 	}
 }
 
+func TestVendorNotesAGoModuleBesideTheRecipe(t *testing.T) {
+	// vendor/ is what go build reads as a module's vendored dependencies, so
+	// after this command go build stops with "inconsistent vendoring" and
+	// names go.mod rather than the recipe. vendor put the directory there, so
+	// vendor is what says so.
+	fixture := newVendorFixture(t)
+	var stdout, stderr bytes.Buffer
+	if exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "-mod=mod") {
+		t.Errorf("a recipe directory that is no Go module was given the note:\n%s", stdout.String())
+	}
+
+	if err := os.WriteFile(filepath.Join(fixture.recipeDir, "go.mod"), []byte("module example\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "go build -mod=mod") {
+		t.Errorf("stdout lacks the Go module note:\n%s", stdout.String())
+	}
+}
+
 func TestVendorPrunesAWheelPoolTheLockNoLongerNames(t *testing.T) {
 	// Drop [python] from a recipe and every wheel on disk is a file the lock
 	// does not name; --prune promises to remove exactly those.

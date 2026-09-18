@@ -678,6 +678,14 @@ with the lock afterwards, as it does the packages.
 `vendor/` is a few hundred megabytes to a gigabyte. Ship it beside the
 tarball or in an archive; add it to `.gitignore` unless you use git LFS.
 
+If the recipe directory is also a **Go module**, `vendor/` is the one name
+`go build` reads as that module's vendored dependencies: it switches to
+vendoring mode and stops with `inconsistent vendoring`, an error that names
+`go.mod` rather than the recipe beside it. frostroot's own checkout is such
+a directory. `vendor` and `build --offline` say so when they see a `go.mod`;
+build that module with `go build -mod=mod`, or keep the recipe in a
+directory of its own.
+
 ## What is in the image
 
 - Ubuntu `--variant=important` plus your packages, with **Recommends on**, so
