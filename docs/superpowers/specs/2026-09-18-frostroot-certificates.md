@@ -134,6 +134,16 @@ This branch is not done until, on the build host:
 
 ## Out of scope, and why
 
+- **Skipping verification altogether.** The obvious shortcut — a flag that
+  turns certificate checking off so no one has to obtain the proxy's root —
+  is deliberately not here, and
+  [issue #20](https://github.com/alone141/frostroot/issues/20) records what
+  it would look like and what it would cost. The short version: `.deb`s,
+  third-party sources and everything `vendor` fetches are authenticated by
+  gpg signatures and the lock's checksums whatever the transport does, but
+  the first `[python]` resolve has nothing but TLS, and a bad wheel picked up
+  there would be pinned by hash in the lock forever. `--ca-bundle` does
+  everything the flag would, and obtaining the certificate is one command.
 - **An internal package index.** The `PIP_*` sweep is what keeps a lock
   dependent on the recipe rather than on whoever's shell ran the build. A
   network that blocks `pypi.org` outright needs `[python] index_url` in the
