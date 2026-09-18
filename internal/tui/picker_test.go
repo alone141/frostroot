@@ -316,7 +316,7 @@ func TestPickerNarrowsBySection(t *testing.T) {
 	if d.movesOn(pressEnter) {
 		t.Fatal("Enter in the section list left the field")
 	}
-	if d.picker.section != "libs" || !slices.Equal(d.rowNames(), []string{`"cmake"`, "cmake-extras", "extra-cmake-modules"}) {
+	if d.picker.section != "libs" || !slices.Equal(d.rowNames(), []string{"cmake", "cmake-extras", "extra-cmake-modules"}) {
 		t.Errorf("section %q, rows %v", d.picker.section, d.rowNames())
 	}
 	if view := d.picker.View(); !strings.Contains(view, "section libs") {
@@ -601,4 +601,25 @@ func TestPickerFrames(t *testing.T) {
 		d.typeText("cmake")
 		assertFrame(t, frameName("picker-search-ascii", 80, 24), d.model.View())
 	})
+}
+
+func TestPickerKnowsAPackageTheSectionFilterHides(t *testing.T) {
+	d := newPickerDriver(t, openSampleIndex, "")
+	d.typeText("cmake")
+	d.press(pressSlash)
+	d.press(pressDown) // devel
+	d.press(pressDown) // libs
+	d.press(pressEnter)
+	// cmake is in devel; narrowed to libs the search does not return it,
+	// and it is still a package of the archive, not something "as typed".
+	if got := d.rowNames(); !slices.Equal(got, []string{"cmake", "cmake-extras", "extra-cmake-modules"}) {
+		t.Fatalf("rows = %v, want cmake itself first, as the package it is", got)
+	}
+	if view := d.picker.View(); strings.Contains(view, "not in the archive") || !strings.Contains(view, "cross-platform") {
+		t.Errorf("cmake should be shown with its description:\n%s", view)
+	}
+	d.press(pressSpace)
+	if *d.answer != "cmake" {
+		t.Errorf("answer = %q", *d.answer)
+	}
 }
