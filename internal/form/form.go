@@ -74,6 +74,10 @@ const (
 	// keyOriginalSources is not a field either: the recipe's sources as they
 	// were, so hand-written ones survive an edit and the order is kept.
 	keyOriginalSources = "original_sources"
+	// keyOriginalCertificates is not a field either. The form asks nothing
+	// about certificate authorities, so edit's job is to write back exactly
+	// the ones the recipe came with rather than to drop them.
+	keyOriginalCertificates = "original_certificates"
 )
 
 // The pages fields are grouped on, in order.
