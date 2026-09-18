@@ -232,3 +232,25 @@ func TestCreateTemp(t *testing.T) {
 		}
 	}
 }
+
+// TestPlaceAcrossFilesystemsSucceedsWhenTheSourceCannotBeRemoved: once the
+// destination holds the new bytes the move has happened, and the source sits
+// in a work directory the caller deletes anyway. Reporting the failed remove
+// told the builder that a tarball which did arrive had not, and the builder
+// answered by not writing the lock that describes it, leaving dist/ with a
+// new image and an older lock. Remove on drvfs is where this happens.
+func TestPlaceAcrossFilesystemsSucceedsWhenTheSourceCannotBeRemoved(t *testing.T) {
+	original := removeFile
+	removeFile = func(string) error { return errors.New("drvfs says no") }
+	t.Cleanup(func() { removeFile = original })
+
+	sourcePath := writeSourceFile(t, "payload")
+	destinationPath := filepath.Join(t.TempDir(), "out.tar.gz")
+	if err := place(sourcePath, destinationPath, renameAcrossFilesystems, nil); err != nil {
+		t.Fatalf("Place = %v, want nil: the destination is the new bytes", err)
+	}
+	placed, err := os.ReadFile(destinationPath)
+	if err != nil || string(placed) != "payload" {
+		t.Fatalf("destination = %q, %v", placed, err)
+	}
+}

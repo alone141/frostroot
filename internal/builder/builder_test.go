@@ -1178,3 +1178,31 @@ func TestBuildCanceledKeepsWorkDirAndWritesNothing(t *testing.T) {
 	}
 	assertNoBuildOutput(t, options)
 }
+
+// TestBuildLeavesNoTarballWhenTheLockCannotBePlaced: Build promises that a
+// failed build writes no lock and no tarball. The tarball is placed first,
+// so a lock that cannot be renamed into place used to leave dist/ holding a
+// new image beside an older lock, with nothing saying the two disagree; an
+// offline rebuild or a vendor run would then work from the wrong lock.
+// A directory in the lock's place is what makes the rename fail here.
+func TestBuildLeavesNoTarballWhenTheLockCannotBePlaced(t *testing.T) {
+	options, _ := newTestOptions(t)
+	lockPath := filepath.Join(options.RecipeDir, LockFileName)
+	if err := os.MkdirAll(filepath.Join(lockPath, "occupied"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	result, err := buildWith(&fakeBootstrapper{}, options)
+	if err == nil {
+		t.Fatal("a build whose lock cannot be placed must fail")
+	}
+	if !strings.Contains(err.Error(), "placing lock") {
+		t.Errorf("error = %v, want it to name the lock", err)
+	}
+	if _, statErr := os.Stat(expectedTarballPath(options)); !os.IsNotExist(statErr) {
+		t.Errorf("dist/ still holds a tarball the lock does not describe: %v", statErr)
+	}
+	if result.WorkDir == "" {
+		t.Error("a failed build keeps its work directory")
+	}
+	assertNoTemporaryFiles(t, options.RecipeDir)
+}
