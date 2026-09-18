@@ -1,12 +1,9 @@
 Packages
-    [ ] python3  the interpreter
-    [ ] python3-pip  package installer (use a venv on 24.04)
-
 ┃ Other packages
 ┃ type to search the release's archive, or a name; Space adds the row
 ┃ > cmak
 ┃ 5 found · all sections · noble · 85,574 packages · fetched 2 days ago
-┃   [ ] add "cmak" as typed · not in the archive
+┃   [ ] add "cmak" as typed · not in the index
 ┃ > [ ] cmake                3.28.3-1build7    cross-platform, open-source make…
 ┃   [ ] cmake-data           3.28.3-1build7    CMake data files (modules, templ…
 ┃   [ ] cmake-extras         1.7-2             Extra CMake utility modules
@@ -18,8 +15,11 @@ Packages
 ┃
 
   Python packages
-  installed from PyPI into the image's virtual environment, separated by spaces
-  or commas
-  > none
+  type to search PyPI, or a name; installed into the image's virtual environment
+  > type to search, or a name
+  no package index: names are added as typed and checked by build
+  nothing chosen yet
+
+
 
 ↑/↓ move • space add/remove • / section • shift+tab back • enter next

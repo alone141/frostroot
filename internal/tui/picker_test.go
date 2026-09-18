@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -225,7 +226,7 @@ func TestPickerAddsANameTheArchiveLacksAndSaysSo(t *testing.T) {
 	if got := d.rowNames(); !slices.Equal(got, []string{`"ninja-buld"`}) {
 		t.Fatalf("rows = %v, want only what was typed", got)
 	}
-	if view := d.picker.View(); !strings.Contains(view, `add "ninja-buld" as typed · not in the archive`) {
+	if view := d.picker.View(); !strings.Contains(view, `add "ninja-buld" as typed · not in the index`) {
 		t.Errorf("view should offer the name as typed:\n%s", view)
 	}
 	d.press(pressSpace)
@@ -233,7 +234,7 @@ func TestPickerAddsANameTheArchiveLacksAndSaysSo(t *testing.T) {
 		t.Errorf("answer = %q: a warning, never a refusal", *d.answer)
 	}
 	view := d.picker.View()
-	for _, wantText := range []string{"nearest: ninja-build", "? not in the archive", "chosen (1): ninja-buld"} {
+	for _, wantText := range []string{"nearest: ninja-build", "? not in the index", "chosen (1): ninja-buld"} {
 		if !strings.Contains(view, wantText) {
 			t.Errorf("view lacks %q:\n%s", wantText, view)
 		}
@@ -431,7 +432,7 @@ func TestPickerWithoutAnIndexIsAListEditor(t *testing.T) {
 			if !strings.Contains(view, "names are added as typed and checked by build") {
 				t.Errorf("view should say why nothing is searched:\n%s", view)
 			}
-			if strings.Contains(view, "not in the archive") {
+			if strings.Contains(view, "not in the index") {
 				t.Errorf("without an index nothing is known to be missing:\n%s", view)
 			}
 			d.press(pressSlash)
@@ -615,11 +616,175 @@ func TestPickerKnowsAPackageTheSectionFilterHides(t *testing.T) {
 	if got := d.rowNames(); !slices.Equal(got, []string{"cmake", "cmake-extras", "extra-cmake-modules"}) {
 		t.Fatalf("rows = %v, want cmake itself first, as the package it is", got)
 	}
-	if view := d.picker.View(); strings.Contains(view, "not in the archive") || !strings.Contains(view, "cross-platform") {
+	if view := d.picker.View(); strings.Contains(view, "not in the index") || !strings.Contains(view, "cross-platform") {
 		t.Errorf("cmake should be shown with its description:\n%s", view)
 	}
 	d.press(pressSpace)
 	if *d.answer != "cmake" {
 		t.Errorf("answer = %q", *d.answer)
+	}
+}
+
+// summarySource is a form.PackageSummaries whose lookups the test releases.
+type summarySource struct {
+	sampleIndex
+	mutex    sync.Mutex
+	known    map[string]string
+	requests []string
+	release  chan struct{} // nil: answer at once
+}
+
+func newSummarySource() *summarySource {
+	return &summarySource{known: map[string]string{}}
+}
+
+func (s *summarySource) Summary(name string) (string, bool) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	summary, known := s.known[name]
+	return summary, known
+}
+
+func (s *summarySource) FetchSummary(ctx context.Context, name string) {
+	s.mutex.Lock()
+	s.requests = append(s.requests, name)
+	release := s.release
+	s.mutex.Unlock()
+	if release != nil {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return
+		}
+	}
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.known[name] = "what " + name + " is"
+}
+
+func (s *summarySource) asked() []string {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	return slices.Clone(s.requests)
+}
+
+// newSummaryDriver drives a picker whose index looks summaries up.
+func newSummaryDriver(t *testing.T, source *summarySource) *pickerDriver {
+	t.Helper()
+	// The debounce that ships is a quarter of a second, which the driver
+	// drops as a timer; shortened, the real scheduling runs in the test.
+	previous := pickerSummaryDelay
+	pickerSummaryDelay = time.Millisecond
+	t.Cleanup(func() { pickerSummaryDelay = previous })
+	answer := ""
+	field := form.Field{
+		Key: form.KeyPythonPackages, Title: "Python packages", Description: "type to search PyPI",
+		OpenIndex: func(context.Context, string, func(int64, int64)) (form.PackageIndex, error) { return source, nil },
+		Summaries: true,
+		Validate:  func(string) error { return nil },
+	}
+	picker := newPickerField(context.Background(), field, &answer, func() string { return "24.04" }, func() []string { return nil }, unicodeGlyphs)
+	picker.WithWidth(80)
+	d := &pickerDriver{driver: newDriver(t, picker), picker: picker, answer: &answer}
+	d.settle(picker.Focus())
+	return d
+}
+
+func TestPickerShowsASummaryForTheRowTheCursorRestsOn(t *testing.T) {
+	source := newSummarySource()
+	d := newSummaryDriver(t, source)
+	d.typeText("cmake")
+	// The debounce has elapsed inside the driver's settle, so the lookup for
+	// the highlighted row has run.
+	if asked := source.asked(); !slices.Contains(asked, "cmake") {
+		t.Fatalf("asked %v, want the highlighted row", asked)
+	}
+	if view := d.picker.View(); !strings.Contains(view, "what cmake is") {
+		t.Errorf("the summary belongs under the list:\n%s", view)
+	}
+	// Moving down asks about the new row, not the old one again.
+	before := len(source.asked())
+	d.press(pressDown)
+	asked := source.asked()
+	if len(asked) != before+1 || asked[len(asked)-1] != "cmake-data" {
+		t.Errorf("asked %v after moving down", asked)
+	}
+	if view := d.picker.View(); !strings.Contains(view, "what cmake-data is") {
+		t.Errorf("the summary should follow the cursor:\n%s", view)
+	}
+	// Coming back is answered from what is remembered, with no new lookup.
+	before = len(source.asked())
+	d.press(pressUp)
+	if got := len(source.asked()); got != before {
+		t.Errorf("a remembered summary was looked up again: %v", source.asked())
+	}
+}
+
+func TestPickerIgnoresASupersededRest(t *testing.T) {
+	source := newSummarySource()
+	d := newSummaryDriver(t, source)
+	d.typeText("cmake")
+	if asked := source.asked(); !slices.Contains(asked, "cmake") {
+		t.Fatalf("asked %v, want the highlighted row", asked)
+	}
+	// Holding Down schedules a rest a row; every one but the last is
+	// superseded, and a superseded rest must not become a request.
+	d.press(pickerSummaryDueMsg{tick: d.picker.summaryTick - 1, name: "cmake-data"})
+	if slices.Contains(source.asked(), "cmake-data") {
+		t.Error("a superseded rest was asked about")
+	}
+	// Nor may a rest on a row the cursor has since left.
+	d.press(pickerSummaryDueMsg{tick: d.picker.summaryTick, name: "cmake-extras"})
+	if slices.Contains(source.asked(), "cmake-extras") {
+		t.Error("a rest on another row was asked about")
+	}
+}
+
+func TestPickerSaysNothingWhenALookupGivesNothing(t *testing.T) {
+	source := newSummarySource()
+	d := newSummaryDriver(t, source)
+	d.typeText("cmake")
+	source.mutex.Lock()
+	source.known["cmake"] = "" // PyPI allows an empty summary, and so does a failure
+	source.mutex.Unlock()
+	view := frameOf(d.picker.View())
+	if strings.Contains(view, "looking up") {
+		t.Errorf("a finished lookup must not still say it is looking:\n%s", view)
+	}
+	// The row is still there and still addable; only the nicety is missing.
+	if !strings.Contains(view, "cmake") {
+		t.Errorf("the list should be unaffected:\n%s", view)
+	}
+}
+
+func TestPickerWithoutSummariesNeverAsksAndKeepsItsHeight(t *testing.T) {
+	// The apt index carries its descriptions, so it implements no summaries
+	// and the field has no line for them.
+	withSummaries := newSummaryDriver(t, newSummarySource())
+	withSummaries.typeText("cmake")
+	apt := newPickerDriver(t, openSampleIndex, "")
+	apt.typeText("cmake")
+	if apt.picker.summaries() != nil {
+		t.Error("the apt index must not offer summaries")
+	}
+	tall := strings.Count(withSummaries.picker.View(), "\n")
+	short := strings.Count(apt.picker.View(), "\n")
+	if tall != short+1 {
+		t.Errorf("a field with summaries is %d lines and one without %d; want exactly one more", tall, short)
+	}
+}
+
+func TestPickerKeepsItsHeightWhileASummaryArrives(t *testing.T) {
+	source := newSummarySource()
+	source.release = make(chan struct{})
+	d := newSummaryDriver(t, source)
+	d.typeText("cmake")
+	looking := strings.Count(d.picker.View(), "\n")
+	close(source.release)
+	d.press(pressDown)
+	d.press(pressUp)
+	arrived := strings.Count(d.picker.View(), "\n")
+	if looking != arrived {
+		t.Errorf("the field is %d lines while looking up and %d once the summary is there", looking, arrived)
 	}
 }

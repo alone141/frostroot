@@ -46,11 +46,17 @@ const (
 	pickerNearestOffered = 3
 )
 
-// pickerField is the "Other packages" question of the full-screen form: a
-// list of package names, edited by searching the release's archive and
-// adding what is found, or by typing names the archive does not have. It is
-// a huh.Field, so it sits on the Packages page between the catalog and the
-// Python packages, and moves on with the form's own keys.
+// pickerSummaryDelay is how long the cursor rests on a row before its
+// summary is asked for. Holding Down through twenty rows must not be twenty
+// requests. Tests shorten it, so that the debounce they exercise is the one
+// that ships rather than a stand-in.
+var pickerSummaryDelay = 250 * time.Millisecond
+
+// pickerField is a question answered with a list of package names, found by
+// searching an index and added with Space, or typed. "Other packages"
+// searches the release's apt archive and "Python packages" searches PyPI. It is
+// a huh.Field, so both sit on the Packages page and move on with the form's
+// own keys.
 //
 // The index is help, not a requirement. While it loads, when it cannot be
 // had, and when the form was given none, the field is a list editor: type a
@@ -60,6 +66,7 @@ type pickerField struct {
 	value                   *string            // the answer: names separated by spaces
 	validate                func(string) error // nil accepts anything
 	openIndex               form.IndexOpener   // nil means there is no index
+	hasSummaries            bool               // the index looks summaries up one at a time
 	release                 func() string      // the release answered by now, such as "24.04"
 	inCatalog               func() []string    // the names chosen in the catalog above
 	ctx                     context.Context    // ends with the form; stops a fetch
@@ -75,7 +82,7 @@ type pickerField struct {
 	input   textinput.Model
 	chosen  []string
 	rows    []pickerRow
-	total   int // how many the archive has for the query; len(rows) may be fewer
+	total   int // how many the index has for the query; len(rows) may be fewer
 	cursor  int
 	offset  int
 	section string
@@ -91,6 +98,15 @@ type pickerField struct {
 
 	load *indexLoad
 	tick int
+
+	// summaryTick numbers the debounce, so that only the newest row the
+	// cursor rested on is ever asked about.
+	summaryTick int
+	// summaryPending is the name being looked up, for the line that says so.
+	summaryPending string
+	// hasSections is whether the loaded index has any, asked once.
+	sectionsChecked bool
+	hasSections     bool
 }
 
 // pickerRow is one line of the list.
@@ -98,8 +114,8 @@ type pickerRow struct {
 	name        string
 	version     string
 	description string
-	asTyped     bool // the query itself, offered because the archive lacks it
-	unknown     bool // a chosen name the archive lacks
+	asTyped     bool // the query itself, offered because the index lacks it
+	unknown     bool // a chosen name the index lacks
 }
 
 // pickerKeyMap is what the field answers to besides typing.
@@ -150,6 +166,14 @@ type indexLoad struct {
 type (
 	pickerLoadedMsg struct{}
 	pickerTickMsg   struct{ tick int }
+	// pickerSummaryDueMsg says the cursor has rested on name long enough to
+	// ask about it; tick tells a stale rest from the current one.
+	pickerSummaryDueMsg struct {
+		tick int
+		name string
+	}
+	// pickerSummaryMsg says a lookup ended, one way or the other.
+	pickerSummaryMsg struct{}
 )
 
 func newPickerField(ctx context.Context, field form.Field, value *string, release func() string, inCatalog func() []string, glyphs glyphSet) *pickerField {
@@ -159,7 +183,8 @@ func newPickerField(ctx context.Context, field form.Field, value *string, releas
 	picker := &pickerField{
 		key: field.Key, title: field.Title, description: field.Description,
 		value: value, validate: field.Validate, openIndex: field.OpenIndex,
-		release: release, inCatalog: inCatalog, ctx: ctx,
+		hasSummaries: field.Summaries,
+		release:      release, inCatalog: inCatalog, ctx: ctx,
 		glyphs: glyphs, keymap: newPickerKeyMap(glyphs), input: input,
 		chosen: splitNames(*value),
 	}
@@ -201,6 +226,7 @@ func (p *pickerField) Focus() tea.Cmd {
 		}
 	}
 	p.refresh()
+	cmds = append(cmds, p.scheduleSummary())
 	return tea.Batch(cmds...)
 }
 
@@ -230,6 +256,57 @@ func (p *pickerField) nextTick() tea.Cmd {
 	p.tick++
 	tick := p.tick
 	return tea.Tick(pickerTickInterval, func(time.Time) tea.Msg { return pickerTickMsg{tick: tick} })
+}
+
+// summaries returns the loaded index's summary source, or nil when it has
+// none: the apt index carries its descriptions already.
+func (p *pickerField) summaries() form.PackageSummaries {
+	source, hasSummaries := p.index().(form.PackageSummaries)
+	if !hasSummaries {
+		return nil
+	}
+	return source
+}
+
+// highlighted is the name the cursor is on, or "".
+func (p *pickerField) highlighted() string {
+	if p.choosingSection || p.cursor < 0 || p.cursor >= len(p.rows) {
+		return ""
+	}
+	return p.rows[p.cursor].name
+}
+
+// scheduleSummary asks about the highlighted row once the cursor has rested
+// on it, unless it is already known. Every call supersedes the last, so
+// moving through rows asks about the one that is stopped on.
+func (p *pickerField) scheduleSummary() tea.Cmd {
+	source := p.summaries()
+	name := p.highlighted()
+	if source == nil || name == "" || !p.focused {
+		return nil
+	}
+	if _, known := source.Summary(name); known {
+		p.summaryPending = ""
+		return nil
+	}
+	p.summaryTick++
+	tick := p.summaryTick
+	return tea.Tick(pickerSummaryDelay, func(time.Time) tea.Msg {
+		return pickerSummaryDueMsg{tick: tick, name: name}
+	})
+}
+
+// fetchSummary looks one name up, away from the drawing.
+func (p *pickerField) fetchSummary(name string) tea.Cmd {
+	source := p.summaries()
+	if source == nil {
+		return nil
+	}
+	ctx := p.ctx
+	return func() tea.Msg {
+		source.FetchSummary(ctx, name)
+		return pickerSummaryMsg{}
+	}
 }
 
 // index returns the loaded index, or nil.
@@ -277,6 +354,15 @@ func (p *pickerField) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case pickerLoadedMsg:
 		p.refresh()
+		return p, p.scheduleSummary()
+	case pickerSummaryDueMsg:
+		if msg.tick != p.summaryTick || !p.focused || p.highlighted() != msg.name {
+			return p, nil // the cursor moved on; that row is not wanted now
+		}
+		p.summaryPending = msg.name
+		return p, p.fetchSummary(msg.name)
+	case pickerSummaryMsg:
+		p.summaryPending = ""
 		return p, nil
 	case pickerTickMsg:
 		if msg.tick != p.tick || !p.focused {
@@ -288,7 +374,9 @@ func (p *pickerField) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		p.refresh()
 		return p, nil
 	case tea.KeyMsg:
-		return p, p.handleKey(msg)
+		// Whatever the key did, the cursor may now be on another row, and
+		// that row is the one worth asking about.
+		return p, tea.Batch(p.handleKey(msg), p.scheduleSummary())
 	}
 	return p, nil
 }
@@ -381,16 +469,16 @@ func (p *pickerField) toggle() {
 	}
 }
 
-// unknownHint says what the archive has instead of a name it lacks.
+// unknownHint says what the index has instead of a name it lacks.
 func (p *pickerField) unknownHint(name string) string {
 	index := p.index()
 	if index == nil {
 		return ""
 	}
 	if nearest := index.Nearest(name, pickerNearestOffered); len(nearest) > 0 {
-		return fmt.Sprintf("%s is not in the archive; nearest: %s", name, strings.Join(nearest, ", "))
+		return fmt.Sprintf("%s is not in the index; nearest: %s", name, strings.Join(nearest, ", "))
 	}
-	return name + " is not in the archive; a source on the next page may provide it"
+	return name + " is not in the index; it may still come from somewhere else"
 }
 
 // addSeveral adds every name of a pasted or comma-separated list.
@@ -443,7 +531,7 @@ func (p *pickerField) refresh() {
 		return
 	}
 	// What was typed comes first, so that Space after a whole name adds that
-	// name and never a neighbor the search ranked first. The archive may
+	// name and never a neighbor the search ranked first. The index may
 	// well have it: a section filter hides a package of another section
 	// from the search, and that is no reason to call it missing.
 	first := pickerRow{name: query, asTyped: true}
@@ -461,7 +549,7 @@ func (p *pickerField) chosenRow(name string, index form.PackageIndex) pickerRow 
 		return pickerRow{name: name}
 	}
 	// Lookup, not Search: capture's recipe has hundreds of names, and a scan
-	// of the archive for each would be seconds of a frozen screen.
+	// of the index for each would be seconds of a frozen screen.
 	if match, isThere := index.Lookup(name); isThere {
 		return pickerRow{name: name, version: match.Version, description: match.Description}
 	}
@@ -492,10 +580,17 @@ func scrolledTo(offset, cursor, height int) int {
 func (p *pickerField) openSections() {
 	index := p.index()
 	if index == nil {
-		p.hint = "sections need the archive index"
+		p.hint = "sections need the package index"
 		return
 	}
-	p.sections = append([]form.SectionCount{{Name: ""}}, index.SectionsMatching(strings.TrimSpace(p.input.Value()))...)
+	sections := index.SectionsMatching(strings.TrimSpace(p.input.Value()))
+	if len(sections) == 0 {
+		// PyPI publishes no sections, so there is nothing to narrow to and
+		// an "all sections" list of one would be a menu that does nothing.
+		p.hint = "this index has no sections"
+		return
+	}
+	p.sections = append([]form.SectionCount{{Name: ""}}, sections...)
 	p.choosingSection = true
 	p.sectionCursor, p.sectionOffset = 0, 0
 	for position, section := range p.sections {
@@ -528,12 +623,43 @@ func (p *pickerField) handleSectionKey(msg tea.KeyMsg) {
 	p.sectionOffset = scrolledTo(p.sectionOffset, p.sectionCursor, p.listHeight())
 }
 
+// chromeRows is what the field draws besides the list. An index that has
+// summaries adds the line they go on, and it is drawn whether or not there
+// is one to show, so that the page does not jump as they arrive.
+func (p *pickerField) chromeRows() int {
+	if p.openIndex != nil && p.hasSummaries {
+		return pickerChromeRows + 1
+	}
+	return pickerChromeRows
+}
+
 // listHeight is how many rows the list has.
 func (p *pickerField) listHeight() int {
 	if p.height <= 0 {
 		return pickerListHeight
 	}
-	return max(pickerMinimumListHeight, p.height-pickerChromeRows)
+	return max(pickerMinimumListHeight, p.height-p.chromeRows())
+}
+
+// summaryLine is what goes under the list: the highlighted package's
+// summary, or that it is being looked up. Empty when there is nothing to
+// say, which keeps the row without filling it.
+func (p *pickerField) summaryLine() string {
+	source := p.summaries()
+	if source == nil || p.choosingSection {
+		return ""
+	}
+	name := p.highlighted()
+	if name == "" {
+		return ""
+	}
+	if summary, known := source.Summary(name); known {
+		return summary
+	}
+	if p.summaryPending == name {
+		return "looking up " + name + p.glyphs.ellipsis
+	}
+	return ""
 }
 
 // styles returns the theme's styles for the field's state.
@@ -576,6 +702,10 @@ func (p *pickerField) View() string {
 		view.WriteString(p.rowLines(styles, width))
 	}
 	view.WriteByte('\n')
+	if p.openIndex != nil && p.hasSummaries {
+		view.WriteString(dimStyle.Render(truncateWith(p.summaryLine(), width, p.glyphs.ellipsis)))
+		view.WriteByte('\n')
+	}
 	view.WriteString(dimStyle.Render(truncateWith(p.chosenLine(), width, p.glyphs.ellipsis)))
 	view.WriteByte('\n')
 	switch {
@@ -591,7 +721,7 @@ func (p *pickerField) View() string {
 // nothing is.
 func (p *pickerField) status() string {
 	if p.openIndex == nil {
-		return "no archive index: names are added as typed and checked by build"
+		return "no package index: names are added as typed and checked by build"
 	}
 	if progress, loading := p.loading(); loading {
 		if progress[1] <= 0 {
@@ -606,22 +736,45 @@ func (p *pickerField) status() string {
 	}
 	index := p.index()
 	if index == nil {
-		return "archive index not available: names are added as typed and checked by build"
+		return "package index not available: names are added as typed and checked by build"
 	}
-	section := "all sections"
-	if p.section != "" {
+	// An index without sections is not "all sections": PyPI has none, and
+	// saying so would describe a thing that is not there.
+	section := ""
+	switch {
+	case p.section != "":
 		section = "section " + p.section
+	case p.sectionsAvailable():
+		section = "all sections"
 	}
-	status := section + " · " + index.Describe()
-	if shown := p.shownMatches(); p.total > shown {
-		status = fmt.Sprintf("%d of %d shown, keep typing · %s", shown, p.total, section)
-	} else if strings.TrimSpace(p.input.Value()) != "" || p.section != "" {
-		status = fmt.Sprintf("%d found · %s", p.total, status)
+	var parts []string
+	switch shown := p.shownMatches(); {
+	case p.total > shown:
+		parts = append(parts, fmt.Sprintf("%d of %d shown, keep typing", shown, p.total), section)
+	case strings.TrimSpace(p.input.Value()) != "" || p.section != "":
+		parts = append(parts, fmt.Sprintf("%d found", p.total), section, index.Describe())
+	default:
+		parts = append(parts, section, index.Describe())
 	}
-	return status
+	return strings.Join(slices.DeleteFunc(parts, func(part string) bool { return part == "" }), " · ")
 }
 
-// shownMatches is how many rows came from the archive.
+// sectionsAvailable reports whether the loaded index has sections to narrow
+// by. It is asked once an index and remembered, because for the apt one the
+// answer is a copy of its whole section table.
+func (p *pickerField) sectionsAvailable() bool {
+	if p.sectionsChecked {
+		return p.hasSections
+	}
+	index := p.index()
+	if index == nil {
+		return false
+	}
+	p.sectionsChecked, p.hasSections = true, len(index.SectionsMatching("")) > 0
+	return p.hasSections
+}
+
+// shownMatches is how many rows came from the index.
 func (p *pickerField) shownMatches() int {
 	shown := 0
 	for _, row := range p.rows {
@@ -679,10 +832,10 @@ func (p *pickerField) rowLine(styles *huh.FieldStyles, row pickerRow, highlighte
 	case row.asTyped:
 		text = fmt.Sprintf("add %q as typed", row.name)
 		if p.index() != nil {
-			text += " · not in the archive"
+			text += " · not in the index"
 		}
 	case row.unknown:
-		text = padCells(row.name, nameWidth) + "  ? not in the archive"
+		text = padCells(row.name, nameWidth) + "  ? not in the index"
 	case width < pickerNarrowWidth || row.version == "":
 		text = padCells(row.name, nameWidth) + "  " + row.description
 	default:
@@ -752,7 +905,11 @@ func (p *pickerField) KeyBinds() []key.Binding {
 	if p.choosingSection {
 		return []key.Binding{p.keymap.Up, p.keymap.PickSection, p.keymap.CloseSections}
 	}
-	return []key.Binding{p.keymap.Up, p.keymap.Toggle, p.keymap.Section, p.keymap.Prev, p.keymap.Next}
+	bindings := []key.Binding{p.keymap.Up, p.keymap.Toggle}
+	if p.sectionsAvailable() {
+		bindings = append(bindings, p.keymap.Section)
+	}
+	return append(bindings, p.keymap.Prev, p.keymap.Next)
 }
 
 // WithTheme implements huh.Field.

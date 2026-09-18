@@ -51,6 +51,7 @@ func isCharacterDevice(stream any) bool {
 func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath string, plainRequested bool, providedKeys map[string][]byte, intro []form.Field, indexes *packageIndexes) int {
 	host := a.host()
 	host.OpenIndex = indexes.Open
+	host.OpenPythonIndex = indexes.OpenPython
 	fields := slices.Concat(intro, form.Fields(host))
 	fullScreen := a.useFullScreen(plainRequested)
 	preview := recipePreview(recipePath, indexes)
@@ -163,12 +164,11 @@ func recipePreview(recipePath string, indexes *packageIndexes) tui.PreviewFunc {
 		}
 		return tui.Preview{Heading: heading, Text: difference.String()}
 	}
-	// Whatever the file will say, names the release's archive lacks are
+	// Whatever the file will say, names no index has are
 	// worth a word before it is written.
 	return func(values form.Values) tui.Preview {
 		preview := describe(values)
-		unknown := form.UnknownPackages(values, indexes.Known(values.String(form.KeyRelease)))
-		preview.Warning = form.UnknownPackagesWarning(unknown, values)
+		preview.Warning = form.Warnings(values, indexes.Known(values.String(form.KeyRelease)), indexes.KnownPython())
 		return preview
 	}
 }

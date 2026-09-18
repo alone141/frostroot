@@ -56,6 +56,11 @@ type Field struct {
 	Validate    func(string) error // Input: nil when the text is acceptable
 	Placeholder string             // Input: hint shown while empty
 	OpenIndex   IndexOpener        // Search: opens the index to search; nil means there is none
+	// Summaries says this field's index looks descriptions up one name at
+	// a time rather than publishing them. It is declared rather than
+	// discovered so that the field is the same height before the index has
+	// loaded as after.
+	Summaries bool
 }
 
 // DisplayLabel returns the option's display text: Label, or Value when there
@@ -123,6 +128,10 @@ type Host struct {
 	// OpenIndex opens the package index of a release for the field that
 	// searches it; nil means the form has none, and asks for names only.
 	OpenIndex IndexOpener
+	// OpenPythonIndex opens the PyPI project names for the field that
+	// searches them; nil means the form has none. The release is passed and
+	// ignored: PyPI is one index, whatever Ubuntu the image is.
+	OpenPythonIndex IndexOpener
 }
 
 // Fields returns every question, in the order they are asked.
@@ -186,11 +195,13 @@ func Fields(host Host) []Field {
 			OpenIndex:   host.OpenIndex,
 		},
 		{
-			Key: KeyPythonPackages, Page: PagePackages, Kind: KindInput,
+			Key: KeyPythonPackages, Page: PagePackages, Kind: KindSearch,
 			Title:       "Python packages",
-			Description: "installed from PyPI into the image's virtual environment, separated by spaces or commas",
+			Description: "type to search PyPI, or a name; installed into the image's virtual environment",
 			Placeholder: "none",
 			Validate:    checkPythonPackageList,
+			OpenIndex:   host.OpenPythonIndex,
+			Summaries:   true,
 		},
 		{
 			Key: KeySources, Page: PageSources, Kind: KindMultiSelect,

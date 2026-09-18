@@ -71,3 +71,36 @@ func Serve(t *testing.T, suite string, packages []Package) *Archive {
 	archive.URL = server.URL
 	return archive
 }
+
+// ServePyPI runs a PEP 691 simple index offering projects, the way
+// pypi.org/simple does, and answers /pypi/<name>/json with a summary for
+// the ones summaries names.
+func ServePyPI(t *testing.T, projects []string, summaries map[string]string) *Archive {
+	t.Helper()
+	var document strings.Builder
+	document.WriteString(`{"meta":{"api-version":"1.0"},"projects":[`)
+	for position, name := range projects {
+		if position > 0 {
+			document.WriteString(",")
+		}
+		fmt.Fprintf(&document, `{"name":%q}`, name)
+	}
+	document.WriteString("]}")
+	archive := &Archive{}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		archive.requests.Add(1)
+		if name, isSummary := strings.CutPrefix(request.URL.Path, "/pypi/"); isSummary {
+			summary, isThere := summaries[strings.TrimSuffix(name, "/json")]
+			if !isThere {
+				http.NotFound(response, request)
+				return
+			}
+			_, _ = fmt.Fprintf(response, `{"info":{"summary":%q}}`, summary)
+			return
+		}
+		_, _ = response.Write([]byte(document.String()))
+	}))
+	t.Cleanup(server.Close)
+	archive.URL = server.URL
+	return archive
+}
