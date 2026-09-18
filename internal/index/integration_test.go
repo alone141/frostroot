@@ -61,4 +61,3 @@ func TestIntegrationOpenEveryRelease(t *testing.T) {
 		})
 	}
 }
-
