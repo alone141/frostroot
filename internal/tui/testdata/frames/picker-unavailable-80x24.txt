@@ -22,4 +22,4 @@ Packages
 
 
 
-↑/↓ move • space add/remove • / section • shift+tab back • enter next
+↑/↓ move • space add/remove • shift+tab back • enter next

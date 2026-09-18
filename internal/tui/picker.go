@@ -104,6 +104,9 @@ type pickerField struct {
 	summaryTick int
 	// summaryPending is the name being looked up, for the line that says so.
 	summaryPending string
+	// hasSections is whether the loaded index has any, asked once.
+	sectionsChecked bool
+	hasSections     bool
 }
 
 // pickerRow is one line of the list.
@@ -735,17 +738,40 @@ func (p *pickerField) status() string {
 	if index == nil {
 		return "package index not available: names are added as typed and checked by build"
 	}
-	section := "all sections"
-	if p.section != "" {
+	// An index without sections is not "all sections": PyPI has none, and
+	// saying so would describe a thing that is not there.
+	section := ""
+	switch {
+	case p.section != "":
 		section = "section " + p.section
+	case p.sectionsAvailable():
+		section = "all sections"
 	}
-	status := section + " · " + index.Describe()
-	if shown := p.shownMatches(); p.total > shown {
-		status = fmt.Sprintf("%d of %d shown, keep typing · %s", shown, p.total, section)
-	} else if strings.TrimSpace(p.input.Value()) != "" || p.section != "" {
-		status = fmt.Sprintf("%d found · %s", p.total, status)
+	var parts []string
+	switch shown := p.shownMatches(); {
+	case p.total > shown:
+		parts = append(parts, fmt.Sprintf("%d of %d shown, keep typing", shown, p.total), section)
+	case strings.TrimSpace(p.input.Value()) != "" || p.section != "":
+		parts = append(parts, fmt.Sprintf("%d found", p.total), section, index.Describe())
+	default:
+		parts = append(parts, section, index.Describe())
 	}
-	return status
+	return strings.Join(slices.DeleteFunc(parts, func(part string) bool { return part == "" }), " · ")
+}
+
+// sectionsAvailable reports whether the loaded index has sections to narrow
+// by. It is asked once an index and remembered, because for the apt one the
+// answer is a copy of its whole section table.
+func (p *pickerField) sectionsAvailable() bool {
+	if p.sectionsChecked {
+		return p.hasSections
+	}
+	index := p.index()
+	if index == nil {
+		return false
+	}
+	p.sectionsChecked, p.hasSections = true, len(index.SectionsMatching("")) > 0
+	return p.hasSections
 }
 
 // shownMatches is how many rows came from the index.
@@ -879,7 +905,11 @@ func (p *pickerField) KeyBinds() []key.Binding {
 	if p.choosingSection {
 		return []key.Binding{p.keymap.Up, p.keymap.PickSection, p.keymap.CloseSections}
 	}
-	return []key.Binding{p.keymap.Up, p.keymap.Toggle, p.keymap.Section, p.keymap.Prev, p.keymap.Next}
+	bindings := []key.Binding{p.keymap.Up, p.keymap.Toggle}
+	if p.sectionsAvailable() {
+		bindings = append(bindings, p.keymap.Section)
+	}
+	return append(bindings, p.keymap.Prev, p.keymap.Next)
 }
 
 // WithTheme implements huh.Field.
