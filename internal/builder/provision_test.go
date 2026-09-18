@@ -440,4 +440,13 @@ func TestRenderProvisionScriptIsValidShell(t *testing.T) {
 			t.Errorf("sh -n with sudo=%v: %v: %s", sudo, err, output)
 		}
 	}
+	// Validation rejects a certificate file named like this; the quoting is
+	// the second line of defense, and a real shell is what proves it.
+	imageRecipe := sampleRecipe()
+	imageRecipe.Certificates = &recipe.Certificates{Include: []string{"certs/corp.pem", "certs/x'; touch /tmp/pwned #.pem"}}
+	syntaxCheck := exec.Command("sh", "-n")
+	syntaxCheck.Stdin = strings.NewReader(renderProvisionScript(t, imageRecipe))
+	if output, err := syntaxCheck.CombinedOutput(); err != nil {
+		t.Errorf("sh -n with certificates: %v: %s", err, output)
+	}
 }

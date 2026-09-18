@@ -31,12 +31,18 @@ var archiveUnreachableMessages = []string{
 	"Unable to connect", "No route to host", "404  Not Found",
 }
 
-const buildUsageText = `usage: frostroot build [--mirror URL | --offline] [--keep-work] [--plain]
+const buildUsageText = `usage: frostroot build [--mirror URL | --offline] [--ca-bundle FILE] [--keep-work] [--plain]
 
 Build frostroot.lock and dist/<name>-ubuntu-<release>-amd64.tar.gz from frostroot.toml.
 Needs Linux, mmdebstrap, network, and user namespaces or root. Never prompts.
 The image is frozen at the instant the build starts, or at SOURCE_DATE_EPOCH
 when that is set: no file in it is dated later, and the lock records the instant.
+
+On a network that inspects TLS, --ca-bundle names a PEM file of certificate
+authorities to trust while fetching. It is not installed in the image and not
+recorded in the lock, so a build with it produces the same bytes as a build
+without it. To have the image trust them too, name the file in [certificates]
+in the recipe instead.
 
 With --offline, rebuild the image from frostroot.lock and vendor/debs (see
 frostroot vendor) without the archive: the same packages at the same versions,
@@ -56,6 +62,7 @@ func (a *App) runBuild(args []string) int {
 	flags := a.newFlagSet("build", buildUsageText)
 	mirrorURL := flags.String("mirror", "", "archive base `URL` to use for all three pockets instead of http://archive.ubuntu.com/ubuntu")
 	offline := flags.Bool("offline", false, "rebuild from frostroot.lock and vendor/debs, without the archive")
+	caBundlePath := flags.String("ca-bundle", "", "PEM `FILE` of certificate authorities to trust while fetching, for a network that inspects TLS")
 	keepWork := flags.Bool("keep-work", false, "keep the work directory after a successful build")
 	plain := flags.Bool("plain", false, "print progress as lines instead of showing the full-screen build screen")
 	if exitCode, stop := a.parseFlags(flags, args); stop {
@@ -102,13 +109,18 @@ func (a *App) runBuild(args []string) int {
 	// interrupt on instead of leaving an orphan bootstrapping for minutes.
 	ctx, stopSignalHandling := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stopSignalHandling()
+	extraTrust, ok := a.readCABundle(*caBundlePath)
+	if !ok {
+		return exitUserError
+	}
 	options := builder.Options{
-		RecipeDir: a.RecipeDir,
-		MirrorURL: *mirrorURL,
-		KeepWork:  *keepWork,
-		GOOS:      a.GOOS,
-		Getenv:    a.Getenv,
-		Offline:   *offline,
+		RecipeDir:     a.RecipeDir,
+		MirrorURL:     *mirrorURL,
+		KeepWork:      *keepWork,
+		GOOS:          a.GOOS,
+		Getenv:        a.Getenv,
+		Offline:       *offline,
+		ExtraTrustPEM: extraTrust,
 	}
 	hasPython := len(imageRecipe.PythonPackages()) > 0
 	phases := builder.Phases(hasPython)
