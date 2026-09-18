@@ -69,6 +69,7 @@ func Defaults(host Host) Values {
 		KeyPackages:       []string{},
 		KeyOtherPackages:  "",
 		KeyPythonPackages: "",
+		KeyCertificates:   "",
 		KeySources:        []string{},
 		KeyPPAs:           "",
 	}
@@ -82,6 +83,7 @@ func Defaults(host Host) Values {
 func FromRecipe(imageRecipe recipe.Recipe) Values {
 	catalogNames, otherNames := SplitPackages(imageRecipe.Packages.Include)
 	catalogSources, ppas := SplitSources(imageRecipe.Sources)
+	simpleCertificates, exoticCertificates := splitCertificatePaths(imageRecipe.CertificatePaths())
 	timezone := imageRecipe.Locale.Timezone
 	if timezone == "" {
 		timezone = "UTC"
@@ -103,9 +105,10 @@ func FromRecipe(imageRecipe recipe.Recipe) Values {
 		KeyPythonPackages:       strings.Join(imageRecipe.PythonPackages(), " "),
 		KeySources:              catalogSources,
 		KeyPPAs:                 strings.Join(ppas, " "),
+		KeyCertificates:         strings.Join(simpleCertificates, " "),
 		keyOriginalInclude:      slices.Clone(imageRecipe.Packages.Include),
 		keyOriginalSources:      slices.Clone(imageRecipe.Sources),
-		keyOriginalCertificates: slices.Clone(imageRecipe.CertificatePaths()),
+		keyOriginalCertificates: exoticCertificates,
 	}
 }
 
@@ -127,8 +130,28 @@ func ToRecipe(values Values) recipe.Recipe {
 		},
 		Sources:      MergeSources(values.Strings(KeySources), values.String(KeyPPAs), values.Sources(keyOriginalSources), releaseSuite(values.String(KeyRelease))),
 		Python:       pythonTable(values.String(KeyPythonPackages)),
-		Certificates: certificatesTable(values.Strings(keyOriginalCertificates)),
+		Certificates: certificatesTable(certificatePaths(values)),
 	}
+}
+
+// certificatePaths returns every certificate the answers name: those the
+// field could not hold, carried through, then those typed into it.
+func certificatePaths(values Values) []string {
+	return slices.Concat(values.Strings(keyOriginalCertificates), splitPackageList(values.String(KeyCertificates)))
+}
+
+// splitCertificatePaths divides certificate paths into those the free-text
+// field can hold and those it cannot: a space or a comma in a path would
+// split it, so such a path is carried through an edit rather than shown.
+func splitCertificatePaths(paths []string) (simple, exotic []string) {
+	for _, path := range paths {
+		if strings.ContainsAny(path, " ,\t\n\r") {
+			exotic = append(exotic, path)
+		} else {
+			simple = append(simple, path)
+		}
+	}
+	return simple, exotic
 }
 
 // pythonTable returns the [python] table for an answer, or nil when it names
@@ -141,8 +164,8 @@ func pythonTable(answer string) *recipe.Python {
 	return &recipe.Python{Include: packages}
 }
 
-// certificatesTable returns the [certificates] table the recipe came with,
-// or nil when it named none. Nothing in the form changes it.
+// certificatesTable returns the [certificates] table for the paths, or nil
+// when there are none: a recipe that names no authority keeps no table.
 func certificatesTable(certificatePaths []string) *recipe.Certificates {
 	if len(certificatePaths) == 0 {
 		return nil
@@ -193,8 +216,8 @@ func Summary(values Values) string {
 	if pythonPackages := splitPackageList(values.String(KeyPythonPackages)); len(pythonPackages) > 0 {
 		lines = append(lines, fmt.Sprintf("Python    %s", strings.Join(pythonPackages, " ")))
 	}
-	if certificatePaths := values.Strings(keyOriginalCertificates); len(certificatePaths) > 0 {
-		lines = append(lines, fmt.Sprintf("Certs     %s", strings.Join(certificatePaths, " ")))
+	if paths := certificatePaths(values); len(paths) > 0 {
+		lines = append(lines, fmt.Sprintf("Certs     %s", strings.Join(paths, " ")))
 	}
 	return strings.Join(lines, "\n")
 }

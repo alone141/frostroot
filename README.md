@@ -162,14 +162,16 @@ mkdir cpp-lab && cd cpp-lab
 frostroot init
 ```
 
-`init` opens a form. Five pages, each a few questions: the image name and
+`init` opens a form. Six pages, each a few questions: the image name and
 release; the user name and whether it gets passwordless sudo; the timezone
 (type `ist` to filter the list down to `Europe/Istanbul`), locale and whether
 the image boots with systemd; the packages, picked with Space from a catalog
 grouped by category (C/C++, Python, editors, tools...), plus a line for any
 other apt package names; then third-party apt sources, picked from a catalog
 (deadsnakes, git-core, Docker, NodeSource, GitHub CLI, Kitware, LLVM, VS
-Code), plus a line for other PPAs as `owner/name`. Enter moves on, Shift-Tab
+Code), plus a line for other PPAs as `owner/name`; and last the certificate
+files the image should trust, for a network that inspects TLS, each checked
+to be there and to be a certificate as you type. Enter moves on, Shift-Tab
 goes back, Ctrl-C leaves without writing. A summary page shows the recipe
 before it is written. You type an image name, a user name and, if you want,
 extra package names or PPAs; everything else is a choice. The signing keys
