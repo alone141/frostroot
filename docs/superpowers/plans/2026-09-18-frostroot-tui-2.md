@@ -245,7 +245,7 @@ that loads in 35 ms.
 `docs/superpowers/specs/2026-09-18-frostroot-picker.md`. The user looked
 and decided A (all four components, builds too) and B (one field).
 
-### Task 1b: builds enable all four components
+### Task 1b: builds enable all four components — done
 
 `distro`'s table lists `main restricted universe multiverse` for every
 release; `SourceLines` and the picker both read it. Tests: the source
@@ -255,7 +255,7 @@ existing v0.9 lock and pool rebuild offline to the same bytes; a fresh
 build with a multiverse package installs it, locks it under
 `pool/multiverse/`, vendors and rebuilds identically.
 
-### Task 2: the index
+### Task 2: the index — done
 
 `internal/index`: `Open` (cache, fetch, stale fallback), the `Release`
 parser and hash check, reduce, the cache file with its header, `Search`
@@ -266,7 +266,7 @@ stale cache, a header for another mirror, a hash mismatch that clears on
 the second fetch, and a corrupt cache file that is deleted and refetched
 rather than trusted. Records `Nearest`'s real cost over the whole archive.
 
-### Task 3: the field and the wiring
+### Task 3: the field and the wiring — done
 
 `form.KindSearch`, `form.PackageIndex`, `Host.OpenIndex`; "Other packages"
 changes kind and keeps its key. The plain interface renders it as the
@@ -274,16 +274,16 @@ free-text question it is today. `cli` plugs `internal/index` in, and
 `init`, `edit` and `capture` gain `--refresh-index`, `--mirror` and
 `--ca-bundle`.
 
-### Task 4: the component
+### Task 4: the component — done
 
 `internal/tui/picker.go`, a `huh.Field`: the query box, the ranked results,
 Space to add and remove, the empty query listing what is chosen, the
 as-typed row, `/` for the section list, paste of several names, the loading
-line with the build screen's bar, the no-index list editor, zoom while
-focused, ASCII and 60-column layouts. Driver tests for each; golden frames
+line with a bar, the no-index list editor, its place kept on the page rather
+than zoomed, ASCII and 60-column layouts. Driver tests for each; golden frames
 at the three sizes and in ASCII.
 
-### Task 5: the warning
+### Task 5: the warning — done
 
 `form.UnknownPackages(values, index)` and its rendering on the summary
 page and in the plain interface's summary; the wording changes when no
