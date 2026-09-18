@@ -133,3 +133,16 @@ func TestGroupThousands(t *testing.T) {
 		}
 	}
 }
+
+func TestLookup(t *testing.T) {
+	opened := openExcerpt(t)
+	meson, isThere := opened.Lookup("meson")
+	if want := (Entry{Name: "meson", Version: "1.3.2-1ubuntu1", Component: "universe", Section: "devel", Description: "high-productivity build system"}); !isThere || meson != want {
+		t.Errorf("Lookup(meson) = %+v, %v; want %+v", meson, isThere, want)
+	}
+	for _, name := range []string{"meso", "mesonx", "", "zzz", "0"} {
+		if found, isThere := opened.Lookup(name); isThere {
+			t.Errorf("Lookup(%q) = %+v, want nothing", name, found)
+		}
+	}
+}

@@ -451,8 +451,10 @@ func (p *pickerField) chosenRow(name string, index form.PackageIndex) pickerRow 
 	if index == nil {
 		return pickerRow{name: name}
 	}
-	if matches, _ := index.Search(name, "", 1); len(matches) == 1 && matches[0].Name == name {
-		return pickerRow{name: name, version: matches[0].Version, description: matches[0].Description}
+	// Lookup, not Search: capture's recipe has hundreds of names, and a scan
+	// of the archive for each would be seconds of a frozen screen.
+	if match, isThere := index.Lookup(name); isThere {
+		return pickerRow{name: name, version: match.Version, description: match.Description}
 	}
 	return pickerRow{name: name, unknown: true}
 }

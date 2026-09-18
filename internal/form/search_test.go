@@ -16,6 +16,7 @@ type fakeIndex struct {
 func (f fakeIndex) Search(string, string, int) ([]Match, int) { return nil, 0 }
 func (f fakeIndex) SectionsMatching(string) []SectionCount    { return nil }
 func (f fakeIndex) Has(name string) bool                      { return slices.Contains(f.names, name) }
+func (f fakeIndex) Lookup(name string) (Match, bool)          { return Match{Name: name}, f.Has(name) }
 func (f fakeIndex) Nearest(name string, _ int) []string       { return f.nearest[name] }
 func (f fakeIndex) Describe() string                          { return "fake" }
 
