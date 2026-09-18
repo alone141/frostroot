@@ -25,6 +25,10 @@ const (
 	KindMultiSelect             // any number of options
 	KindConfirm                 // yes or no
 	KindNote                    // text to read; nothing is answered
+	// KindSearch is a list of package names, found by searching an index
+	// or typed. Its answer is the text a KindInput would hold: names
+	// separated by spaces. An interface that cannot search asks it as one.
+	KindSearch
 )
 
 // NoteField returns a field that shows text on page and asks nothing: what
@@ -51,6 +55,7 @@ type Field struct {
 	Filterable  bool               // long lists: typing narrows the options
 	Validate    func(string) error // Input: nil when the text is acceptable
 	Placeholder string             // Input: hint shown while empty
+	OpenIndex   IndexOpener        // Search: opens the index to search; nil means there is none
 }
 
 // DisplayLabel returns the option's display text: Label, or Value when there
@@ -115,6 +120,9 @@ type Host struct {
 	// RecipeDir is where the recipe lives, so that a field naming files
 	// beside it can check them as they are typed; "" checks paths only.
 	RecipeDir string
+	// OpenIndex opens the package index of a release for the field that
+	// searches it; nil means the form has none, and asks for names only.
+	OpenIndex IndexOpener
 }
 
 // Fields returns every question, in the order they are asked.
@@ -170,11 +178,12 @@ func Fields(host Host) []Field {
 			Options:     catalogOptions(),
 		},
 		{
-			Key: KeyOtherPackages, Page: PagePackages, Kind: KindInput,
+			Key: KeyOtherPackages, Page: PagePackages, Kind: KindSearch,
 			Title:       "Other packages",
-			Description: "apt package names not listed above, separated by spaces or commas",
+			Description: "type to search the release's archive, or a name; Space adds the row",
 			Placeholder: "none",
 			Validate:    checkPackageList,
+			OpenIndex:   host.OpenIndex,
 		},
 		{
 			Key: KeyPythonPackages, Page: PagePackages, Kind: KindInput,
