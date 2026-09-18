@@ -295,8 +295,15 @@ vendored pool, and nothing in `planOffline` recomputes the archive lines. So:
 - No recipe knob. Nobody has asked for fewer components, and a knob is a
   field `edit` has to carry, the way `[certificates]` taught.
 - What could change for an existing recipe built online: a `Recommends`
-  that only `multiverse` or `restricted` can satisfy now gets installed.
-  The verification looks for it in the catalog's closure.
+  that only `multiverse` or `restricted` can satisfy was skipped with two
+  components and is installed with four. Checked against noble's release
+  pocket and `-updates` on 2026-09-18: of everything in `main` and
+  `universe`, 28 packages have such a recommendation, none of them in
+  `main`, none a catalog entry, none in any lock built so far. They are
+  blends and games: `games-*`, `med-*`, `multimedia-*`, `ubuntustudio-*`,
+  `kubuntu-settings-desktop`, `openttd`, `steam-libs`, `primus-libs`,
+  `boinc-client-nvidia-cuda`, `python3-scalene` and a few more. A lab image
+  that asks for none of them installs what it installed before.
 
 ## Decision B: one field
 
