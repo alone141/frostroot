@@ -48,10 +48,12 @@ func isCharacterDevice(stream any) bool {
 // already has (capture read them from the machine); other missing keys are
 // fetched. intro is shown before the questions: what capture has to say,
 // or nothing.
-func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath string, plainRequested bool, providedKeys map[string][]byte, intro []form.Field) int {
-	fields := slices.Concat(intro, form.Fields(a.host()))
+func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath string, plainRequested bool, providedKeys map[string][]byte, intro []form.Field, indexes *packageIndexes) int {
+	host := a.host()
+	host.OpenIndex = indexes.Open
+	fields := slices.Concat(intro, form.Fields(host))
 	fullScreen := a.useFullScreen(plainRequested)
-	preview := recipePreview(recipePath)
+	preview := recipePreview(recipePath, indexes)
 	var values form.Values
 	var problems []string
 	var err error
@@ -83,7 +85,11 @@ func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath 
 		// preview above the question; the plain interface shows the same
 		// and confirms here.
 		shown := preview(values)
-		a.stdoutf("\n%s\n\n%s\n", form.Summary(values), shown.Heading)
+		a.stdoutf("\n%s\n", form.Summary(values))
+		if shown.Warning != "" {
+			a.stdoutf("\n%s\n", shown.Warning)
+		}
+		a.stdoutf("\n%s\n", shown.Heading)
 		if shown.Text != "" {
 			a.stdoutf("\n%s\n", strings.TrimRight(shown.Text, "\n"))
 		}
@@ -133,10 +139,10 @@ func (a *App) declineToWrite(commandName string, unchanged bool) int {
 // not exist yet, and otherwise how the file there will change, because
 // edit and init --force replace it — comments of the user's own included,
 // which the preview says when it sees any.
-func recipePreview(recipePath string) tui.PreviewFunc {
+func recipePreview(recipePath string, indexes *packageIndexes) tui.PreviewFunc {
 	current, err := os.ReadFile(recipePath)
 	replacing := err == nil
-	return func(values form.Values) tui.Preview {
+	describe := func(values form.Values) tui.Preview {
 		rendered, err := renderRecipe(form.ToRecipe(values))
 		if err != nil {
 			return tui.Preview{Heading: err.Error()}
@@ -156,6 +162,14 @@ func recipePreview(recipePath string) tui.PreviewFunc {
 			heading = strings.TrimSuffix(heading, ":") + "; your own comments in the file are replaced by the template's:"
 		}
 		return tui.Preview{Heading: heading, Text: difference.String()}
+	}
+	// Whatever the file will say, names the release's archive lacks are
+	// worth a word before it is written.
+	return func(values form.Values) tui.Preview {
+		preview := describe(values)
+		unknown := form.UnknownPackages(values, indexes.Known(values.String(form.KeyRelease)))
+		preview.Warning = form.UnknownPackagesWarning(unknown, values)
+		return preview
 	}
 }
 

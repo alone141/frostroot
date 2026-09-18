@@ -71,16 +71,17 @@ url = {{tomlQuote .URL}}
 {{end}}key = {{tomlQuote .Key}}
 {{end}}{{end}}`))
 
-const initUsageText = `usage: frostroot init [--force] [--plain]
+const initUsageText = `usage: frostroot init [--force] [--plain] [--mirror URL] [--ca-bundle FILE] [--refresh-index]
 
 Answer a few questions and write frostroot.toml in the current directory.
 
-`
+` + indexUsageText
 
 func (a *App) runInit(args []string) int {
 	flags := a.newFlagSet("init", initUsageText)
 	overwrite := flags.Bool("force", false, "overwrite an existing frostroot.toml")
 	plain := flags.Bool("plain", false, "ask line by line instead of showing the full-screen form")
+	indexOptions := addIndexFlags(flags)
 	if exitCode, stop := a.parseFlags(flags, args); stop {
 		return exitCode
 	}
@@ -89,7 +90,11 @@ func (a *App) runInit(args []string) int {
 		a.stderrf("frostroot: %s already exists; use --force to overwrite it, or frostroot edit to change it\n", recipePath)
 		return exitUserError
 	}
-	return a.runRecipeForm("init", form.Defaults(a.host()), recipePath, *plain, nil, nil)
+	indexes, ok := a.packageIndexes(indexOptions)
+	if !ok {
+		return exitUserError
+	}
+	return a.runRecipeForm("init", form.Defaults(a.host()), recipePath, *plain, nil, nil, indexes)
 }
 
 // renderRecipe returns imageRecipe as the file init and edit write, byte

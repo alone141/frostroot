@@ -14,7 +14,7 @@ import (
 // captureReportFileName is the report capture writes next to the recipe.
 const captureReportFileName = "frostroot-capture.md"
 
-const captureUsageText = `usage: frostroot capture [--root DIR] [--force] [--plain]
+const captureUsageText = `usage: frostroot capture [--root DIR] [--force] [--plain] [--mirror URL] [--ca-bundle FILE] [--refresh-index]
 
 Describe an installed Ubuntu system as a recipe: read what apt installed,
 which third-party apt sources it uses and how the machine is set up, open
@@ -24,13 +24,14 @@ npm installs, /opt, edits to /etc, dotfiles...). Reads package metadata and
 a few configuration files; the only files it copies are the public signing
 keys of apt sources; needs no root.
 
-`
+` + indexUsageText
 
 func (a *App) runCapture(args []string) int {
 	flags := a.newFlagSet("capture", captureUsageText)
 	rootDir := flags.String("root", "/", "root of the system to describe, e.g. a mounted `DIR`")
 	overwrite := flags.Bool("force", false, "overwrite an existing frostroot.toml")
 	plain := flags.Bool("plain", false, "ask line by line instead of showing the full-screen form")
+	indexOptions := addIndexFlags(flags)
 	if exitCode, stop := a.parseFlags(flags, args); stop {
 		return exitCode
 	}
@@ -48,7 +49,11 @@ func (a *App) runCapture(args []string) int {
 	// What was read, and what a recipe cannot carry, before the questions:
 	// the packages page is answered knowing what is missing.
 	intro := []form.Field{form.NoteField(form.PageCaptured, "What capture found", captureNoteText(snapshot))}
-	if exitCode := a.runRecipeForm("capture", form.FromRecipe(snapshot.Recipe()), recipePath, *plain, snapshot.Keys, intro); exitCode != exitSuccess {
+	indexes, ok := a.packageIndexes(indexOptions)
+	if !ok {
+		return exitUserError
+	}
+	if exitCode := a.runRecipeForm("capture", form.FromRecipe(snapshot.Recipe()), recipePath, *plain, snapshot.Keys, intro, indexes); exitCode != exitSuccess {
 		return exitCode
 	}
 
