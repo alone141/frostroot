@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 
@@ -28,11 +29,37 @@ const (
 	multiSelectListHeight = 12
 )
 
+// Sizes of the summary page, in rows and cells.
+const (
+	// previewMinimumHeight is the fewest rows the preview pane keeps on a
+	// short terminal: the question below it has to stay on screen.
+	previewMinimumHeight = 3
+	// questionRows is what the write question takes with its help line.
+	questionRows = 6
+	// previewFrameRows is what surrounds the pane: the blank line above
+	// it, the heading, the border, and the blank line below.
+	previewFrameRows = 6
+	// previewMinimumWidth keeps the pane readable on an absurd terminal.
+	previewMinimumWidth = 10
+)
+
+// Preview is what the last page shows above the write question: the recipe
+// as it will be written, or how the file will change.
+type Preview struct {
+	Heading   string // one line above the text
+	Text      string // the rendered recipe, or a line diff of it; "" shows the summary alone
+	Unchanged bool   // writing would leave the file exactly as it is
+}
+
+// PreviewFunc renders the preview for the answers so far. nil means the
+// last page shows the summary alone, as it did before previews.
+type PreviewFunc func(form.Values) Preview
+
 // RunForm shows fields as a full-screen form, one page per form page,
-// starting from initial, then a summary page that asks to write the recipe.
-// It returns the answers, or ErrCanceled.
-func RunForm(ctx context.Context, fields []form.Field, initial form.Values, input io.Reader, output io.Writer) (form.Values, error) {
-	model := newFormModel(fields, initial)
+// starting from initial, then a summary page with the preview that asks to
+// write the recipe. It returns the answers, or ErrCanceled.
+func RunForm(ctx context.Context, fields []form.Field, initial form.Values, preview PreviewFunc, input io.Reader, output io.Writer) (form.Values, error) {
+	model := newFormModel(fields, initial, preview)
 	program := tea.NewProgram(model, tea.WithInput(input), tea.WithOutput(output), tea.WithContext(ctx))
 	finalModel, err := program.Run()
 	switch {
@@ -60,31 +87,43 @@ const (
 	stageDone
 )
 
-// formModel runs two huh forms in one Bubble Tea program: the question pages,
-// then a summary built from the answers with the question whether to write.
-// One program, so one input stream, which also keeps scripted tests honest.
+// formModel runs the question pages as one huh form, then the summary page,
+// in one Bubble Tea program. One program, so one input stream, which also
+// keeps scripted tests honest.
 type formModel struct {
 	binding *formBinding
+	preview PreviewFunc
 	pages   *huh.Form
-	summary *huh.Form
+	summary *summaryModel
 	stage   formStage
 	write   bool
+	width   int
+	height  int
 }
 
-func newFormModel(fields []form.Field, initial form.Values) *formModel {
+func newFormModel(fields []form.Field, initial form.Values, preview PreviewFunc) *formModel {
 	binding := newFormBinding(fields, initial)
 	return &formModel{
 		binding: binding,
+		preview: preview,
 		pages:   huh.NewForm(binding.groups()...).WithTheme(formTheme()),
+		width:   defaultWidth,
+		height:  defaultHeight,
 	}
 }
 
 // Init implements tea.Model.
 func (m *formModel) Init() tea.Cmd { return m.pages.Init() }
 
-// Update implements tea.Model: it forwards to the running huh form and moves
-// on when that form completes or aborts.
+// Update implements tea.Model: it forwards to the running page and moves
+// on when that page completes or aborts.
 func (m *formModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if size, isSize := msg.(tea.WindowSizeMsg); isSize {
+		m.width, m.height = size.Width, size.Height
+		if m.summary != nil {
+			m.summary.resize(m.width, m.height)
+		}
+	}
 	switch m.stage {
 	case stagePages:
 		updated, cmd := m.pages.Update(msg)
@@ -94,15 +133,19 @@ func (m *formModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Interrupt
 		case huh.StateCompleted:
 			m.stage = stageSummary
-			m.summary = newSummaryForm(form.Summary(m.binding.values()), &m.write).WithTheme(formTheme())
+			values := m.binding.values()
+			var preview Preview
+			if m.preview != nil {
+				preview = m.preview(values)
+			}
+			m.summary = newSummaryModel(form.Summary(values), preview, m.width, m.height, &m.write)
 			return m, tea.Batch(cmd, m.summary.Init())
 		case huh.StateNormal:
 		}
 		return m, cmd
 	case stageSummary:
-		updated, cmd := m.summary.Update(msg)
-		m.summary = asHuhForm(updated, m.summary)
-		switch m.summary.State {
+		cmd, state := m.summary.Update(msg)
+		switch state {
 		case huh.StateAborted:
 			return m, tea.Interrupt
 		case huh.StateCompleted:
@@ -137,29 +180,122 @@ func (m *formModel) View() string {
 	return ""
 }
 
-// newSummaryForm builds the last page: the summary and the write question.
-func newSummaryForm(summary string, write *bool) *huh.Form {
-	*write = true
-	return huh.NewForm(huh.NewGroup(
-		huh.NewNote().Title("Summary").Description(noteText(summary)),
-		huh.NewConfirm().Title("Write frostroot.toml?").Affirmative("Write").Negative("Cancel").Value(write),
-	))
+// summaryModel is the last page: the summary of the answers, the preview
+// of the file in a pane that scrolls, and the question whether to write.
+// The question is a huh form of one confirm, so its keys, help line and
+// theme are the ones the pages had; the pane takes the scrolling keys
+// before the question sees anything.
+type summaryModel struct {
+	summary  string
+	heading  string
+	pane     viewport.Model
+	hasPane  bool
+	question *huh.Form
 }
 
-// noteMarkup escapes what a huh note reads as markup. Its description is
-// rendered with a small markup language in which "_" and "*" toggle italic
-// and bold and "`" opens a code span, so the summary showed en_US.UTF-8 as
-// enUS.UTF-8 with everything after it in italics. A backslash makes the
-// next character literal.
-var noteMarkup = strings.NewReplacer(`\`, `\\`, "_", `\_`, "*", `\*`, "`", "\\`")
+// newSummaryModel builds the page. write starts as yes, unless writing
+// would change nothing, in which case the question says so and starts as
+// no.
+func newSummaryModel(summary string, preview Preview, width, height int, write *bool) *summaryModel {
+	*write = !preview.Unchanged
+	title := "Write frostroot.toml?"
+	if preview.Unchanged {
+		title = "Nothing changes. Write anyway?"
+	}
+	page := &summaryModel{
+		summary: summary,
+		heading: preview.Heading,
+		hasPane: preview.Text != "",
+		question: huh.NewForm(huh.NewGroup(
+			huh.NewConfirm().Title(title).Affirmative("Write").Negative("Cancel").Value(write),
+		)).WithTheme(formTheme()),
+	}
+	if page.hasPane {
+		page.pane = viewport.New(previewMinimumWidth, previewMinimumHeight)
+		page.pane.SetContent(strings.TrimRight(preview.Text, "\n"))
+	}
+	page.resize(width, height)
+	return page
+}
 
-// noteText returns text as a huh note shows it verbatim.
-func noteText(text string) string { return noteMarkup.Replace(text) }
+// Init starts the question.
+func (s *summaryModel) Init() tea.Cmd { return s.question.Init() }
+
+// resize fits the pane to the terminal, leaving the summary above and the
+// question below their rows.
+func (s *summaryModel) resize(width, height int) {
+	if !s.hasPane {
+		return
+	}
+	summaryRows := strings.Count(s.summary, "\n") + 2 // its lines and the title
+	s.pane.Width = max(previewMinimumWidth, width-4)
+	s.pane.Height = max(previewMinimumHeight, height-summaryRows-previewFrameRows-questionRows)
+}
+
+// Update routes a key to the pane when it scrolls, and everything else to
+// the question. It returns the question's state, which is the page's.
+func (s *summaryModel) Update(msg tea.Msg) (tea.Cmd, huh.FormState) {
+	if key, isKey := msg.(tea.KeyMsg); isKey && s.hasPane && isScrollKey(key) {
+		var cmd tea.Cmd
+		s.pane, cmd = s.pane.Update(msg)
+		return cmd, huh.StateNormal
+	}
+	updated, cmd := s.question.Update(msg)
+	s.question = asHuhForm(updated, s.question)
+	return cmd, s.question.State
+}
+
+// isScrollKey reports whether key belongs to the pane: the arrows and page
+// keys, and j and k. Left, right, y, n, Enter and Tab belong to the
+// question.
+func isScrollKey(key tea.KeyMsg) bool {
+	switch key.Type {
+	case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown, tea.KeyHome, tea.KeyEnd:
+		return true
+	default:
+		return key.String() == "j" || key.String() == "k"
+	}
+}
+
+// View renders the page.
+func (s *summaryModel) View() string {
+	var view strings.Builder
+	view.WriteString(titleStyle.Render("Summary"))
+	view.WriteByte('\n')
+	view.WriteString(s.summary)
+	view.WriteByte('\n')
+	if s.heading != "" {
+		view.WriteByte('\n')
+		view.WriteString(s.heading)
+		view.WriteByte('\n')
+	}
+	if s.hasPane {
+		view.WriteString(paneStyle.Width(s.pane.Width).Render(s.pane.View()))
+		view.WriteByte('\n')
+		if s.pane.TotalLineCount() > s.pane.Height {
+			view.WriteString(dimStyle.Render(fmt.Sprintf("  ↑/↓ PgUp/PgDn scroll · %d more lines", s.pane.TotalLineCount()-s.pane.Height)))
+			view.WriteByte('\n')
+		}
+	}
+	view.WriteByte('\n')
+	view.WriteString(s.question.View())
+	return view.String()
+}
 
 // formTheme is the look of every form. Base16 uses the terminal's own
 // sixteen colors, so it follows the user's palette on light and dark
 // terminals alike, and it degrades to plain text where colors are off.
 func formTheme() *huh.Theme { return huh.ThemeBase16() }
+
+// noteMarkup escapes what a huh note reads as markup. Its description is
+// rendered with a small markup language in which "_" and "*" toggle italic
+// and bold and "`" opens a code span, so a note showing en_US.UTF-8 would
+// show enUS.UTF-8 with everything after it in italics. A backslash makes
+// the next character literal.
+var noteMarkup = strings.NewReplacer(`\`, `\\`, "_", `\_`, "*", `\*`, "`", "\\`")
+
+// noteText returns text as a huh note shows it verbatim.
+func noteText(text string) string { return noteMarkup.Replace(text) }
 
 // formBinding holds the variables huh writes answers into, one per field, and
 // the initial values everything else is copied from.

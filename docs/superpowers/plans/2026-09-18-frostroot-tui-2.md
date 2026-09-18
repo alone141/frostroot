@@ -119,12 +119,16 @@ a unified diff of the current file against what will be written, in the
 same pane, with a one-line count above it ("3 lines change; the file's own
 comments are replaced by the template's" when the current file has any line
 that is a comment the template does not produce). No difference at all
-says so, and the question becomes "Nothing changes; write anyway?" with
-the default No. The five-line précis stays as the pane's title block. The
-plain interface prints the same text before its `y/n`. The template moves
-from `internal/cli/init.go` to `internal/form` so both interfaces render it
-without importing the CLI; nothing about the file it writes changes, which
-a round-trip test proves.
+says so, and the question becomes "Nothing changes. Write anyway?" with
+the default No — and declining then is not an error, since nothing was
+asked for that did not happen. The five-line précis stays as the pane's
+title block. The plain interface prints the same text before its `y/n`.
+The template stays in `internal/cli`: the command line hands the form a
+function that renders the preview from the answers, so the form never
+imports the CLI and the CLI never imports a widget, and the line diff is
+its own small package, `internal/textdiff`. Long lines in the pane wrap
+into fragments below about 70 columns, as the log pane's do; Task 5 fixes
+both.
 
 ### Task 3: the form can say everything the recipe can
 

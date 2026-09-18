@@ -1,0 +1,22 @@
+Summary
+Image     lab, Ubuntu 24.04 amd64
+User      student, passwordless sudo
+System    UTC, en_US.UTF-8, systemd on
+Packages  none
+Sources   Ubuntu's archive only
+
+Nothing changes: frostroot.toml already says this.
+╭────────────────────────────────────────────────────────╮
+│ # frostroot recipe: the image you want. Edit it, then  │
+│ ru                                                     │
+│ #                                                      │
+│ # Versions do not belong here. frostroot build writes  │
+│ th                                                     │
+╰────────────────────────────────────────────────────────╯
+  ↑/↓ PgUp/PgDn scroll · 21 more lines
+
+┃ Nothing changes. Write anyway?
+┃
+┃       Write     Cancel
+
+←/→ toggle • enter submit • y Write • n Cancel

@@ -185,6 +185,65 @@ func TestProgressFrames(t *testing.T) {
 	}
 }
 
+// sampleRecipeText stands in for a rendered recipe on the summary page; the
+// real one comes from the command line, which the form never imports.
+const sampleRecipeText = `# frostroot recipe: the image you want. Edit it, then run: frostroot build
+#
+# Versions do not belong here. frostroot build writes the exact version of
+# every installed package to frostroot.lock; commit both files.
+
+[image]
+name = "lab"  # file name of the tarball and name of the WSL distro
+release = "24.04"
+arch = "amd64"  # the only architecture in v1
+
+[user]
+name = "student"
+sudo = true  # passwordless sudo: this is a lab image, not a hardened server
+
+[wsl]
+systemd = true
+default_user = "student"
+
+[locale]
+lang = "en_US.UTF-8"
+timezone = "UTC"  # kept under WSL instead of following Windows
+
+[packages]
+include = ["git", "build-essential"]
+`
+
+// sampleDiffText stands in for the diff edit shows.
+const sampleDiffText = `  [image]
+- name = "lab"  # file name of the tarball and name of the WSL distro
++ name = "cpp-lab"  # file name of the tarball and name of the WSL distro
+  release = "24.04"
+  arch = "amd64"  # the only architecture in v1
+
+  [packages]
+- # my own note about these
+- include = ["git"]
++ include = ["git", "build-essential"]
+`
+
+// summaryScenarios are the last pages worth pinning: with no preview, with
+// a new recipe, with a diff, and with nothing to change.
+var summaryScenarios = []struct {
+	name    string
+	preview PreviewFunc
+}{
+	{name: "form-summary", preview: nil},
+	{name: "form-summary-new", preview: func(form.Values) Preview {
+		return Preview{Heading: "This is what frostroot.toml will say:", Text: sampleRecipeText}
+	}},
+	{name: "form-summary-diff", preview: func(form.Values) Preview {
+		return Preview{Heading: "4 lines change; your own comments in the file are replaced by the template's:", Text: sampleDiffText}
+	}},
+	{name: "form-summary-unchanged", preview: func(form.Values) Preview {
+		return Preview{Heading: "Nothing changes: frostroot.toml already says this.", Text: sampleRecipeText, Unchanged: true}
+	}},
+}
+
 func TestFormFrames(t *testing.T) {
 	for _, size := range frameSizes {
 		t.Run(frameName("form-first-page", size.cols, size.rows), func(t *testing.T) {
@@ -192,13 +251,14 @@ func TestFormFrames(t *testing.T) {
 			d.press(tea.WindowSizeMsg{Width: size.cols, Height: size.rows})
 			assertFrame(t, frameName("form-first-page", size.cols, size.rows), d.model.View())
 		})
-		t.Run(frameName("form-summary", size.cols, size.rows), func(t *testing.T) {
-			d := newFormDriver(t, form.Defaults(noHost))
-			d.press(tea.WindowSizeMsg{Width: size.cols, Height: size.rows})
-			d.pressEnterUntil(stageSummary)
-			d.press(tea.WindowSizeMsg{Width: size.cols, Height: size.rows})
-			assertFrame(t, frameName("form-summary", size.cols, size.rows), d.model.View())
-		})
+		for _, scenario := range summaryScenarios {
+			t.Run(frameName(scenario.name, size.cols, size.rows), func(t *testing.T) {
+				d := newFormDriverWithPreview(t, form.Defaults(noHost), scenario.preview)
+				d.press(tea.WindowSizeMsg{Width: size.cols, Height: size.rows})
+				d.pressEnterUntil(stageSummary)
+				assertFrame(t, frameName(scenario.name, size.cols, size.rows), d.model.View())
+			})
+		}
 	}
 }
 
