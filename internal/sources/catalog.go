@@ -5,6 +5,8 @@
 package sources
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"slices"
@@ -131,11 +133,38 @@ func PPA(owner, name string) recipe.Source {
 	return recipe.Source{Name: sourceName, URL: ppaURL(owner, name), Key: KeyPathFor(sourceName)}
 }
 
+// ppaUnsafe matches the characters a source name cannot hold. Launchpad
+// allows a dot and a plus in an owner or an archive name; a source name
+// allows neither.
+var ppaUnsafe = regexp.MustCompile(`[^a-z0-9-]+`)
+
 // ppaSourceName turns owner and name into a source name: "ppa-<owner>-<name>"
-// with the characters a source name cannot hold replaced.
+// with the characters a source name cannot hold replaced. A name that would
+// pass the recipe's length limit is cut short and given a suffix taken from
+// the PPA itself, so that a long PPA still has a name and two long ones do
+// not land on the same one. Short names are returned exactly as before,
+// because they are already in recipes, in lock files and in the key file
+// paths beside them, and changing one would orphan its key.
+//
+// This is not injective on its own: "foo-bar/baz" and "foo/bar-baz" both
+// fold to ppa-foo-bar-baz, and no encoding that keeps the old short names
+// can avoid that. The PPA field refuses a pair that collides, which is
+// where a person can still fix it.
 func ppaSourceName(owner, name string) string {
-	unsafe := regexp.MustCompile(`[^a-z0-9-]+`)
-	return "ppa-" + unsafe.ReplaceAllString(owner, "-") + "-" + unsafe.ReplaceAllString(name, "-")
+	full := "ppa-" + ppaUnsafe.ReplaceAllString(owner, "-") + "-" + ppaUnsafe.ReplaceAllString(name, "-")
+	if len(full) <= recipe.MaxSourceNameLength {
+		return full
+	}
+	suffix := "-" + ppaNameDigest(owner, name)
+	return strings.TrimRight(full[:recipe.MaxSourceNameLength-len(suffix)], "-") + suffix
+}
+
+// ppaNameDigest is a short, stable tag for one PPA, for the names too long
+// to carry in full. Four hex characters: this only has to separate the
+// handful of PPAs one recipe names, not to resist anyone.
+func ppaNameDigest(owner, name string) string {
+	digest := sha256.Sum256([]byte(owner + "/" + name))
+	return hex.EncodeToString(digest[:])[:4]
 }
 
 func ppaURL(owner, name string) string {

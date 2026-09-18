@@ -431,3 +431,27 @@ func TestValuesAccessors(t *testing.T) {
 		t.Error("Clone must copy lists")
 	}
 }
+
+// TestPPAFieldRefusesTwoPPAsWithOneName: the recipe holds one source per
+// name, so a pair that folds to the same name must be refused in the field,
+// where it can still be fixed, rather than one of them being dropped
+// silently on the way to the summary.
+func TestPPAFieldRefusesTwoPPAsWithOneName(t *testing.T) {
+	err := checkPPAList("foo.bar/baz foo-bar/baz")
+	if err == nil {
+		t.Fatal("two PPAs that fold to one name were accepted")
+	}
+	for _, want := range []string{"foo.bar/baz", "foo-bar/baz", "ppa-foo-bar-baz"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %q", err, want)
+		}
+	}
+	// The same PPA written twice is not a collision: it is one source.
+	if err := checkPPAList("deadsnakes/ppa ppa:deadsnakes/ppa"); err != nil {
+		t.Errorf("the same PPA twice = %v", err)
+	}
+	// A PPA too long to name in full is now usable, not refused after the form.
+	if err := checkPPAList("canonical-server/server-backports"); err != nil {
+		t.Errorf("a long PPA = %v", err)
+	}
+}

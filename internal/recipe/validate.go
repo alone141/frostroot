@@ -52,8 +52,9 @@ var (
 // maxUserNameLength is the longest name useradd accepts.
 const maxUserNameLength = 32
 
-// maxSourceNameLength keeps keyring file names short.
-const maxSourceNameLength = 32
+// MaxSourceNameLength keeps keyring file names short. Capture and the PPA
+// namer hold to the same limit, so it is one constant rather than three.
+const MaxSourceNameLength = 32
 
 // maxPythonNameLength is the longest project name PyPI accepts.
 const maxPythonNameLength = 100
@@ -134,8 +135,8 @@ func Validate(imageRecipe Recipe) []string {
 // the recipe directory.
 func CheckSource(source Source) []error {
 	var problems []error
-	if !sourceNamePattern.MatchString(source.Name) || len(source.Name) > maxSourceNameLength {
-		problems = append(problems, fmt.Errorf("invalid source name %q (lowercase letters, digits and dashes; 1-%d characters)", source.Name, maxSourceNameLength))
+	if !sourceNamePattern.MatchString(source.Name) || len(source.Name) > MaxSourceNameLength {
+		problems = append(problems, fmt.Errorf("invalid source name %q (lowercase letters, digits and dashes; 1-%d characters)", source.Name, MaxSourceNameLength))
 	}
 	if err := CheckSourceURL(source.URL); err != nil {
 		problems = append(problems, err)

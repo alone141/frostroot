@@ -299,9 +299,6 @@ func (root systemRoot) sourceKey(signedBy string) (armored []byte, origin string
 // hold.
 var sourceNameSeparators = regexp.MustCompile(`[^a-z0-9-]+`)
 
-// maxSourceNameLength mirrors the recipe's rule.
-const maxSourceNameLength = 32
-
 // sourceNameFor names a captured source: the catalog's name when the URL
 // and suite are a catalog entry's, "ppa-<owner>-<name>" for a PPA, otherwise
 // the host with dots turned into dashes; made unique against usedNames.
@@ -328,8 +325,8 @@ func sourceNameFor(uri, suite, releaseSuite string, usedNames map[string]bool) s
 		if name == "" {
 			name = "source"
 		}
-		if len(name) > maxSourceNameLength-3 {
-			name = strings.TrimRight(name[:maxSourceNameLength-3], "-")
+		if len(name) > recipe.MaxSourceNameLength-3 {
+			name = strings.TrimRight(name[:recipe.MaxSourceNameLength-3], "-")
 		}
 	}
 	unique := name
