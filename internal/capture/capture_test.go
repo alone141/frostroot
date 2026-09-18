@@ -1,15 +1,23 @@
 package capture
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/md5"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"frostroot/internal/builder"
 	"frostroot/internal/pgp"
@@ -604,5 +612,78 @@ func TestParseOneLineSourcesStripsComments(t *testing.T) {
 	}
 	if !slices.Equal(entries[1].components, []string{"main", "universe"}) {
 		t.Errorf("components = %v, want [main universe]", entries[1].components)
+	}
+}
+
+// selfSignedPEM returns one certificate, for fixtures that need a real one.
+func selfSignedPEM(t *testing.T, commonName string) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               pkix.Name{CommonName: commonName},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+// TestCaptureCarriesTheMachinesCertificateAuthorities: the authorities an
+// organization added live in /usr/local/share/ca-certificates, which is
+// outside /etc and so outside everything else capture reads. They are
+// exactly what a machine behind a TLS-inspecting proxy needs in its image.
+func TestCaptureCarriesTheMachinesCertificateAuthorities(t *testing.T) {
+	corp := selfSignedPEM(t, "corp-root")
+	root := systemRoot(buildRoot(t, map[string]string{
+		"usr/local/share/ca-certificates/corp root.crt": string(corp),
+		"usr/local/share/ca-certificates/notes.txt":     "not a certificate, and not a .crt",
+		"usr/local/share/ca-certificates/broken.crt":    "-----BEGIN CERTIFICATE-----\nnonsense\n-----END CERTIFICATE-----\n",
+	}))
+	carried, left := root.certificatesForRecipe()
+	if len(carried) != 1 {
+		t.Fatalf("carried %+v, want the one real certificate", carried)
+	}
+	// The file name becomes one the recipe accepts, and the path is relative.
+	if carried[0].path != "certs/corp-root.pem" {
+		t.Errorf("path = %q, want certs/corp-root.pem", carried[0].path)
+	}
+	if err := recipe.CheckCertificatePath(carried[0].path); err != nil {
+		t.Errorf("the path the recipe would hold is invalid: %v", err)
+	}
+	if !strings.Contains(string(carried[0].pem), "BEGIN CERTIFICATE") {
+		t.Errorf("pem = %q", carried[0].pem)
+	}
+	// A .crt that is not a certificate is reported, not written as one.
+	if len(left) != 1 || !strings.Contains(left[0].description, "broken.crt") {
+		t.Errorf("left = %+v, want the unreadable .crt reported", left)
+	}
+}
+
+// TestCaptureReportsTrustNoPackageOwns: update-ca-certificates rebuilds
+// /etc/ssl/certs, so a file put there by hand is not carried and will not
+// survive into an image. Capture's rule is that it says so.
+func TestCaptureReportsTrustNoPackageOwns(t *testing.T) {
+	root := systemRoot(buildRoot(t, map[string]string{
+		"etc/ssl/certs/ca-certificates.crt": "the generated bundle",
+		"etc/ssl/certs/DigiCert.pem":        "owned by the ca-certificates package",
+		"etc/ssl/certs/by-hand.pem":         "put here by someone",
+	}))
+	owned := map[string]bool{"/etc/ssl/certs/DigiCert.pem": true}
+	finding := root.unaccountedTrustFinding(owned, true, nil)
+	if finding.Count != 1 || !slices.Equal(finding.Examples, []string{"/etc/ssl/certs/by-hand.pem"}) {
+		t.Errorf("finding = %+v, want only the hand-placed file", finding)
+	}
+	// Without dpkg's file lists the area is unavailable, not empty.
+	if unavailable := root.unaccountedTrustFinding(nil, false, nil); unavailable.Unavailable == "" {
+		t.Error("with no ownership data the area must say it could not be checked")
 	}
 }

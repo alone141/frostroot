@@ -590,6 +590,14 @@ key (`signed-by` in a `.list` file, `Signed-By` in a `.sources` file, as a
 key file or inline) become `[[sources]]` entries, with their keys saved
 under `keys/`; sources without one, and flat repositories, are reported.
 
+The certificate authorities an organization added, in
+`/usr/local/share/ca-certificates`, become `[certificates]` entries saved
+under `certs/`, so a machine behind a proxy that inspects TLS keeps its trust
+in the image. They live outside `/etc`, which is why nothing else capture
+reads would find them. `/etc/ssl/certs` is not copied: `update-ca-certificates`
+regenerates it from that directory and from the `ca-certificates` package, so
+a certificate only found there is reported instead, with what to do about it.
+
 Two rules, both deliberate:
 
 - **It reports what it could not see.** apt is the only thing a recipe

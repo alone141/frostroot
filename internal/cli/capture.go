@@ -2,13 +2,16 @@ package cli
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"frostroot/internal/capture"
 	"frostroot/internal/export"
 	"frostroot/internal/form"
+	"frostroot/internal/recipe"
 )
 
 // captureReportFileName is the report capture writes next to the recipe.
@@ -46,6 +49,16 @@ func (a *App) runCapture(args []string) int {
 		a.stderrf("frostroot capture: %v\n", err)
 		return exitUserError
 	}
+	// The authorities the machine added are written before the form opens,
+	// because the Trust page checks that every file it names is there and
+	// holds a certificate. A form the person abandons leaves nothing behind
+	// that was not already there.
+	writtenCertificates, err := a.writeCapturedCertificates(snapshot.Certificates)
+	if err != nil {
+		a.stderrf("frostroot capture: %v\n", err)
+		return exitUserError
+	}
+
 	// What was read, and what a recipe cannot carry, before the questions:
 	// the packages page is answered knowing what is missing.
 	intro := []form.Field{form.NoteField(form.PageCaptured, "What capture found", captureNoteText(snapshot))}
@@ -54,6 +67,7 @@ func (a *App) runCapture(args []string) int {
 		return exitUserError
 	}
 	if exitCode := a.runRecipeForm("capture", form.FromRecipe(snapshot.Recipe()), recipePath, *plain, snapshot.Keys, intro, indexes); exitCode != exitSuccess {
+		removeCapturedCertificates(writtenCertificates)
 		return exitCode
 	}
 
@@ -75,8 +89,12 @@ func (a *App) runCapture(args []string) int {
 // report, written with the recipe.
 func captureNoteText(snapshot capture.Snapshot) string {
 	var text strings.Builder
-	fmt.Fprintf(&text, "Read %s: Ubuntu %s, %d packages installed, %d asked for, %d third-party sources with keys.\n\nA recipe cannot carry:\n",
+	fmt.Fprintf(&text, "Read %s: Ubuntu %s, %d packages installed, %d asked for, %d third-party sources with keys",
 		snapshot.Root, snapshot.Release, snapshot.InstalledCount, len(snapshot.Packages), len(snapshot.Sources))
+	if count := len(snapshot.Certificates); count > 0 {
+		fmt.Fprintf(&text, ", %d certificate authorities", count)
+	}
+	text.WriteString(".\n\nA recipe cannot carry:\n")
 	for _, line := range snapshot.Summary() {
 		text.WriteString("  " + line + "\n")
 	}
@@ -106,4 +124,41 @@ func writeFileAtomically(path, content string) (err error) {
 		return err
 	}
 	return os.Rename(temporary.Name(), path)
+}
+
+// writeCapturedCertificates saves the authorities capture read from the
+// machine beside the recipe, and returns the files it created. A file that
+// was already there is left alone and not reported as created, so abandoning
+// the form cannot remove something the person put there.
+func (a *App) writeCapturedCertificates(certificates map[string][]byte) (written []string, err error) {
+	for _, certificatePath := range slices.Sorted(maps.Keys(certificates)) {
+		fullPath := recipe.CertificatePath(a.RecipeDir, certificatePath)
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			return written, fmt.Errorf("writing %s: %w", certificatePath, err)
+		}
+		_, statErr := os.Stat(fullPath)
+		if err := writeFileAtomically(fullPath, string(certificates[certificatePath])); err != nil {
+			return written, fmt.Errorf("writing %s: %w", certificatePath, err)
+		}
+		if os.IsNotExist(statErr) {
+			written = append(written, fullPath)
+		}
+	}
+	return written, nil
+}
+
+// removeCapturedCertificates undoes writeCapturedCertificates when the form
+// was abandoned, so that declining a capture leaves the directory as it was.
+// Best effort throughout: the recipe was not written either, and that is
+// what the exit code already says.
+func removeCapturedCertificates(written []string) {
+	directories := map[string]bool{}
+	for _, path := range written {
+		_ = os.Remove(path)
+		directories[filepath.Dir(path)] = true
+	}
+	for directory := range directories {
+		// Fails harmlessly while anything else is still in there.
+		_ = os.Remove(directory)
+	}
 }

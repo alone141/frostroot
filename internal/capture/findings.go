@@ -23,6 +23,7 @@ type Finding struct {
 // every area, with "nothing found" where that is the case.
 const (
 	AreaThirdPartySources  = "Third-party apt sources"
+	AreaUnaccountedTrust   = "Certificate authorities not carried"
 	AreaThirdPartyPackages = "Packages from third-party sources"
 	AreaUnsourcedPackages  = "Packages from no known source"
 	AreaModifiedConfig     = "Modified configuration files"

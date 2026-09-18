@@ -224,6 +224,11 @@ func CheckCertificatePath(certificatePath string) error {
 	return nil
 }
 
+// CertificatesDirName is where recipe directories keep certificate files,
+// as keys/ holds signing keys. Nothing requires it — any relative path
+// inside the recipe directory is valid — but capture and the docs use it.
+const CertificatesDirName = "certs"
+
 // CertificateName is what a certificate file is called in the image, without
 // the .crt that update-ca-certificates requires: the file's base name
 // without its extension, so certs/corp-root.pem becomes corp-root.

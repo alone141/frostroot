@@ -2,12 +2,20 @@ package cli
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"frostroot/internal/pgp"
 	"frostroot/internal/recipe"
@@ -171,5 +179,95 @@ func TestCaptureDeclinedWritesNothing(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(recipeDir); len(entries) != 0 {
 		t.Errorf("declining must write neither file, found %v", entries)
+	}
+}
+
+// corpCertificatePEM is a certificate fixture for the capture tests.
+func corpCertificatePEM(t *testing.T) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "corp-root"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+// withLocalAuthority adds an organisation's certificate authority to a fake
+// root, where update-ca-certificates reads them from.
+func withLocalAuthority(t *testing.T, root string, pemBytes []byte) {
+	t.Helper()
+	path := filepath.Join(root, "usr", "local", "share", "ca-certificates", "corp-root.crt")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, pemBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCaptureCarriesCertificateAuthorities: a machine behind a proxy that
+// inspects TLS needs its authorities in the image, and they live outside
+// /etc so nothing else capture reads would find them.
+func TestCaptureCarriesCertificateAuthorities(t *testing.T) {
+	recipeDir := t.TempDir()
+	root := fakeUbuntuRoot(t, "24.04")
+	authority := corpCertificatePEM(t)
+	withLocalAuthority(t, root, authority)
+
+	exitCode, stdout, stderr := runCaptureWithAnswers(recipeDir, root, answersWith(nil))
+	if exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr)
+	}
+	written, err := os.ReadFile(filepath.Join(recipeDir, "certs", "corp-root.pem"))
+	if err != nil {
+		t.Fatalf("the authority was not written beside the recipe: %v", err)
+	}
+	if !bytes.Equal(written, authority) {
+		t.Error("the written certificate is not the one the machine had")
+	}
+	imageRecipe, err := recipe.Load(filepath.Join(recipeDir, "frostroot.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := imageRecipe.CertificatePaths(); !slices.Equal(got, []string{"certs/corp-root.pem"}) {
+		t.Errorf("recipe certificates = %v", got)
+	}
+	// The recipe it wrote must be one the other commands accept.
+	if problems := recipe.Validate(imageRecipe); len(problems) > 0 {
+		t.Errorf("the recipe capture wrote does not validate: %v", problems)
+	}
+	if problems := recipe.CheckCertificateFiles(recipeDir, imageRecipe.CertificatePaths()); len(problems) > 0 {
+		t.Errorf("the certificate files capture wrote do not check out: %v", problems)
+	}
+	if !strings.Contains(stdout, "certs/corp-root.pem") && !strings.Contains(stderr, "certs/corp-root.pem") {
+		t.Log("stdout:", stdout)
+	}
+}
+
+// Declining still writes nothing, including the certificates that had to be
+// on disk before the form could check them.
+func TestCaptureDeclinedWritesNoCertificates(t *testing.T) {
+	recipeDir := t.TempDir()
+	root := fakeUbuntuRoot(t, "24.04")
+	withLocalAuthority(t, root, corpCertificatePEM(t))
+
+	exitCode, _, _ := runCaptureWithAnswers(recipeDir, root, answersWith(map[int]string{answerWrite: "n"}))
+	if exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d", exitCode, exitUserError)
+	}
+	if entries, _ := os.ReadDir(recipeDir); len(entries) != 0 {
+		t.Errorf("declining must leave the directory as it was, found %v", entries)
 	}
 }

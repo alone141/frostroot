@@ -56,6 +56,10 @@ type Snapshot struct {
 	// and Keys their signing keys, armored, by source name.
 	Sources []recipe.Source
 	Keys    map[string][]byte
+	// Certificates are the authorities the machine added under
+	// /usr/local/share/ca-certificates, by the recipe-relative path the
+	// recipe names them at. The caller writes them beside the recipe.
+	Certificates map[string][]byte
 
 	InstalledCount int // packages installed, for the report
 	// Evidence says, one line each, where every captured value came from.
@@ -71,7 +75,7 @@ func (s Snapshot) Recipe() recipe.Recipe {
 	if packages == nil {
 		packages = []string{}
 	}
-	return recipe.Recipe{
+	imageRecipe := recipe.Recipe{
 		Image:    recipe.Image{Name: s.ImageName, Release: s.Release, Arch: s.Arch},
 		User:     recipe.User{Name: s.UserName, Sudo: s.Sudo},
 		WSL:      recipe.WSL{Systemd: s.Systemd, DefaultUser: s.UserName},
@@ -79,6 +83,10 @@ func (s Snapshot) Recipe() recipe.Recipe {
 		Packages: recipe.Packages{Include: packages},
 		Sources:  slices.Clone(s.Sources),
 	}
+	if paths := s.certificatePaths(); len(paths) > 0 {
+		imageRecipe.Certificates = &recipe.Certificates{Include: paths}
+	}
+	return imageRecipe
 }
 
 // Read describes the system installed under rootDir ("/" for the running
@@ -139,11 +147,26 @@ func Read(rootDir string) (Snapshot, error) {
 		snapshot.note("source %q (%s) from %s", source.source.Name, sources.Describe(source.source), source.from)
 	}
 
+	carriedCertificates, leftCertificates := root.certificatesForRecipe()
+	for _, certificate := range carriedCertificates {
+		if snapshot.Certificates == nil {
+			snapshot.Certificates = map[string][]byte{}
+		}
+		snapshot.Certificates[certificate.path] = certificate.pem
+		snapshot.note("certificate %q from %s", certificate.path, certificate.from)
+	}
+
 	owned, haveOwnership := root.ownedPaths()
 	origins := root.packageOrigins()
 	thirdParty, unsourced := thirdPartyPackageFindings(requested, origins, carriedIndexes)
+	unaccounted := root.unaccountedTrustFinding(owned, haveOwnership, carriedCertificates)
+	for _, certificate := range leftCertificates {
+		unaccounted.Examples = append(unaccounted.Examples, certificate.String())
+		unaccounted.Count++
+	}
 	snapshot.Findings = []Finding{
 		thirdPartySourceFinding(left),
+		unaccounted,
 		thirdParty,
 		unsourced,
 		modifiedConfigFinding(root.modifiedConffiles(installed)),
