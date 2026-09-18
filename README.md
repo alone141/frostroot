@@ -2,15 +2,15 @@
 
 **Freeze an Ubuntu root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
 
-> **Status: v0.10.0.** `init`, `edit`, `capture`, `validate`, `build`,
+> **Status: v0.11.0.** `init`, `edit`, `capture`, `validate`, `build`,
 > `vendor` and `build --offline` work, a recipe can add third-party apt
 > sources (PPAs, Docker, Node.js, VS Code...), Python packages from PyPI and
 > certificate authorities for a network that inspects TLS, and two offline
 > rebuilds of one lock produce the same bytes. In a terminal,
 > `init`, `edit` and `capture` are a full-screen form driven with the arrow
-> keys in which any package of the release is found by typing (see
-> [Finding packages](#finding-packages)) and which shows the recipe, or the
-> diff, before writing it; `build` and
+> keys in which any package of the release, and any project on PyPI, is
+> found by typing (see [Finding packages](#finding-packages)) and which
+> shows the recipe, or the diff, before writing it; `build` and
 > `vendor` are a progress screen with bars, and a failed build says which
 > line of the log explains it. Every path in
 > this README was run for real: images for Ubuntu 20.04, 22.04 and 24.04 were
@@ -173,7 +173,8 @@ release; the user name and whether it gets passwordless sudo; the timezone
 (type `ist` to filter the list down to `Europe/Istanbul`), locale and whether
 the image boots with systemd; the packages, picked with Space from a catalog
 grouped by category (C/C++, Python, editors, tools...), and any other package
-of the release, found by typing into a search over the whole archive (see
+of the release, found by typing into a search over the whole archive, and
+Python packages found the same way in PyPI (see
 [Finding packages](#finding-packages)); then third-party apt sources, picked from a catalog
 (deadsnakes, git-core, Docker, NodeSource, GitHub CLI, Kitware, LLVM, VS
 Code), plus a line for other PPAs as `owner/name`; and last the certificate
@@ -252,9 +253,9 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 
 | Command | What it does |
 |---|---|
-| `frostroot init [--force] [--plain] [--mirror URL] [--ca-bundle FILE] [--refresh-index]` | Opens the form and writes a commented `frostroot.toml`, then fetches the signing keys of the sources you picked into `keys/`. Refuses to overwrite a recipe without `--force`. Writes nothing unless the answers validate and you confirm. |
-| `frostroot edit [--plain] [--mirror URL] [--ca-bundle FILE] [--refresh-index]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back; fetches any missing source keys. The file is regenerated from the template, so your own comments in it do not survive. |
-| `frostroot capture [--root DIR] [--force] [--plain] [--mirror URL] [--ca-bundle FILE] [--refresh-index]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, starting with a page of what it found and what a recipe cannot carry, writes `frostroot.toml` and the signing keys of the third-party sources it could carry, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys; needs no root. |
+| `frostroot init [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE] [--refresh-index]` | Opens the form and writes a commented `frostroot.toml`, then fetches the signing keys of the sources you picked into `keys/`. Refuses to overwrite a recipe without `--force`. Writes nothing unless the answers validate and you confirm. |
+| `frostroot edit [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE] [--refresh-index]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back; fetches any missing source keys. The file is regenerated from the template, so your own comments in it do not survive. |
+| `frostroot capture [--root DIR] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE] [--refresh-index]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, starting with a page of what it found and what a recipe cannot carry, writes `frostroot.toml` and the signing keys of the third-party sources it could carry, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys; needs no root. |
 | `frostroot validate` | Checks `frostroot.toml`, including that every source's key file is there and is a key, and prints every problem. No network, no root. |
 | `frostroot build [--mirror URL] [--ca-bundle FILE] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-ubuntu-<release>-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. |
 | `frostroot vendor [--mirror URL] [--ca-bundle FILE] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, and every wheel it names into `vendor/wheels/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name. |
@@ -269,9 +270,10 @@ mirror; for `vendor` it replaces the mirror recorded in the lock.
 kept after a failure). `--ca-bundle` names a PEM file of certificate
 authorities to trust while fetching, for a network that inspects TLS; see
 [Networks that inspect TLS](#networks-that-inspect-tls). For `init`, `edit` and
-`capture`, `--mirror` and `--ca-bundle` say where the form's package index
-comes from and whom to trust for it, and `--refresh-index` fetches it again
-before its week is up.
+`capture`, `--mirror` and `--ca-bundle` say where the form's apt index comes
+from and whom to trust for it, `--python-index` points the PyPI search at
+another simple index, and `--refresh-index` fetches them again before their
+week is up.
 
 | Exit code | Meaning |
 |---|---|
@@ -357,6 +359,55 @@ download, but `InRelease` is read without verifying its signature. A hostile
 mirror could make the search lie about what exists. It could not make a build
 install anything: `build` never reads this index, and apt verifies every
 package against Ubuntu's signed archive exactly as before.
+
+### Python packages, which are a different kind of index
+
+"Python packages", under it, searches PyPI the same way, with one honest
+difference: **PyPI publishes names and nothing else.** Its complete index is
+894,000 project names — no version, no section, no description — so the rows
+are bare names, `/` says the index has no sections, and what tells one
+`requests-*` from the next is the summary of the row your cursor is resting
+on, fetched when it rests there and remembered:
+
+```
+┃ Python packages
+┃ type to search PyPI, or a name; installed into the image's virtual environment
+┃ > requests
+┃ 200 of 713 shown, keep typing
+┃ > [ ] requests
+┃   [ ] requestsH
+┃   [ ] requestsaa
+┃   [ ] requests-go
+┃ Python HTTP for Humans.
+┃ chosen: none
+```
+
+Getting every summary up front is not on offer: one request a project is
+894,000 of them, about 75 hours. One on demand is 4–26 kB and under a fifth
+of a second, and it is asked for only after the cursor has been still for a
+quarter of a second, so running down the list is one lookup rather than
+twenty. Offline, or against an index with no JSON API, the line is simply
+absent and the list is names — which is all PyPI gave anyone anyway.
+
+Names are compared the way PEP 503 compares them, so `Flask_SQLAlchemy`,
+`flask-sqlalchemy` and `Flask.SQLAlchemy` are one project and none of them
+is reported missing. The index is 9.7 MB gzipped, cached as 4.2 MB for a
+week. `--python-index URL` searches another PEP 691 simple index instead,
+and summaries then come from that host and not from pypi.org: an index of
+your own must not mean telling PyPI which names you looked up.
+
+The warning on the last page has a second block when a Python name is not on
+PyPI, and it is a warning like the other — a private index, or a project
+published this morning, is reason enough for a name to be right and unknown
+here:
+
+```
+Not on PyPI:
+  reqeusts  nearest: requests, reqwests
+build will stop when pip cannot resolve them, unless they come from an
+index of your own.
+```
+
 
 ## Third-party sources
 
@@ -919,6 +970,31 @@ them installs what it did before. What still only a person can check is how
 the picker feels in Windows Terminal; the driver sees what is drawn, not
 whether it is pleasant.
 
+For v0.11.0 the Python field was driven against the real PyPI by the same
+pseudo-terminal driver, at 100×32. The index arrived as **894,105 projects**
+— seventeen more than the spike had counted an hour earlier, which is what a
+live index looks like. Typing `requests` found 713 projects and showed the
+first two hundred, saying so; resting on the first row put `Python HTTP for
+Humans.` under the list, fetched from PyPI at that moment, and moving down
+replaced it with the next project's. `/` answered `this index has no
+sections`, and the help line offered no `/` at all, because PyPI publishes
+none. A misspelled `reqeusts` was added as typed, marked `? not in the
+index`, and warned about on the last page as `nearest: requests, reqwests`
+— both of which are real projects — and the recipe was written all the
+same. `requestsH`, which exists, was not warned about, and neither was
+`Flask_SQLAlchemy`, which PEP 503 makes the same project as
+`Flask-SQLAlchemy`.
+
+Two things that run against a live index were found this way and not by the
+tests. The status line read `all sections · PyPI · 894,105 projects` and the
+help line offered `/ section`, for an index that has no sections; both are
+now asked of the index rather than assumed. And the summary lookup went to
+pypi.org whatever `--python-index` said, so an index of your own would still
+have told PyPI which names you looked up; summaries now follow the index
+they belong to. That one was caught by a test that resolved `numpy` against
+the real PyPI while pointed at a fake one.
+
+
 ## Documentation
 
 | Document | What it is |
@@ -934,6 +1010,7 @@ whether it is pleasant.
 | [Certificates spec](docs/superpowers/specs/2026-09-18-frostroot-certificates.md) | v0.8: `[certificates]`, `--ca-bundle`, what a TLS inspection proxy breaks and where the trust is applied; with the spike and the verification. |
 | [Certificates plan](docs/superpowers/plans/2026-09-18-frostroot-certificates.md) | The ten tasks v0.8 was built from. |
 | [Picker spec](docs/superpowers/specs/2026-09-18-frostroot-picker.md) | v0.10: the package picker and the index behind it, all four components in builds; with the spike, the decisions and the verification. |
+| [PyPI spec](docs/superpowers/specs/2026-09-18-frostroot-pypi.md) | v0.11: searching PyPI, why its picker cannot look like the apt one, and the summary fetched on demand; with the spike and the verification. |
 | [TUI plan, second round](docs/superpowers/plans/2026-09-18-frostroot-tui-2.md) | What a walk through the interface found, the six tasks v0.9 was built from, and the tasks of v0.10's package picker. |
 | [Implementation plan](docs/superpowers/plans/2026-09-15-frostroot-v1.md) | The 13 tasks v1 was built from, with the spike's amendments. |
 | [TUI plan](docs/superpowers/plans/2026-09-17-frostroot-tui.md) | The seven tasks v0.2 was built from. |
@@ -948,7 +1025,7 @@ cmd/frostroot/      main
 internal/cli/       init, edit, capture, validate, build, vendor, version; flags, exit codes, the plain line interface
 internal/capture/   reading an installed system: packages asked for, user, locale, and the report of the gaps
 internal/form/      the questions as data: fields, package catalog, timezones, locales, recipe mapping, what a package search needs of an index
-internal/index/     the packages of a release: the archive's Packages files fetched, checked, reduced, cached and searched
+internal/index/     what the form searches: the archive's Packages files and PyPI's simple index, fetched, checked, reduced, cached and searched, and PyPI summaries one at a time
 internal/sources/   the catalog of third-party repositories, PPAs, and fetching and checking their keys
 internal/pgp/       OpenPGP public keys: armor, the primary key's fingerprint; nothing else
 internal/tui/       the full-screen form with its package picker, and the progress screen (the only package using the Charm libraries)

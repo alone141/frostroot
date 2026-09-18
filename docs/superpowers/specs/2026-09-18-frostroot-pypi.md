@@ -71,8 +71,11 @@ func OpenPyPI(ctx context.Context, options Options) (*PyPIIndex, error)
 ```
 
 `Options` is shared with the apt index; `Release` is ignored and `Mirror`
-names an alternative index URL (a devpi or Artifactory mirror, which is what
-`index_url`, issue #23, will want too).
+names an alternative simple index. The draft had `--mirror` filling it, which
+the code corrected: `--mirror` is an apt mirror and says nothing about PyPI,
+so the flag is `--python-index` and `Mirror` is cleared before the PyPI
+options are built. A devpi or Artifactory mirror is what `index_url`, issue
+#23, will want too.
 
 - **Fetch.** `https://pypi.org/simple/` with
   `Accept: application/vnd.pypi.simple.v1+json`, which is PEP 691. There is
@@ -102,22 +105,32 @@ names an alternative index URL (a devpi or Artifactory mirror, which is what
 type Summaries struct{ ... }
 
 func (s *Summaries) Cached(name string) (string, bool) // never blocks
-func (s *Summaries) Fetch(ctx context.Context, name string) (string, error)
+func (s *Summaries) Fetch(ctx context.Context, name string)
 ```
 
 `Cached` is what the widget draws from, so `View` never waits on the
-network. `Fetch` is what a Bubble Tea command runs. A name that has no
-summary, or whose fetch failed, is remembered as empty so it is not asked
-for twice; failures are never an error the user sees, because a missing
-summary is a missing nicety.
+network. `Fetch` is what a Bubble Tea command runs, and it returns nothing:
+everything it learns goes into the cache the widget reads, so there is one
+place a summary lives. A name that has no summary, or whose fetch failed, is
+remembered as empty so it is not asked for twice; failures are never an
+error the user sees, because a missing summary is a missing nicety. A
+*canceled* lookup is left unknown, because that is not an answer.
+
+Summaries come from the host the index belongs to, never from pypi.org when
+the index is somewhere else: pointing frostroot at a private index must not
+mean telling PyPI which names were looked up. An index with no JSON API
+answers nothing, which is already the degradation for a failed lookup.
 
 ### The widget — `internal/tui/picker.go`
 
 The component from v0.10, with two differences, both driven by what the
 index can answer rather than by which field it is:
 
-- **No version or section column** when the index has none, and `/` says
-  there are no sections. The row is the name alone.
+- **No version or section column** when the index has none, `/` says there
+  are no sections, the help line stops offering it, and the status line
+  stops saying "all sections". The row is the name alone. The last two were
+  found against the real PyPI rather than by a test: the draft only thought
+  of the column and the `/` key.
 - **A summary line under the list.** When the cursor rests on a row for
   250 ms, the summary is fetched; while it is in flight the line reads
   `looking up requests…`, and then it is the summary. Moving on cancels
@@ -127,7 +140,13 @@ index can answer rather than by which field it is:
 The debounce matters: holding Down through twenty rows must not be twenty
 requests. The tick machinery is the one v0.10 built for the index load,
 including the counter that exists because huh hands its focused field every
-message twice.
+message twice; a rest that has been superseded, or whose row the cursor has
+since left, is dropped rather than fetched.
+
+A field **declares** that its index has summaries rather than the widget
+discovering it when the index loads, because the line they go on has to be
+there from the first frame: finding out later would resize the list under
+someone mid-search, and v0.10 promised the field does not jump.
 
 Offline, or with the fetch failing, the line is simply absent and the picker
 is the bare-name list the cheaper option would have been. That is the
@@ -157,8 +176,10 @@ unknown here.
   design's oldest rule.
 - **Searching summaries.** They arrive one at a time; there is nothing to
   search.
-- **`index_url`** (#23) beyond `--mirror` pointing the index elsewhere. The
-  parked plan still owns authenticated mirrors.
+- **`index_url`** (#23) beyond `--python-index` pointing the search
+  elsewhere. That flag says where the *form* looks; the recipe still says
+  nothing, and `build` still resolves against PyPI. The parked plan owns
+  the recipe field and authenticated mirrors.
 
 ## Verification
 
@@ -171,10 +192,21 @@ version column, the summary appears after the debounce and not before,
 holding Down makes one request and not twenty, and a failed lookup leaves
 the line empty. Golden frames at 80×24, 120×40, 60×20 and ASCII.
 
-On the build host, with the real binary and the real PyPI: a first `init`
-fetching the index with the progress line; a second from the cache; one with
-the network cut; `reqeusts` typed, warned about with `nearest: requests`,
-and the recipe written all the same; `Flask_SQLAlchemy` typed and not
-warned about; a summary appearing under a highlighted row; `--plain` with
-and without a cache. Then a real `build` of a recipe the picker wrote, to
-prove the names it produced are names pip resolves.
+On the build host, against the real PyPI, done (2026-09-18): the index
+arrived as 894,105 projects, seventeen more than the spike counted an hour
+before. `requests` found 713 and showed two hundred, saying so; resting on
+the first row put `Python HTTP for Humans.` under the list and moving down
+replaced it. `reqeusts` was added as typed, marked `? not in the index`,
+warned about as `nearest: requests, reqwests` — both real projects — and
+written anyway; `requestsH` and `Flask_SQLAlchemy` were not warned about,
+the second because PEP 503 makes it `Flask-SQLAlchemy`. `/` answered "this
+index has no sections" and the help line offered no `/`.
+
+Two faults that only a live index shows were found there rather than by the
+tests: the status line claimed "all sections" and the help line offered
+`/ section` for an index with none, and the summary lookup went to pypi.org
+whatever `--python-index` said. Both are fixed, and the second is now a
+test.
+
+Still to do before this is called finished: a real `build` of a recipe the
+picker wrote, to prove the names it produces are names pip resolves.
