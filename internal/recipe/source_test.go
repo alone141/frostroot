@@ -24,6 +24,19 @@ func writeKey(t *testing.T, dir, keyPath string) {
 	}
 }
 
+func TestSourceEqualTreatsNilAndEmptyComponentsAsTheSame(t *testing.T) {
+	left := Source{Name: "llvm", URL: "https://apt.llvm.org/jammy", Suite: "llvm-toolchain-jammy", Key: "keys/llvm.asc"}
+	right := left
+	right.Components = []string{}
+	if !left.Equal(right) {
+		t.Fatal("nil components and empty components must be the same source")
+	}
+	right.URL = "https://apt.llvm.org/noble"
+	if left.Equal(right) {
+		t.Fatal("a different URL must not compare equal")
+	}
+}
+
 func TestLoadRecipeWithSources(t *testing.T) {
 	imageRecipe, err := Load(testdataPath("sources.toml"))
 	if err != nil {

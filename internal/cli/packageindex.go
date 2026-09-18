@@ -5,11 +5,9 @@ import (
 	"flag"
 	"sync"
 
-	"frostroot/internal/builder"
 	"frostroot/internal/distro"
 	"frostroot/internal/form"
 	"frostroot/internal/index"
-	"frostroot/internal/sources"
 )
 
 // indexFlags are what init, edit and capture take for the package index
@@ -68,11 +66,7 @@ func (a *App) packageIndexes(parsed *indexFlags) (*packageIndexes, bool) {
 		return nil, false
 	}
 	options.RootCAs = rootCAs
-	// Constructed here, after --ca-bundle is known, rather than in
-	// withDefaults: tests inject KeyClient; production gets the bundle.
-	if a.KeyClient == nil {
-		a.KeyClient = sources.HTTPClient{UserAgent: "frostroot/" + builder.Version, RootCAs: rootCAs}
-	}
+	a.ensureKeyClient(rootCAs)
 	pypiOptions := options
 	// --mirror is an apt mirror and says nothing about PyPI, which has its
 	// own flag.

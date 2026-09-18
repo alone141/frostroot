@@ -2,7 +2,6 @@ package form
 
 import (
 	"fmt"
-	"reflect"
 	"slices"
 	"strings"
 
@@ -274,7 +273,7 @@ func MergeSources(selected []string, ppasText string, original []recipe.Source, 
 		if (isRecognized && !wantedByName[source.Name]) || listed[source.Name] {
 			continue // deselected, or a duplicate
 		}
-		if isCatalog && originalSuite != "" && reflect.DeepEqual(source, entry.Source(originalSuite)) {
+		if isCatalog && originalSuite != "" && source.Equal(entry.Source(originalSuite)) {
 			listed[source.Name] = true
 			merged = append(merged, entry.Source(releaseSuite))
 			continue

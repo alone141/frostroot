@@ -312,6 +312,13 @@ func TestMergeSourcesRewritesUneditedCatalogEntriesForTheNewRelease(t *testing.T
 	if !reflect.DeepEqual(got, []recipe.Source{docker.Source("noble")}) {
 		t.Errorf("docker = %+v, want the catalog row for noble", got)
 	}
+	// A catalog row loaded with an empty components array is still unedited.
+	jammyLLVM := llvm.Source("jammy")
+	jammyLLVM.Components = []string{}
+	got = MergeSources([]string{"llvm"}, "", []recipe.Source{jammyLLVM}, "jammy", "noble")
+	if !reflect.DeepEqual(got, []recipe.Source{llvm.Source("noble")}) {
+		t.Errorf("empty components = %+v, want LLVM for noble", got)
+	}
 }
 
 func TestToRecipeResolvesSourcesForTheRelease(t *testing.T) {
