@@ -103,14 +103,25 @@ export PYTHONHASHSEED
 HOME=/root
 export HOME
 
+# pip also reads that environment: one PIP_INDEX_URL on the build host would
+# quietly resolve the recipe against another index and write its URLs into
+# the lock. What a recipe resolves to must depend on the recipe and on PyPI,
+# so every PIP_ variable is dropped and no configuration file is read.
+for pipVariable in $(env | sed -n 's/^\(PIP_[A-Za-z0-9_]*\)=.*/\1/p'); do
+	unset "$pipVariable"
+done
+PIP_CONFIG_FILE=/dev/null
+export PIP_CONFIG_FILE
+
 venv={{shellQuote .VenvPath}}
 
 python3 -m venv "$venv"
-
+{{if .PipVersion}}
 # The resolver is pinned by checksum and installed before anything else, so
 # that what a recipe resolves to, and what installs it, depend on the recipe
 # and not on how old this release's pip is. 20.04 ships pip 20.0.2 and 22.04
-# 22.0.2, and neither can report what it installed.
+# 22.0.2, and neither can report what it installed. Offline the version comes
+# from the lock, so a rebuild installs the pip its own build used.
 #
 # --upgrade is required: without it 20.04's pip calls the requirement
 # satisfied by the pip already in the environment, downloads nothing, checks
@@ -127,7 +138,7 @@ printf 'pip @ %s --hash=sha256:%s\n' {{shellQuote .PipURL}} {{shellQuote .PipSHA
 {{- end}}
 rm -f {{shellQuote .PinPath}}
 
-# The pin must be the pip that does the rest. An older one cannot report what
+# That pip must be the one that does the rest. An older one cannot report what
 # it installed, and it compiles the caches its own way.
 case "$("$venv"/bin/python -m pip --version)" in
 pip\ {{.PipVersion}}\ *) ;;
@@ -136,7 +147,7 @@ pip\ {{.PipVersion}}\ *) ;;
 	exit 1
 	;;
 esac
-
+{{end}}
 {{if .Offline -}}
 "$venv"/bin/python -m pip install --no-input --disable-pip-version-check --no-cache-dir \
 	--no-index --find-links {{shellQuote .WheelsPath}} \
@@ -146,8 +157,12 @@ rm -rf {{shellQuote .WheelsPath}} {{shellQuote .RequirementsPath}}
 # What the environment ended up with, for frostroot to compare with the lock.
 "$venv"/bin/python -m pip list --format=json --disable-pip-version-check > {{shellQuote .ListPath}}
 {{- else -}}
+# --upgrade so that a package the environment already seeds, such as wheel on
+# 22.04, is resolved from PyPI like any other: without it pip calls the
+# requirement satisfied, leaves it out of the report, and the lock would not
+# record what the recipe asked for.
 "$venv"/bin/python -m pip install --no-input --disable-pip-version-check --no-cache-dir \
-	--only-binary=:all: --report {{shellQuote .ReportPath}} \
+	--only-binary=:all: --upgrade --report {{shellQuote .ReportPath}} \
 	{{range .Packages}}{{shellQuote .}} {{end}}
 {{- end}}
 
@@ -189,6 +204,12 @@ type PythonOptions struct {
 	// SourceDateEpoch is the instant the image is frozen at; 0 leaves it
 	// out, and the compiled caches then carry the build's own time.
 	SourceDateEpoch int64
+	// Pip is the resolver an offline rebuild installs before anything else:
+	// the pip its own online build recorded in the lock, which vendor has
+	// fetched into the pool. The zero value means the lock names no pip, and
+	// the environment's own does the installing. Online this field is
+	// ignored and the pin is always PinnedPip.
+	Pip recipe.LockPyPI
 }
 
 // RenderPythonScript renders the script that creates the image's virtual
@@ -200,6 +221,10 @@ func RenderPythonScript(imageRecipe recipe.Recipe, options PythonOptions) (strin
 	if len(packages) == 0 {
 		return "", nil
 	}
+	pin := PinnedPip
+	if options.Offline {
+		pin = options.Pip
+	}
 	var script strings.Builder
 	err := pythonScriptTemplate.Execute(&script, pythonScriptValues{
 		VenvPath:         PythonVenvPath,
@@ -209,9 +234,9 @@ func RenderPythonScript(imageRecipe recipe.Recipe, options PythonOptions) (strin
 		RequirementsPath: PythonRequirementsPath,
 		PinPath:          PythonPinPath,
 		WheelsPath:       PythonWheelsPath,
-		PipURL:           PinnedPip.URL,
-		PipSHA256:        PinnedPip.SHA256,
-		PipVersion:       PinnedPip.Version,
+		PipURL:           pin.URL,
+		PipSHA256:        pin.SHA256,
+		PipVersion:       pin.Version,
 		Packages:         packages,
 		Offline:          options.Offline,
 		SourceDateEpoch:  options.SourceDateEpoch,
@@ -311,7 +336,8 @@ func ParsePipReport(reportReader io.Reader, requested []string) (PythonResult, e
 }
 
 // withPinnedPip adds the pinned pip, unless the resolution already decided a
-// pip of its own, in which case the report is the truth about the image.
+// pip of its own, in which case the report is the truth about the image and
+// LockedPip hands that one to the offline rebuild.
 func withPinnedPip(wheels []recipe.LockPyPI) []recipe.LockPyPI {
 	for _, wheel := range wheels {
 		if recipe.NormalizePythonName(wheel.Name) == "pip" {
@@ -319,6 +345,18 @@ func withPinnedPip(wheels []recipe.LockPyPI) []recipe.LockPyPI {
 		}
 	}
 	return append(wheels, PinnedPip)
+}
+
+// LockedPip returns the pip a lock records, which an offline rebuild installs
+// into the environment before anything else. The zero value means the lock
+// names none, and the environment's own pip does the installing.
+func LockedPip(lock recipe.Lockfile) recipe.LockPyPI {
+	for _, wheel := range lock.PyPI {
+		if recipe.NormalizePythonName(wheel.Name) == "pip" {
+			return wheel
+		}
+	}
+	return recipe.LockPyPI{}
 }
 
 // wheelFromReport turns one entry of pip's report into a lock entry, or says
@@ -396,9 +434,11 @@ type PythonInstalled struct {
 }
 
 // pythonSeedPackages are what python3 -m venv puts in an environment before
-// frostroot installs anything. No lock names them, and finding one is not a
-// difference: 22.04 and 20.04 seed setuptools beside pip, 24.04 seeds pip
-// alone, and frostroot never asks for them.
+// frostroot installs anything: 22.04 and 20.04 seed setuptools beside pip,
+// 24.04 seeds pip alone. Finding one the lock does not name is not a
+// difference, because nothing asked for it. A lock that does name one is
+// another matter: pip installed that version, and it is compared like any
+// other package.
 var pythonSeedPackages = []string{"setuptools", "wheel", "pkg-resources"}
 
 // ParsePipList reads the package list an offline build downloads out of the
@@ -425,11 +465,11 @@ func ComparePythonWithLock(lock recipe.Lockfile, installed []PythonInstalled) er
 	found := map[string]bool{}
 	for _, installedPackage := range installed {
 		name := recipe.NormalizePythonName(installedPackage.Name)
-		if slices.Contains(pythonSeedPackages, name) {
+		lockedVersion, inLock := lockedVersions[name]
+		if !inLock && slices.Contains(pythonSeedPackages, name) {
 			continue
 		}
 		found[name] = true
-		lockedVersion, inLock := lockedVersions[name]
 		switch {
 		case !inLock:
 			differences = append(differences, fmt.Sprintf("%s %s is in the environment but not in the lock", name, installedPackage.Version))

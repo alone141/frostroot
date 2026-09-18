@@ -246,6 +246,9 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		if len(offline.wheelEntries) > 0 {
 			stageOptions.Requirements = RenderRequirements(offline.lock)
 			stageOptions.WheelsDir = filepath.Join(workDir, PythonWheelsDirName)
+			// The pip the lock records, not the one this frostroot pins: it
+			// is what the pool holds, and what the online build resolved with.
+			stageOptions.Python.Pip = LockedPip(offline.lock)
 		}
 	}
 	if len(sourceKeys) > 0 {

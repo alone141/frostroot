@@ -51,6 +51,37 @@ Implements: [issue #7](https://github.com/alone141/frostroot/issues/7), its Pyth
   which is what the releases differ in; the Go around them is the same code
   on all three.
 
+### What the review found
+
+A ten-dimension review of the branch, each finding put to three adversarial
+verifiers, confirmed five defects. All are fixed, with the test that would
+have caught each:
+
+- **A locked seed package could never be rebuilt.** `ComparePythonWithLock`
+  skipped `setuptools`, `wheel` and `pkg-resources` before recording that it
+  had seen them, so a lock naming one — ordinary, since 24.04 seeds pip alone
+  and anything depending on setuptools is then a real install — reported it
+  missing from an environment that held exactly it, and every offline rebuild
+  failed after building the whole image. A seed package is now excused only
+  when the lock does not name it.
+- **The build host's pip settings reached the resolution.** A hook inherits
+  the environment, so `PIP_INDEX_URL` on the build machine would resolve the
+  recipe against that index and write its URLs into the lock.
+- **A recipe naming a seeded package failed.** `[python] include = ["wheel"]`
+  on 22.04 installed nothing, so the report did not mention it and the build
+  failed on a package that was there; the online install now upgrades what
+  the recipe names.
+- **A resolved pip other than the pin made an unrebuildable lock.** The
+  offline pin step asked for the pinned version while the pool held the
+  resolved one; it asks the lock now.
+- **`vendor` reported a wheel pool of about 1.7 MB**, the pinned pip's size
+  alone, and `--prune` never cleaned a wheel pool the lock had stopped
+  naming.
+
+The review also found that nothing in the suite CI runs covered the new pool
+code — the wheel manifest, the unknown-size path, staging — so reverting it
+kept CI green. `internal/pool/wheel_test.go` covers it now.
+
 ## Why
 
 A programming lab is the project's own example, and the Python half of it
@@ -167,6 +198,12 @@ Two details the spike settled, both load-bearing:
 After the pin the script checks `pip --version` and fails the build if it is
 not the pinned one, rather than producing a lock that cannot be vendored.
 
+Offline the pin comes from the lock, not from this frostroot: the pool holds
+the pip the online build recorded, which is the pin in every ordinary case
+but is whatever the lock says. A lock that names no pip has no pin step at
+all, and the environment's own pip installs the wheels — it needs no report
+offline, and the caches are recompiled either way.
+
 ## Building
 
 The Python step is one `--customize-hook`, after the provisioning script, so
@@ -205,10 +242,19 @@ module that holds a set constant marshals it in the order that run's hash
 seed produced, which 3.8 does not sort. A module that will not compile is
 not an error: nothing imports it during the build.
 
-`HOME` is set to root's own. A customize hook inherits the environment of
-whoever started the build, and pip writes its cache under `$HOME`, so
-without this the image grows a `/home/<builder>` directory that its own
-`/etc/passwd` knows nothing about. pip is also told to keep no cache at all.
+The environment a hook inherits is whoever started the build, and pip reads a
+great deal of it, so the step neutralizes it: `HOME` becomes root's own,
+because pip writes its cache under `$HOME` and the image was growing a
+`/home/<builder>` directory its own `/etc/passwd` knew nothing about; every
+`PIP_` variable is unset and `PIP_CONFIG_FILE` is pointed at `/dev/null`,
+because one `PIP_INDEX_URL` on the build host would resolve the recipe
+against another index and write its URLs into the lock; and pip is told to
+keep no cache at all.
+
+The online install passes `--upgrade` for the packages the recipe names.
+Without it pip calls a package the environment already seeds — `wheel` and
+`setuptools` on 22.04 and 20.04 — satisfied, leaves it out of the report, and
+the build fails on a package it did install.
 
 Nothing the step used stays in the image: the script deletes the wheels, the
 requirements and the pin file, and a hook deletes the report and the package
@@ -239,7 +285,9 @@ lock's order depends on the package set and nothing else.
 
 `size` is optional here: pip's report gives no file size, and the checksum
 is what decides. The pinned pip is recorded as an entry like any other, with
-the size frostroot knows for it.
+the size frostroot knows for it. `vendor` says nothing about a pool's bytes
+when the lock does not know them, rather than adding up the one size it has
+and calling that the total.
 
 A lock written before 0.7 has no `[python]` and no `[[pypi]]`, and every
 command treats it exactly as before.
@@ -283,8 +331,9 @@ Offline, without root, mmdebstrap or a terminal, as the rest of the suite:
 - The rendered scripts, online and offline, through `sh -n` and with a
   hostile package name, and the hook order for both.
 - `ComparePythonWithLock` for a match, a version difference, a missing
-  package, an extra one, a differently spelled name, and the packages
-  `ensurepip` seeds, which are in no lock and are not a difference.
+  package, an extra one, a differently spelled name, a package `ensurepip`
+  seeds that the lock does not name, which is not a difference, and the same
+  name when the lock does name it, which is compared like any other.
 - The wheel pool against an `httptest` server, as the deb pool already is.
 - The form's new field and the recipe round trip through it.
 
