@@ -877,7 +877,9 @@ capture` (v0.3), vendoring and offline rebuilds with a release process
 (v0.6), Python packages from PyPI (v0.7), certificate authorities for
 networks that inspect TLS (v0.8), a form that shows the recipe or the diff
 before writing, capture's findings first, a Trust page, a failed build that
-explains itself, and screens for narrow and non-UTF-8 terminals (v0.9).
+explains itself, and screens for narrow and non-UTF-8 terminals (v0.9), a
+package picker that searches the whole Ubuntu archive from inside the form
+(v0.10), and the same search for PyPI names (v0.11).
 
 **Deliberately not yet:** Fedora or any non-Ubuntu family · flat or unsigned
 apt repositories · npm and cargo lockfiles · Python source distributions ·
