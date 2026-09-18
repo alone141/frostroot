@@ -110,9 +110,10 @@ func (a *App) runBuild(args []string) int {
 		Getenv:    a.Getenv,
 		Offline:   *offline,
 	}
-	phases := builder.Phases()
+	hasPython := len(imageRecipe.PythonPackages()) > 0
+	phases := builder.Phases(hasPython)
 	if *offline {
-		phases = builder.OfflinePhases()
+		phases = builder.OfflinePhases(hasPython)
 	}
 	screen := tui.BuildScreen(imageRecipe.Image.Name, imageRecipe.Image.Release, release.Suite, imageRecipe.Image.Arch, archiveURL, phases)
 	if a.useFullScreen(*plain) {
@@ -234,6 +235,10 @@ func (a *App) reportBuildSuccess(imageRecipe recipe.Recipe, result builder.Resul
 			"is not byte-identical with other builds. Run frostroot build online once more, then frostroot vendor, and it will be.\n")
 	default:
 		a.stdoutf("\nWrote %s%s\nWrote frostroot.lock (%s), frozen at %s\n", relativeTarballPath, sizeSuffix, packageCount(result.InstalledPackageCount), frozenAt)
+	}
+	if result.PythonPackageCount > 0 {
+		a.stdoutf("The image's virtual environment holds %s, on PATH for every login shell: %s\n",
+			packageCount(result.PythonPackageCount), builder.PythonVenvPath)
 	}
 	if result.Offline && a.Getenv(builder.SourceDateEpochVariable) != "" {
 		a.stderrf("note: %s is set, but an offline build freezes at the lock's instant and ignores it\n", builder.SourceDateEpochVariable)

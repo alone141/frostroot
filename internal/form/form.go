@@ -56,17 +56,18 @@ func (o Option) DisplayLabel() string {
 
 // The keys of the fields, which are also the keys of Values.
 const (
-	KeyImageName     = "image_name"
-	KeyRelease       = "release"
-	KeyUserName      = "user_name"
-	KeySudo          = "sudo"
-	KeyTimezone      = "timezone"
-	KeyLocale        = "locale"
-	KeySystemd       = "systemd"
-	KeyPackages      = "packages"
-	KeyOtherPackages = "other_packages"
-	KeySources       = "sources" // catalog source names
-	KeyPPAs          = "ppas"    // free text: owner/name, separated by spaces or commas
+	KeyImageName      = "image_name"
+	KeyRelease        = "release"
+	KeyUserName       = "user_name"
+	KeySudo           = "sudo"
+	KeyTimezone       = "timezone"
+	KeyLocale         = "locale"
+	KeySystemd        = "systemd"
+	KeyPackages       = "packages"
+	KeyOtherPackages  = "other_packages"
+	KeyPythonPackages = "python_packages" // free text: PyPI names, separated by spaces or commas
+	KeySources        = "sources"         // catalog source names
+	KeyPPAs           = "ppas"            // free text: owner/name, separated by spaces or commas
 	// keyOriginalInclude is not a field: edit keeps the recipe's package
 	// order here so an unchanged recipe is written back as it was.
 	keyOriginalInclude = "original_include"
@@ -154,6 +155,13 @@ func Fields(host Host) []Field {
 			Validate:    checkPackageList,
 		},
 		{
+			Key: KeyPythonPackages, Page: PagePackages, Kind: KindInput,
+			Title:       "Python packages",
+			Description: "installed from PyPI into the image's virtual environment, separated by spaces or commas",
+			Placeholder: "none",
+			Validate:    checkPythonPackageList,
+		},
+		{
 			Key: KeySources, Page: PageSources, Kind: KindMultiSelect,
 			Title:       "Third-party apt sources",
 			Description: "Repositories besides Ubuntu's archive; their signing keys are fetched and checked when the recipe is written",
@@ -215,6 +223,17 @@ func releaseOptions() []Option {
 func checkPackageList(text string) error {
 	for _, packageName := range splitPackageList(text) {
 		if err := recipe.CheckPackageName(packageName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkPythonPackageList reports the first PyPI name in text that a recipe
+// cannot hold.
+func checkPythonPackageList(text string) error {
+	for _, packageName := range splitPackageList(text) {
+		if err := recipe.CheckPythonPackageName(packageName); err != nil {
 			return err
 		}
 	}

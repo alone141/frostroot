@@ -378,6 +378,178 @@ func TestIntegrationOfflineRebuild(t *testing.T) {
 	}
 }
 
+// TestIntegrationPython builds a real image whose recipe asks for Python
+// packages, vendors its wheels, and rebuilds it offline twice. It is the only
+// automated check that the environment an image carries is the one the lock
+// describes, and that two rebuilds of it are byte for byte the same.
+//
+// Needs what TestIntegrationNobleTiny needs, plus PyPI.
+func TestIntegrationPython(t *testing.T) {
+	skipUnlessMmdebstrapAvailable(t)
+	cacheHome, err := os.MkdirTemp("/var/tmp", "frostroot-integration-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(cacheHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(cacheHome) })
+	recipeDir := t.TempDir()
+	imageRecipe := recipe.Recipe{
+		Image:  recipe.Image{Name: "python-lab", Release: "24.04", Arch: "amd64"},
+		User:   recipe.User{Name: "student", Sudo: true},
+		WSL:    recipe.WSL{Systemd: true, DefaultUser: "student"},
+		Locale: recipe.Locale{Lang: "en_US.UTF-8", Timezone: "UTC"},
+		Python: &recipe.Python{Include: []string{"requests"}},
+	}
+	options := Options{RecipeDir: recipeDir, GOOS: "linux", Getenv: fakeEnvironment(map[string]string{"XDG_CACHE_HOME": cacheHome})}
+	builder := Builder{Bootstrapper: &Mmdebstrap{}}
+	progress := &testLogProgress{t: t}
+	options.Progress = progress
+
+	t.Log("online build")
+	online, err := builder.Build(context.Background(), imageRecipe, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(progress.started, PhaseInstallPython) {
+		t.Errorf("phases started = %v, want the Python step", progress.started)
+	}
+	lock, err := recipe.LoadLock(online.LockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lock.Python == nil {
+		t.Fatal("the lock records no [python] table")
+	}
+	if !slices.Equal(lock.Python.Requested, []string{"requests"}) || lock.Python.Venv != PythonVenvPath {
+		t.Errorf("[python] = %+v, want the recipe's list and %s", lock.Python, PythonVenvPath)
+	}
+	if lock.Python.PipVersion != PinnedPip.Version || lock.Python.Interpreter == "" {
+		t.Errorf("[python] = %+v, want the pinned pip and an interpreter", lock.Python)
+	}
+	if !lock.HasWheelChecksums() || len(lock.PyPI) < 5 {
+		t.Fatalf("[[pypi]] = %+v, want requests, its dependencies and the pinned pip, each with a checksum", lock.PyPI)
+	}
+	var sawRequests, sawPin bool
+	for _, wheel := range lock.PyPI {
+		if len(wheel.SHA256) != 64 || !strings.HasSuffix(wheel.Filename, ".whl") || !strings.HasPrefix(wheel.URL, "https://") {
+			t.Errorf("odd lock entry %+v", wheel)
+		}
+		switch wheel.Name {
+		case "requests":
+			sawRequests = !wheel.Auto
+		case "pip":
+			sawPin = wheel == PinnedPip
+		}
+	}
+	if !sawRequests {
+		t.Error("requests is missing from the lock, or marked auto although the recipe asked for it")
+	}
+	if !sawPin {
+		t.Errorf("the lock does not record the pinned pip %+v", PinnedPip)
+	}
+	if online.PythonPackageCount != len(lock.PyPI) {
+		t.Errorf("Result.PythonPackageCount = %d, want %d", online.PythonPackageCount, len(lock.PyPI))
+	}
+
+	assertEnvironmentInImage(t, readTarball(t, online.TarballPath))
+
+	t.Log("vendor both pools")
+	packageEntries, err := pool.Manifest(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Fetch(context.Background(), pool.FetchOptions{
+		Dir:      filepath.Join(recipeDir, "vendor", "debs"),
+		Entries:  packageEntries,
+		Fallback: pool.FallbackURL(lock),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wheelEntries, err := pool.WheelManifest(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, err := pool.Fetch(context.Background(), pool.FetchOptions{
+		Dir:     filepath.Join(recipeDir, "vendor", "wheels"),
+		Entries: wheelEntries,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Fetched != len(wheelEntries) {
+		t.Errorf("fetched %d of %d wheels", summary.Fetched, len(wheelEntries))
+	}
+
+	t.Log("offline build")
+	if err := os.Remove(online.TarballPath); err != nil {
+		t.Fatal(err)
+	}
+	options.Offline = true
+	options.Progress = nil
+	// Provisioning may change between a lock and its rebuild; packages may not.
+	imageRecipe.User.Name = "teacher"
+	imageRecipe.WSL.DefaultUser = "teacher"
+	offline, err := builder.Build(context.Background(), imageRecipe, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if offline.PythonPackageCount != len(lock.PyPI) {
+		t.Errorf("Result.PythonPackageCount = %d, want the lock's %d", offline.PythonPackageCount, len(lock.PyPI))
+	}
+	assertEnvironmentInImage(t, readTarball(t, offline.TarballPath))
+
+	t.Log("second offline build")
+	firstTarball := filepath.Join(recipeDir, "first.tar.gz")
+	if err := os.Rename(offline.TarballPath, firstTarball); err != nil {
+		t.Fatal(err)
+	}
+	second, err := builder.Build(context.Background(), imageRecipe, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstSum, secondSum := sha256Of(t, firstTarball), sha256Of(t, second.TarballPath); firstSum != secondSum {
+		t.Errorf("two offline builds of one lock with Python packages differ: %s and %s", firstSum, secondSum)
+	}
+}
+
+// assertEnvironmentInImage checks that image carries the virtual environment,
+// that a login shell would find it, and that nothing the Python step used was
+// left behind.
+func assertEnvironmentInImage(t *testing.T, image tarballContents) {
+	t.Helper()
+	if _, found := image.entries[strings.TrimPrefix(PythonVenvPath, "/")+"/bin/python3"]; !found {
+		t.Errorf("the image has no %s/bin/python3", PythonVenvPath)
+	}
+	if profile := image.fileContent(t, strings.TrimPrefix(PythonProfilePath, "/")); !strings.Contains(profile, PythonVenvPath+"/bin") {
+		t.Errorf("%s = %q, want the environment on PATH", PythonProfilePath, profile)
+	}
+	var installed, leftBehind, strayHomes []string
+	for name := range image.entries {
+		if strings.Contains(name, "/site-packages/requests/") {
+			installed = append(installed, name)
+		}
+		if strings.HasPrefix(name, "frostroot-") {
+			leftBehind = append(leftBehind, name)
+		}
+		// The hooks inherit the build user's environment, and a tool that
+		// writes under $HOME would put the builder's own home in the image.
+		if home, _, _ := strings.Cut(strings.TrimPrefix(name, "home/"), "/"); strings.HasPrefix(name, "home/") && home != "" && home != "student" && home != "teacher" {
+			strayHomes = append(strayHomes, name)
+		}
+	}
+	if len(installed) == 0 {
+		t.Error("the environment does not hold requests")
+	}
+	if len(leftBehind) > 0 {
+		t.Errorf("the Python step left %v in the image", leftBehind)
+	}
+	if len(strayHomes) > 0 {
+		t.Errorf("the image holds a home directory of its own build host: %v", strayHomes)
+	}
+}
+
 // autoMarksIn returns the names of the packages apt marks auto-installed in
 // image, sorted.
 func autoMarksIn(t *testing.T, image tarballContents) []string {

@@ -41,7 +41,9 @@ func newVendorFixture(t *testing.T) *vendorFixture {
 		fixture.files[urlPath] = content
 		fixture.lock.Packages = append(fixture.lock.Packages, recipe.LockPackage{Name: name, Version: "1", Arch: "amd64", SHA256: hex.EncodeToString(digest[:]), Size: int64(len(content)), Filename: urlPath})
 	}
-	fixture.server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	// TLS, because a lock's wheel URL must be https: the whole address
+	// comes from the lock, and the pool has no base URL to fall back on.
+	fixture.server = httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		fixture.requests.Add(1)
 		content, found := fixture.files[strings.TrimPrefix(request.URL.Path, "/")]
 		if !found {
@@ -67,6 +69,74 @@ func (f *vendorFixture) saveLock(t *testing.T) {
 // poolDir is where the fixture's vendor command puts files.
 func (f *vendorFixture) poolDir() string { return filepath.Join(f.recipeDir, "vendor", "debs") }
 
+// wheelPoolDir is where the fixture's vendor command puts wheels.
+func (f *vendorFixture) wheelPoolDir() string { return filepath.Join(f.recipeDir, "vendor", "wheels") }
+
+// addWheels gives the fixture's lock a Python side: wheels served by the same
+// server, with no size, as pip's installation report leaves them.
+func (f *vendorFixture) addWheels(t *testing.T, names ...string) {
+	t.Helper()
+	f.lock.Python = &recipe.LockPython{Requested: names[:1], Venv: "/opt/frostroot/venv", Interpreter: "3.12.3", PipVersion: "24.3.1"}
+	for _, name := range names {
+		content := []byte("wheel " + name + strings.Repeat("!", 80))
+		digest := sha256.Sum256(content)
+		fileName := name + "-1.0-py3-none-any.whl"
+		f.files["wheels/"+fileName] = content
+		f.lock.PyPI = append(f.lock.PyPI, recipe.LockPyPI{
+			Name: name, Version: "1.0", SHA256: hex.EncodeToString(digest[:]),
+			Filename: fileName, URL: f.server.URL + "/wheels/" + fileName,
+		})
+	}
+	f.saveLock(t)
+}
+
+func TestVendorFillsBothPools(t *testing.T) {
+	fixture := newVendorFixture(t)
+	fixture.addWheels(t, "numpy", "six")
+	var stdout, stderr bytes.Buffer
+	if exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr.String())
+	}
+	for _, wantText := range []string{"Vendored 2 packages (", "into vendor/debs: 2 downloaded.", "Vendored 2 wheels into vendor/wheels: 2 downloaded."} {
+		if !strings.Contains(stdout.String(), wantText) {
+			t.Errorf("stdout lacks %q:\n%s", wantText, stdout.String())
+		}
+	}
+	// pip's report gives no size, so the lock knows none: a byte figure here
+	// would be the pinned pip's alone, which is not the pool's size.
+	if strings.Contains(stdout.String(), "wheels (") {
+		t.Errorf("the wheel line claims a size the lock does not know:\n%s", stdout.String())
+	}
+	for _, name := range []string{"numpy-1.0-py3-none-any.whl", "six-1.0-py3-none-any.whl"} {
+		if _, err := os.Stat(filepath.Join(fixture.wheelPoolDir(), name)); err != nil {
+			t.Errorf("%s was not vendored: %v", name, err)
+		}
+	}
+}
+
+func TestVendorPrunesAWheelPoolTheLockNoLongerNames(t *testing.T) {
+	// Drop [python] from a recipe and every wheel on disk is a file the lock
+	// does not name; --prune promises to remove exactly those.
+	fixture := newVendorFixture(t)
+	if err := os.MkdirAll(fixture.wheelPoolDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(fixture.wheelPoolDir(), "numpy-2.5.3-py3-none-any.whl")
+	if err := os.WriteFile(stale, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor", "--prune"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr.String())
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("the stale wheel survived --prune: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "numpy-2.5.3-py3-none-any.whl") {
+		t.Errorf("stdout does not say what was removed:\n%s", stdout.String())
+	}
+}
+
 // newVendorApp returns an App running vendor in the fixture's directory
 // without a terminal and without the Launchpad fallback.
 func newVendorApp(fixture *vendorFixture, stdout, stderr *bytes.Buffer) *App {
@@ -76,6 +146,7 @@ func newVendorApp(fixture *vendorFixture, stdout, stderr *bytes.Buffer) *App {
 		RecipeDir:      fixture.recipeDir,
 		GOOS:           "linux",
 		VendorFallback: func(pool.Entry) string { return "" },
+		VendorClient:   fixture.server.Client(),
 	}
 }
 

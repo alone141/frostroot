@@ -1,0 +1,22 @@
+[image]
+name = "python-lab"
+release = "24.04"
+arch = "amd64"
+
+[user]
+name = "student"
+sudo = true
+
+[wsl]
+systemd = true
+default_user = "student"
+
+[locale]
+lang = "en_US.UTF-8"
+timezone = "Europe/Istanbul"
+
+[packages]
+include = ["python3", "git"]
+
+[python]
+include = ["numpy", "pandas", "jupyterlab"]

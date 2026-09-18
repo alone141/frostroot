@@ -59,17 +59,18 @@ func (v Values) Clone() Values {
 // packages, no extra sources.
 func Defaults(host Host) Values {
 	return Values{
-		KeyImageName:     "lab",
-		KeyRelease:       "24.04",
-		KeyUserName:      "student",
-		KeySudo:          true,
-		KeyTimezone:      HostTimezone(host),
-		KeyLocale:        "en_US.UTF-8",
-		KeySystemd:       true,
-		KeyPackages:      []string{},
-		KeyOtherPackages: "",
-		KeySources:       []string{},
-		KeyPPAs:          "",
+		KeyImageName:      "lab",
+		KeyRelease:        "24.04",
+		KeyUserName:       "student",
+		KeySudo:           true,
+		KeyTimezone:       HostTimezone(host),
+		KeyLocale:         "en_US.UTF-8",
+		KeySystemd:        true,
+		KeyPackages:       []string{},
+		KeyOtherPackages:  "",
+		KeyPythonPackages: "",
+		KeySources:        []string{},
+		KeyPPAs:           "",
 	}
 }
 
@@ -99,6 +100,7 @@ func FromRecipe(imageRecipe recipe.Recipe) Values {
 		KeySystemd:         imageRecipe.WSL.Systemd,
 		KeyPackages:        catalogNames,
 		KeyOtherPackages:   strings.Join(otherNames, " "),
+		KeyPythonPackages:  strings.Join(imageRecipe.PythonPackages(), " "),
 		KeySources:         catalogSources,
 		KeyPPAs:            strings.Join(ppas, " "),
 		keyOriginalInclude: slices.Clone(imageRecipe.Packages.Include),
@@ -123,7 +125,18 @@ func ToRecipe(values Values) recipe.Recipe {
 			Include: MergePackages(values.Strings(KeyPackages), values.String(KeyOtherPackages), values.Strings(keyOriginalInclude)),
 		},
 		Sources: MergeSources(values.Strings(KeySources), values.String(KeyPPAs), values.Sources(keyOriginalSources), releaseSuite(values.String(KeyRelease))),
+		Python:  pythonTable(values.String(KeyPythonPackages)),
 	}
+}
+
+// pythonTable returns the [python] table for an answer, or nil when it names
+// no package: a recipe that asks for nothing keeps no table.
+func pythonTable(answer string) *recipe.Python {
+	packages := splitPackageList(answer)
+	if len(packages) == 0 {
+		return nil
+	}
+	return &recipe.Python{Include: packages}
 }
 
 // releaseSuite returns the code name of a release, or the release text
@@ -159,13 +172,17 @@ func Summary(values Values) string {
 		}
 		sourcesText = strings.Join(names, ", ")
 	}
-	return strings.Join([]string{
+	lines := []string{
 		fmt.Sprintf("Image     %s, Ubuntu %s %s", values.String(KeyImageName), values.String(KeyRelease), distro.SupportedArch),
 		fmt.Sprintf("User      %s, %s", values.String(KeyUserName), sudo),
 		fmt.Sprintf("System    %s, %s, %s", values.String(KeyTimezone), values.String(KeyLocale), systemd),
 		fmt.Sprintf("Packages  %s", packagesText),
 		fmt.Sprintf("Sources   %s", sourcesText),
-	}, "\n")
+	}
+	if pythonPackages := splitPackageList(values.String(KeyPythonPackages)); len(pythonPackages) > 0 {
+		lines = append(lines, fmt.Sprintf("Python    %s", strings.Join(pythonPackages, " ")))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // SplitSources divides a recipe's sources into catalog entry names, PPAs
