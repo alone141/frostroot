@@ -142,6 +142,39 @@ func TestInitWithSourcesFingerprintMismatch(t *testing.T) {
 	}
 }
 
+func runEditWithKeyClient(recipeDir string, answers []string, client sources.Client) (exitCode int, stdout, stderr string) {
+	var stdoutBuffer, stderrBuffer bytes.Buffer
+	app := App{Stdout: &stdoutBuffer, Stderr: &stderrBuffer, RecipeDir: recipeDir, Prompt: &scriptedPrompt{answers: answers}, ReadFile: noHostFile, KeyClient: client}
+	exitCode = app.Run([]string{"edit"})
+	return exitCode, stdoutBuffer.String(), stderrBuffer.String()
+}
+
+func TestEditFetchesMissingSourceKeys(t *testing.T) {
+	// init writes the recipe even when a key fetch fails, and tells the
+	// user to run edit. edit must open that recipe and fetch the keys,
+	// not refuse at load because the files are not there yet.
+	recipeDir := newRecipeDir(t, "sources.toml")
+	docker, _ := sources.Lookup("docker")
+	dockerKey := dockerKeyFixture(t)
+	client := &fakeKeyClient{answers: map[string][]byte{
+		docker.KeyURL: dockerKey,
+		"https://api.launchpad.net/1.0/~deadsnakes/+archive/ubuntu/ppa":                            []byte(`{"signing_key_fingerprint": "` + docker.Fingerprint + `"}`),
+		"https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x" + docker.Fingerprint: dockerKey,
+	}}
+	exitCode, stdout, stderr := runEditWithKeyClient(recipeDir, answersWith(map[int]string{answerWrite: "y"}), client)
+	if exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr)
+	}
+	for _, name := range []string{"docker", "ppa-deadsnakes-ppa"} {
+		if _, err := os.Stat(filepath.Join(recipeDir, "keys", name+".asc")); err != nil {
+			t.Errorf("edit did not save the key of %s: %v", name, err)
+		}
+	}
+	if !strings.Contains(stdout, "Saved the signing key of docker") {
+		t.Errorf("stdout lacks the saved-key line:\n%s", stdout)
+	}
+}
+
 func TestValidateRecipeWithSourcesAndKeys(t *testing.T) {
 	recipeDir := newRecipeDir(t, "sources.toml")
 	exitCode, _, stderr := runValidateIn(recipeDir)

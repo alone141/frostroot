@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -54,6 +55,13 @@ func (s Source) ComponentsOrDefault() []string {
 		return s.Components
 	}
 	return DefaultComponents
+}
+
+// Equal reports whether s and other are the same source. Nil and empty
+// component lists are the same: TOML omitempty and a written empty array
+// must not look like a hand edit.
+func (s Source) Equal(other Source) bool {
+	return s.Name == other.Name && s.URL == other.URL && s.Suite == other.Suite && s.Key == other.Key && slices.Equal(s.Components, other.Components)
 }
 
 // Image is the [image] table: which Ubuntu release to build and what to call

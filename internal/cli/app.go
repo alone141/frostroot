@@ -51,6 +51,15 @@ func (a *App) trustPool(path string) (*x509.CertPool, bool) {
 	return trusted, true
 }
 
+// ensureKeyClient sets the production signing-key HTTPS client once
+// --ca-bundle is known. Tests that inject KeyClient are left alone.
+func (a *App) ensureKeyClient(rootCAs *x509.CertPool) {
+	if a.KeyClient != nil {
+		return
+	}
+	a.KeyClient = sources.HTTPClient{UserAgent: "frostroot/" + builder.Version, RootCAs: rootCAs}
+}
+
 // recipeFileName is the recipe every command works on, in App.RecipeDir.
 const recipeFileName = "frostroot.toml"
 
@@ -149,9 +158,6 @@ func (a *App) withDefaults() *App {
 	if a.BuildInfo == nil {
 		a.BuildInfo = debug.ReadBuildInfo
 	}
-	if a.KeyClient == nil {
-		a.KeyClient = sources.HTTPClient{UserAgent: "frostroot/" + builder.Version}
-	}
 	if a.Builder == nil {
 		a.Builder = &builder.Builder{Bootstrapper: &builder.Mmdebstrap{}}
 	}
@@ -248,9 +254,9 @@ func (a *App) parseFlags(flags *flag.FlagSet, args []string) (exitCode int, stop
 	return exitSuccess, false
 }
 
-// loadRecipe loads and validates the recipe, printing every problem. ok is
-// false when the command should stop with exitUserError.
-func (a *App) loadRecipe() (imageRecipe recipe.Recipe, ok bool) {
+// loadValidatedRecipe loads the recipe and checks its fields. It does not
+// require key or certificate files: edit fetches missing keys after the form.
+func (a *App) loadValidatedRecipe() (imageRecipe recipe.Recipe, ok bool) {
 	recipePath := filepath.Join(a.RecipeDir, recipeFileName)
 	imageRecipe, err := recipe.Load(recipePath)
 	if err != nil {
@@ -262,21 +268,35 @@ func (a *App) loadRecipe() (imageRecipe recipe.Recipe, ok bool) {
 		return recipe.Recipe{}, false
 	}
 	problems := recipe.Validate(imageRecipe)
-	if len(problems) == 0 {
-		// Only once the fields are right: a bad key path is reported above.
-		problems = recipe.CheckSourceKeys(a.RecipeDir, imageRecipe.Sources)
-		if len(problems) > 0 {
-			problems = append(problems, "frostroot edit fetches the keys of the sources it knows; for others, save the source's public key at the path the recipe names")
-		}
-		// The same, for the certificate authorities the image will trust:
-		// a build must not start without knowing what they are.
-		problems = append(problems, recipe.CheckCertificateFiles(a.RecipeDir, imageRecipe.CertificatePaths())...)
-	}
 	if len(problems) > 0 {
-		for _, problem := range problems {
-			a.stderrf("%s: %s\n", recipeFileName, problem)
-		}
+		a.reportRecipeProblems(problems)
 		return recipe.Recipe{}, false
 	}
 	return imageRecipe, true
+}
+
+// loadRecipe loads and validates the recipe, including that every source
+// key and certificate file is in place. ok is false when the command should
+// stop with exitUserError.
+func (a *App) loadRecipe() (imageRecipe recipe.Recipe, ok bool) {
+	imageRecipe, ok = a.loadValidatedRecipe()
+	if !ok {
+		return recipe.Recipe{}, false
+	}
+	problems := recipe.CheckSourceKeys(a.RecipeDir, imageRecipe.Sources)
+	if len(problems) > 0 {
+		problems = append(problems, "frostroot edit fetches the keys of the sources it knows; for others, save the source's public key at the path the recipe names")
+	}
+	problems = append(problems, recipe.CheckCertificateFiles(a.RecipeDir, imageRecipe.CertificatePaths())...)
+	if len(problems) > 0 {
+		a.reportRecipeProblems(problems)
+		return recipe.Recipe{}, false
+	}
+	return imageRecipe, true
+}
+
+func (a *App) reportRecipeProblems(problems []string) {
+	for _, problem := range problems {
+		a.stderrf("%s: %s\n", recipeFileName, problem)
+	}
 }

@@ -24,6 +24,19 @@ func writeKey(t *testing.T, dir, keyPath string) {
 	}
 }
 
+func TestSourceEqualTreatsNilAndEmptyComponentsAsTheSame(t *testing.T) {
+	left := Source{Name: "llvm", URL: "https://apt.llvm.org/jammy", Suite: "llvm-toolchain-jammy", Key: "keys/llvm.asc"}
+	right := left
+	right.Components = []string{}
+	if !left.Equal(right) {
+		t.Fatal("nil components and empty components must be the same source")
+	}
+	right.URL = "https://apt.llvm.org/noble"
+	if left.Equal(right) {
+		t.Fatal("a different URL must not compare equal")
+	}
+}
+
 func TestLoadRecipeWithSources(t *testing.T) {
 	imageRecipe, err := Load(testdataPath("sources.toml"))
 	if err != nil {
@@ -90,6 +103,7 @@ func TestValidateSources(t *testing.T) {
 		{"ftp url", func(source *Source) { source.URL = "ftp://x/y" }, "source url"},
 		{"url without host", func(source *Source) { source.URL = "https:///y" }, "source url"},
 		{"url with space", func(source *Source) { source.URL = "https://x/a b" }, "source url"},
+		{"url with fragment", func(source *Source) { source.URL = "https://download.docker.com/linux/ubuntu#stable" }, "source url"},
 		{"url with bracket", func(source *Source) { source.URL = "https://x/a]" }, "source url"},
 		{"empty url", func(source *Source) { source.URL = "" }, "source url"},
 		{"suite with space", func(source *Source) { source.Suite = "noble main" }, "suite"},

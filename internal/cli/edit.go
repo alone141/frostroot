@@ -21,7 +21,7 @@ func (a *App) runEdit(args []string) int {
 	if exitCode, stop := a.parseFlags(flags, args); stop {
 		return exitCode
 	}
-	imageRecipe, ok := a.loadRecipe()
+	imageRecipe, ok := a.loadValidatedRecipe()
 	if !ok {
 		return exitUserError
 	}

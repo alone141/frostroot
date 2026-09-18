@@ -108,6 +108,7 @@ func FromRecipe(imageRecipe recipe.Recipe) Values {
 		KeyCertificates:         strings.Join(simpleCertificates, " "),
 		keyOriginalInclude:      slices.Clone(imageRecipe.Packages.Include),
 		keyOriginalSources:      slices.Clone(imageRecipe.Sources),
+		keyOriginalRelease:      imageRecipe.Image.Release,
 		keyOriginalCertificates: exoticCertificates,
 	}
 }
@@ -128,7 +129,7 @@ func ToRecipe(values Values) recipe.Recipe {
 		Packages: recipe.Packages{
 			Include: MergePackages(values.Strings(KeyPackages), values.String(KeyOtherPackages), values.Strings(keyOriginalInclude)),
 		},
-		Sources:      MergeSources(values.Strings(KeySources), values.String(KeyPPAs), values.Sources(keyOriginalSources), releaseSuite(values.String(KeyRelease))),
+		Sources:      mergeAnswerSources(values),
 		Python:       pythonTable(values.String(KeyPythonPackages)),
 		Certificates: certificatesTable(certificatePaths(values)),
 	}
@@ -199,7 +200,7 @@ func Summary(values Values) string {
 		packagesText = strings.Join(packages, " ")
 	}
 	sourcesText := "Ubuntu's archive only"
-	if extra := MergeSources(values.Strings(KeySources), values.String(KeyPPAs), values.Sources(keyOriginalSources), releaseSuite(values.String(KeyRelease))); len(extra) > 0 {
+	if extra := mergeAnswerSources(values); len(extra) > 0 {
 		var names []string
 		for _, source := range extra {
 			names = append(names, sources.Describe(source))
@@ -236,12 +237,18 @@ func SplitSources(recipeSources []recipe.Source) (catalogNames, ppas []string) {
 	return catalogNames, ppas
 }
 
+func mergeAnswerSources(values Values) []recipe.Source {
+	return MergeSources(values.Strings(KeySources), values.String(KeyPPAs), values.Sources(keyOriginalSources), releaseSuite(values.String(keyOriginalRelease)), releaseSuite(values.String(KeyRelease)))
+}
+
 // MergeSources returns the source list a recipe should carry: the
 // hand-written sources of the original recipe, the selected catalog entries
 // resolved for the release, and the PPAs typed, once each by name. Sources
 // that were in the original recipe keep their place and their fields (a
 // catalog entry the user edited by hand stays as edited); new ones follow.
-func MergeSources(selected []string, ppasText string, original []recipe.Source, releaseSuite string) []recipe.Source {
+// originalSuite is the code name those original sources were written for;
+// an unedited catalog row is resolved again for releaseSuite.
+func MergeSources(selected []string, ppasText string, original []recipe.Source, originalSuite, releaseSuite string) []recipe.Source {
 	var wanted []recipe.Source
 	for _, name := range selected {
 		if entry, isCatalog := sources.Lookup(name); isCatalog {
@@ -260,11 +267,16 @@ func MergeSources(selected []string, ppasText string, original []recipe.Source, 
 	var merged []recipe.Source
 	listed := map[string]bool{}
 	for _, source := range original {
-		_, isCatalog := sources.Lookup(source.Name)
+		entry, isCatalog := sources.Lookup(source.Name)
 		owner, name, isPPA := sources.PPAOf(source.URL)
 		isRecognized := isCatalog || (isPPA && source.Name == sources.PPA(owner, name).Name)
 		if (isRecognized && !wantedByName[source.Name]) || listed[source.Name] {
 			continue // deselected, or a duplicate
+		}
+		if isCatalog && originalSuite != "" && source.Equal(entry.Source(originalSuite)) {
+			listed[source.Name] = true
+			merged = append(merged, entry.Source(releaseSuite))
+			continue
 		}
 		listed[source.Name] = true
 		merged = append(merged, source)

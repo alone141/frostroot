@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 
 	"frostroot/internal/pki"
 	"frostroot/internal/recipe"
@@ -62,10 +61,7 @@ func ReadCertificates(recipeDir string, certificatePaths []string) (CertificateS
 		}
 		name := recipe.CertificateName(certificatePath)
 		for index, certificate := range certificates {
-			fileName := name + ".crt"
-			if index > 0 {
-				fileName = name + "-" + strconv.Itoa(index+1) + ".crt"
-			}
+			fileName := recipe.CertificateInstallFileName(certificatePath, index)
 			if owner, taken := takenFileNames[fileName]; taken {
 				return CertificateSet{}, fmt.Errorf("%w: %s and %s would both install as %s", ErrCertificate, owner, certificatePath, fileName)
 			}
@@ -111,7 +107,7 @@ func writeAptCaInfo(workDir string, extraPEM []byte) (string, error) {
 	}
 	caInfoPath := filepath.Join(workDir, "apt-ca-bundle.pem")
 	bundle := append(append([]byte(nil), hostPEM...), extraPEM...)
-	if err := os.WriteFile(caInfoPath, bundle, 0o644); err != nil {
+	if err := writeStageFile(caInfoPath, bundle); err != nil {
 		return "", err
 	}
 	return caInfoPath, nil

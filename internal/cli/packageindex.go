@@ -66,6 +66,7 @@ func (a *App) packageIndexes(parsed *indexFlags) (*packageIndexes, bool) {
 		return nil, false
 	}
 	options.RootCAs = rootCAs
+	a.ensureKeyClient(rootCAs)
 	pypiOptions := options
 	// --mirror is an apt mirror and says nothing about PyPI, which has its
 	// own flag.
