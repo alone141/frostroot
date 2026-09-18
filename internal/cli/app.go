@@ -264,6 +264,9 @@ func (a *App) loadRecipe() (imageRecipe recipe.Recipe, ok bool) {
 		if len(problems) > 0 {
 			problems = append(problems, "frostroot edit fetches the keys of the sources it knows; for others, save the source's public key at the path the recipe names")
 		}
+		// The same, for the certificate authorities the image will trust:
+		// a build must not start without knowing what they are.
+		problems = append(problems, recipe.CheckCertificateFiles(a.RecipeDir, imageRecipe.CertificatePaths())...)
 	}
 	if len(problems) > 0 {
 		for _, problem := range problems {
