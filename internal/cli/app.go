@@ -3,6 +3,7 @@
 package cli
 
 import (
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,10 +15,41 @@ import (
 	"runtime/debug"
 
 	"frostroot/internal/builder"
+	"frostroot/internal/pki"
 	"frostroot/internal/pool"
 	"frostroot/internal/recipe"
 	"frostroot/internal/sources"
 )
+
+// readCABundle reads the file --ca-bundle named, or returns nil when the
+// flag was not given. A bundle that is not certificates is reported before
+// the work starts rather than at the first fetch.
+func (a *App) readCABundle(path string) ([]byte, bool) {
+	if path == "" {
+		return nil, true
+	}
+	bundle, err := pki.ReadBundle(path)
+	if err != nil {
+		a.stderrf("frostroot: --ca-bundle: %v\n", err)
+		return nil, false
+	}
+	return bundle, true
+}
+
+// trustPool returns the host's root certificates with the --ca-bundle file's
+// added, or nil for the host's alone.
+func (a *App) trustPool(path string) (*x509.CertPool, bool) {
+	bundle, ok := a.readCABundle(path)
+	if !ok || len(bundle) == 0 {
+		return nil, ok
+	}
+	trusted, err := pki.SystemPoolWith(bundle)
+	if err != nil {
+		a.stderrf("frostroot: --ca-bundle %s: %v\n", path, err)
+		return nil, false
+	}
+	return trusted, true
+}
 
 // recipeFileName is the recipe every command works on, in App.RecipeDir.
 const recipeFileName = "frostroot.toml"
@@ -232,6 +264,9 @@ func (a *App) loadRecipe() (imageRecipe recipe.Recipe, ok bool) {
 		if len(problems) > 0 {
 			problems = append(problems, "frostroot edit fetches the keys of the sources it knows; for others, save the source's public key at the path the recipe names")
 		}
+		// The same, for the certificate authorities the image will trust:
+		// a build must not start without knowing what they are.
+		problems = append(problems, recipe.CheckCertificateFiles(a.RecipeDir, imageRecipe.CertificatePaths())...)
 	}
 	if len(problems) > 0 {
 		for _, problem := range problems {

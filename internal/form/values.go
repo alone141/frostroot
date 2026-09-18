@@ -91,20 +91,21 @@ func FromRecipe(imageRecipe recipe.Recipe) Values {
 		locale = "en_US.UTF-8"
 	}
 	return Values{
-		KeyImageName:       imageRecipe.Image.Name,
-		KeyRelease:         imageRecipe.Image.Release,
-		KeyUserName:        imageRecipe.User.Name,
-		KeySudo:            imageRecipe.User.Sudo,
-		KeyTimezone:        timezone,
-		KeyLocale:          locale,
-		KeySystemd:         imageRecipe.WSL.Systemd,
-		KeyPackages:        catalogNames,
-		KeyOtherPackages:   strings.Join(otherNames, " "),
-		KeyPythonPackages:  strings.Join(imageRecipe.PythonPackages(), " "),
-		KeySources:         catalogSources,
-		KeyPPAs:            strings.Join(ppas, " "),
-		keyOriginalInclude: slices.Clone(imageRecipe.Packages.Include),
-		keyOriginalSources: slices.Clone(imageRecipe.Sources),
+		KeyImageName:            imageRecipe.Image.Name,
+		KeyRelease:              imageRecipe.Image.Release,
+		KeyUserName:             imageRecipe.User.Name,
+		KeySudo:                 imageRecipe.User.Sudo,
+		KeyTimezone:             timezone,
+		KeyLocale:               locale,
+		KeySystemd:              imageRecipe.WSL.Systemd,
+		KeyPackages:             catalogNames,
+		KeyOtherPackages:        strings.Join(otherNames, " "),
+		KeyPythonPackages:       strings.Join(imageRecipe.PythonPackages(), " "),
+		KeySources:              catalogSources,
+		KeyPPAs:                 strings.Join(ppas, " "),
+		keyOriginalInclude:      slices.Clone(imageRecipe.Packages.Include),
+		keyOriginalSources:      slices.Clone(imageRecipe.Sources),
+		keyOriginalCertificates: slices.Clone(imageRecipe.CertificatePaths()),
 	}
 }
 
@@ -124,8 +125,9 @@ func ToRecipe(values Values) recipe.Recipe {
 		Packages: recipe.Packages{
 			Include: MergePackages(values.Strings(KeyPackages), values.String(KeyOtherPackages), values.Strings(keyOriginalInclude)),
 		},
-		Sources: MergeSources(values.Strings(KeySources), values.String(KeyPPAs), values.Sources(keyOriginalSources), releaseSuite(values.String(KeyRelease))),
-		Python:  pythonTable(values.String(KeyPythonPackages)),
+		Sources:      MergeSources(values.Strings(KeySources), values.String(KeyPPAs), values.Sources(keyOriginalSources), releaseSuite(values.String(KeyRelease))),
+		Python:       pythonTable(values.String(KeyPythonPackages)),
+		Certificates: certificatesTable(values.Strings(keyOriginalCertificates)),
 	}
 }
 
@@ -137,6 +139,15 @@ func pythonTable(answer string) *recipe.Python {
 		return nil
 	}
 	return &recipe.Python{Include: packages}
+}
+
+// certificatesTable returns the [certificates] table the recipe came with,
+// or nil when it named none. Nothing in the form changes it.
+func certificatesTable(certificatePaths []string) *recipe.Certificates {
+	if len(certificatePaths) == 0 {
+		return nil
+	}
+	return &recipe.Certificates{Include: certificatePaths}
 }
 
 // releaseSuite returns the code name of a release, or the release text
@@ -181,6 +192,9 @@ func Summary(values Values) string {
 	}
 	if pythonPackages := splitPackageList(values.String(KeyPythonPackages)); len(pythonPackages) > 0 {
 		lines = append(lines, fmt.Sprintf("Python    %s", strings.Join(pythonPackages, " ")))
+	}
+	if certificatePaths := values.Strings(keyOriginalCertificates); len(certificatePaths) > 0 {
+		lines = append(lines, fmt.Sprintf("Certs     %s", strings.Join(certificatePaths, " ")))
 	}
 	return strings.Join(lines, "\n")
 }

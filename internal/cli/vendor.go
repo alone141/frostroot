@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net/http"
@@ -18,20 +19,23 @@ import (
 	"frostroot/internal/tui"
 )
 
-const vendorUsageText = `usage: frostroot vendor [--mirror URL] [--prune] [--plain]
+const vendorUsageText = `usage: frostroot vendor [--mirror URL] [--ca-bundle FILE] [--prune] [--plain]
 
 Download every package frostroot.lock names into vendor/debs/, and every Python
 wheel it names into vendor/wheels/, checked against the lock's checksums, so
 that "frostroot build --offline" can rebuild the exact image without the archive
 or PyPI. Files already there and correct are kept, so rerunning resumes an
 interrupted download. Packages the archive has since dropped are fetched from
-Launchpad, which keeps every file ever published.
+Launchpad, which keeps every file ever published. Both are HTTPS, so on a
+network that inspects TLS, --ca-bundle names a PEM file of certificate
+authorities to trust while fetching.
 
 `
 
 func (a *App) runVendor(args []string) int {
 	flags := a.newFlagSet("vendor", vendorUsageText)
 	mirrorURL := flags.String("mirror", "", "download from this archive base `URL` instead of the one recorded in the lock")
+	caBundlePath := flags.String("ca-bundle", "", "PEM `FILE` of certificate authorities to trust while fetching, for a network that inspects TLS")
 	prune := flags.Bool("prune", false, "remove files in vendor/debs and vendor/wheels that the lock does not name")
 	plain := flags.Bool("plain", false, "print progress as lines instead of showing the full-screen progress screen")
 	if exitCode, stop := a.parseFlags(flags, args); stop {
@@ -74,6 +78,10 @@ func (a *App) runVendor(args []string) int {
 		a.stderrf("frostroot: %v\n", err)
 		return exitUserError
 	}
+	rootCAs, ok := a.trustPool(*caBundlePath)
+	if !ok {
+		return exitUserError
+	}
 	run := &vendorRun{
 		poolDir:      filepath.Join(a.RecipeDir, filepath.FromSlash(pool.DebsDirName)),
 		entries:      entries,
@@ -84,6 +92,7 @@ func (a *App) runVendor(args []string) int {
 		prune:        *prune,
 		fallback:     a.VendorFallback,
 		client:       a.VendorClient,
+		rootCAs:      rootCAs,
 	}
 	if run.fallback == nil {
 		run.fallback = pool.FallbackURL(lock)
@@ -225,6 +234,7 @@ type vendorRun struct {
 	prune        bool
 	fallback     func(pool.Entry) string
 	client       *http.Client
+	rootCAs      *x509.CertPool
 	progress     builder.Progress
 
 	// summaryByPool holds what each pool directory ended up with, so that a
@@ -305,6 +315,7 @@ func (r *vendorRun) fetchPool(ctx context.Context, report func(builder.ProgressE
 		MirrorURL: mirrorURL,
 		Fallback:  fallback,
 		Client:    r.client,
+		RootCAs:   r.rootCAs,
 		UserAgent: "frostroot/" + builder.Version,
 		OnChecked: func(checked, total int) {
 			report(builder.ProgressEvent{Phase: builder.PhaseVendorCheck, Kind: builder.EventProgress, Done: int64(checked), Total: int64(total), Unit: builder.UnitFiles})

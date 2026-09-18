@@ -1,0 +1,25 @@
+[image]
+name = "corp-lab"
+release = "24.04"
+arch = "amd64"
+
+[user]
+name = "student"
+sudo = true
+
+[wsl]
+systemd = true
+default_user = "student"
+
+[locale]
+lang = "en_US.UTF-8"
+timezone = "UTC"
+
+[packages]
+include = ["git"]
+
+[python]
+include = ["requests"]
+
+[certificates]
+include = ["certs/corp-root.pem"]

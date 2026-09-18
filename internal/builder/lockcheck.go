@@ -116,6 +116,13 @@ func planOffline(recipeDir string, imageRecipe recipe.Recipe, release distro.Rel
 		}
 	}
 	differences = append(differences, repositoryDifferences(lock, imageRecipe.Sources, release)...)
+	// The certificate files are read from beside the recipe, so an offline
+	// rebuild would quietly install whatever they hold now.
+	certificates, err := ReadCertificates(recipeDir, imageRecipe.CertificatePaths())
+	if err != nil {
+		return nil, err
+	}
+	differences = append(differences, CheckCertificatesAgainstLock(certificates.Locked, lock.Certificates)...)
 	if len(differences) > 0 {
 		return nil, fmt.Errorf("%w: %s; run frostroot build online, then frostroot vendor", ErrLockMismatch, strings.Join(differences, "; "))
 	}

@@ -580,7 +580,14 @@ func TestStageWithoutPythonHasNoPythonStep(t *testing.T) {
 }
 
 func TestRenderPythonScriptIsValidShell(t *testing.T) {
-	for _, options := range []PythonOptions{{}, {SourceDateEpoch: 1789662022}, {Offline: true, SourceDateEpoch: 1789662022}} {
+	for _, options := range []PythonOptions{
+		{},
+		{SourceDateEpoch: 1789662022},
+		{Offline: true, SourceDateEpoch: 1789662022},
+		{TrustImageCertificates: true},
+		{ExtraTrust: true},
+		{TrustImageCertificates: true, ExtraTrust: true, SourceDateEpoch: 1789662022},
+	} {
 		imageRecipe := pythonRecipe()
 		// Validation rejects a name like this; the quoting is the second
 		// line of defense, and it is proved with a real shell.

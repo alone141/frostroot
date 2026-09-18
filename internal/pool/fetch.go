@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"frostroot/internal/export"
+	"frostroot/internal/pki"
 )
 
 // Defaults of Fetch.
@@ -62,10 +64,14 @@ type FetchOptions struct {
 	MirrorURL string
 	// Fallback returns another URL to try for an entry the mirror does not
 	// have (404), or "" for none. nil means no fallback.
-	Fallback  func(Entry) string
-	Client    *http.Client // nil: a default client honoring the proxy environment
-	Workers   int          // concurrent downloads; <= 0 means DefaultWorkers
-	UserAgent string       // "" means defaultUserAgent
+	Fallback func(Entry) string
+	Client   *http.Client // nil: a default client honoring the proxy environment
+	// RootCAs is what the default client verifies HTTPS against; nil means
+	// the host's own roots. A network that inspects TLS needs its authority
+	// here, and Launchpad and PyPI are both HTTPS. Ignored when Client is set.
+	RootCAs   *x509.CertPool
+	Workers   int    // concurrent downloads; <= 0 means DefaultWorkers
+	UserAgent string // "" means defaultUserAgent
 
 	OnChecked    func(checked, total int)                  // Verify progress
 	OnDownloaded func(doneBytes, totalBytes int64)         // download progress, in bytes still to fetch
@@ -164,10 +170,7 @@ type fetcher struct {
 func newFetcher(options FetchOptions, totalBytes int64) *fetcher {
 	f := &fetcher{options: options, client: options.Client, workers: options.Workers, totalBytes: totalBytes}
 	if f.client == nil {
-		transport := &http.Transport{Proxy: http.ProxyFromEnvironment}
-		if defaultTransport, isTransport := http.DefaultTransport.(*http.Transport); isTransport {
-			transport = defaultTransport.Clone()
-		}
+		transport := pki.Transport(options.RootCAs)
 		transport.ResponseHeaderTimeout = responseHeaderTimeout
 		f.client = &http.Client{Transport: transport}
 	}
