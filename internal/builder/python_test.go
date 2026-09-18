@@ -327,6 +327,124 @@ func TestComparePythonWithLock(t *testing.T) {
 	}
 }
 
+func TestComparePythonWithLockChecksALockedSeedPackage(t *testing.T) {
+	// setuptools is seeded by venv on 22.04 and 20.04 and by nothing on
+	// 24.04, so a lock can perfectly well name it: pip installed that
+	// version, and it is compared like any other package. Skipping it
+	// outright made every offline rebuild of such a lock fail.
+	lock := recipe.Lockfile{PyPI: []recipe.LockPyPI{
+		{Name: "pip", Version: "24.3.1"},
+		{Name: "setuptools", Version: "75.6.0"},
+	}}
+	asLocked := []PythonInstalled{{Name: "pip", Version: "24.3.1"}, {Name: "setuptools", Version: "75.6.0"}}
+	if err := ComparePythonWithLock(lock, asLocked); err != nil {
+		t.Errorf("ComparePythonWithLock = %v, want no difference: the environment is the lock", err)
+	}
+
+	drifted := []PythonInstalled{{Name: "pip", Version: "24.3.1"}, {Name: "setuptools", Version: "59.6.0"}}
+	err := ComparePythonWithLock(lock, drifted)
+	if !errors.Is(err, ErrImageDiffersFromLock) || !strings.Contains(err.Error(), "setuptools is 59.6.0 in the environment and 75.6.0 in the lock") {
+		t.Errorf("ComparePythonWithLock = %v, want the version difference reported", err)
+	}
+
+	missing := []PythonInstalled{{Name: "pip", Version: "24.3.1"}}
+	err = ComparePythonWithLock(lock, missing)
+	if !errors.Is(err, ErrImageDiffersFromLock) || !strings.Contains(err.Error(), "setuptools 75.6.0 is in the lock but not in the environment") {
+		t.Errorf("ComparePythonWithLock = %v, want the missing package reported", err)
+	}
+}
+
+func TestLockedPip(t *testing.T) {
+	lock := recipe.Lockfile{PyPI: []recipe.LockPyPI{
+		{Name: "numpy", Version: "2.5.3"},
+		{Name: "pip", Version: "25.0", SHA256: "dd", Filename: "pip-25.0-py3-none-any.whl", URL: "https://example.invalid/pip-25.0-py3-none-any.whl"},
+	}}
+	if got := LockedPip(lock); got.Version != "25.0" || got.SHA256 != "dd" {
+		t.Errorf("LockedPip = %+v, want the lock's own pip", got)
+	}
+	if got := LockedPip(recipe.Lockfile{PyPI: []recipe.LockPyPI{{Name: "numpy", Version: "2.5.3"}}}); got.Version != "" {
+		t.Errorf("LockedPip = %+v, want the zero value for a lock that names no pip", got)
+	}
+}
+
+func TestRenderPythonScriptOfflineInstallsTheLocksPip(t *testing.T) {
+	// The pin is a constant of this frostroot; the pool holds whatever the
+	// online build resolved. An offline rebuild must ask for the lock's pip,
+	// or --require-hashes --no-index cannot satisfy it.
+	lockedPip := recipe.LockPyPI{Name: "pip", Version: "25.0", SHA256: "dd", Filename: "pip-25.0-py3-none-any.whl"}
+	script := renderPythonScript(t, pythonRecipe(), PythonOptions{Offline: true, Pip: lockedPip})
+	if !strings.Contains(script, "'pip==%s --hash=sha256:%s\\n' '25.0' 'dd'") {
+		t.Errorf("script does not install the lock's pip:\n%s", script)
+	}
+	if strings.Contains(script, PinnedPip.Version) {
+		t.Errorf("script mentions this frostroot's pin instead of the lock's pip:\n%s", script)
+	}
+	if !strings.Contains(script, "pip\\ 25.0\\ *)") {
+		t.Errorf("script checks for the wrong pip:\n%s", script)
+	}
+
+	// A lock that names no pip has none to install: the environment's own
+	// does the work, and there is nothing to check.
+	withoutPip := renderPythonScript(t, pythonRecipe(), PythonOptions{Offline: true})
+	for _, unwanted := range []string{"--hash=sha256:", PythonPinPath, "did not replace this release's pip"} {
+		if strings.Contains(withoutPip, unwanted) {
+			t.Errorf("a lock with no pip must leave out the pin step, but the script has %q:\n%s", unwanted, withoutPip)
+		}
+	}
+	if !strings.Contains(withoutPip, "--require-hashes --requirement '"+PythonRequirementsPath+"'") {
+		t.Errorf("the packages are still installed from the lock:\n%s", withoutPip)
+	}
+}
+
+func TestRenderPythonScriptIgnoresThePipEnvironmentOfTheBuildHost(t *testing.T) {
+	// A customize hook inherits whoever started the build: one PIP_INDEX_URL
+	// would resolve the recipe against another index and write its URLs into
+	// the lock.
+	script := renderPythonScript(t, pythonRecipe(), PythonOptions{})
+	for _, want := range []string{"unset \"$pipVariable\"", "PIP_CONFIG_FILE=/dev/null", "HOME=/root"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("script lacks %q:\n%s", want, script)
+		}
+	}
+}
+
+func TestRenderPythonScriptUpgradesWhatTheRecipeAsksFor(t *testing.T) {
+	// Without --upgrade, pip calls a package the environment already seeds
+	// satisfied, leaves it out of the report, and the build fails on a
+	// package it did install.
+	script := renderPythonScript(t, pythonRecipe(), PythonOptions{})
+	if !strings.Contains(script, "--only-binary=:all: --upgrade --report") {
+		t.Errorf("the online install does not upgrade what the recipe asks for:\n%s", script)
+	}
+}
+
+func TestPythonEnvironmentIsNeutralInARealShell(t *testing.T) {
+	// The PIP_ sweep is shell, not Go: prove it clears the variables and
+	// survives an environment that has none.
+	script := renderPythonScript(t, pythonRecipe(), PythonOptions{})
+	sweep, _, found := strings.Cut(script, "venv=")
+	if !found {
+		t.Fatalf("the script has no venv assignment:\n%s", script)
+	}
+	check := sweep + "\nenv | grep '^PIP_' || echo 'no PIP_ variables'\n"
+	command := exec.Command("sh", "-c", check)
+	command.Env = append(os.Environ(),
+		"PIP_INDEX_URL=https://nexus.invalid/simple",
+		"PIP_EXTRA_INDEX_URL=https://other.invalid/simple",
+		"PIP_TRUSTED_HOST=nexus.invalid",
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, output)
+	}
+	if strings.Contains(string(output), "nexus.invalid") {
+		t.Errorf("the build host's pip settings survived the script:\n%s", output)
+	}
+	if !strings.Contains(string(output), "PIP_CONFIG_FILE=/dev/null") {
+		t.Errorf("the script did not disable pip's configuration files:\n%s", output)
+	}
+}
+
 func TestPythonHooksOnline(t *testing.T) {
 	stage, err := WriteStage(t.TempDir(), pythonRecipe(), StageOptions{
 		RecordForLock: true,
