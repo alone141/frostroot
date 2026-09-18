@@ -32,10 +32,17 @@ type Release struct {
 	EndOfLife  bool     // past standard support: security fixes need Ubuntu Pro
 }
 
+// allComponents is the whole archive, in the order Ubuntu's own sources.list
+// names it: what a stock install and the official WSL image enable. Up to
+// v0.9 frostroot enabled main and universe only; a lock made then still
+// rebuilds offline to the same bytes, because the lock records the image's
+// deb lines and an offline build writes those.
+var allComponents = []string{"main", "restricted", "universe", "multiverse"}
+
 var releasesByVersion = map[string]Release{
-	"20.04": {Suite: "focal", ArchiveURL: ubuntuArchiveURL, Components: []string{"main", "universe"}, EndOfLife: true},
-	"22.04": {Suite: "jammy", ArchiveURL: ubuntuArchiveURL, Components: []string{"main", "universe"}},
-	"24.04": {Suite: "noble", ArchiveURL: ubuntuArchiveURL, Components: []string{"main", "universe"}},
+	"20.04": {Suite: "focal", ArchiveURL: ubuntuArchiveURL, Components: allComponents, EndOfLife: true},
+	"22.04": {Suite: "jammy", ArchiveURL: ubuntuArchiveURL, Components: allComponents},
+	"24.04": {Suite: "noble", ArchiveURL: ubuntuArchiveURL, Components: allComponents},
 }
 
 // Lookup returns how to bootstrap an Ubuntu release, such as "24.04", for an

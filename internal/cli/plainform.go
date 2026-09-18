@@ -25,7 +25,7 @@ func (a *App) askFieldsPlain(fields []form.Field, initial form.Values) (form.Val
 		}
 		var err error
 		switch field.Kind {
-		case form.KindInput:
+		case form.KindInput, form.KindSearch: // a line of text cannot search; it takes the names
 			err = a.askInputPlain(field, values, &problems)
 		case form.KindSelect:
 			err = a.askSelectPlain(field, values, &problems)

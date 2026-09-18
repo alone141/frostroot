@@ -185,87 +185,118 @@ which must still wait. The README's "Verification" section records it.
 
 ## v0.10: the package picker (issue #10)
 
-One feature: on the Packages page, a **Find a package** field that searches
-the release's whole archive by name and description as you type, adds with
-Space, and knows whether a typed name exists.
+One feature: on the Packages page, "Other packages" becomes a field that
+searches the release's whole archive by name and description as you type,
+adds with Space, and says when a name is not in the archive. The spec is
+`specs/2026-09-18-frostroot-picker.md`; this section is the order of work.
+
+### Decided with the user (2026-09-18)
+
+- **Fetch and cache**, not bundled.
+- **Search, with a section filter**; no browsing tree.
+- **Warn with suggestions, never refuse**: a name the index lacks may come
+  from a third-party source (`docker-ce`, `code`, `gh`).
+- **All four components, in builds too.** Builds enabled `main` and
+  `universe` only, which the first question did not say; asked again, the
+  user chose to enable `restricted` and `multiverse` in this release. The
+  lock already replays the image's `deb` lines offline, so old locks are
+  untouched (the spec's decision A).
+- **One merged field**: the picker replaces "Other packages" in the
+  full-screen form (the spec's decision B).
 
 ### The design
 
-- The index is the archive's own `Packages` files for `main` and
-  `universe`, `binary-amd64`, from the release pocket and `-updates`, the
-  same files the build later installs from. Fetched on first use over plain
-  HTTP from the archive (or `--mirror`), decompressed with what
-  `internal/deb` already links, reduced to name, version, section and the
-  short description, and cached under
-  `$XDG_CACHE_HOME/frostroot/index/<suite>/` with the fetch time. Refreshed
-  when older than seven days or with `init --refresh-index`. The recipe
-  directory is never written to; the constraint holds.
-- The index is advisory. It is not signature-checked (frostroot's `pgp`
-  package reads keys and verifies nothing, by design); it can only suggest
-  names, and `build` verifies every package it installs against the signed
-  archive exactly as today. This is said in the README.
-- **Offline is not an error.** No cache and no network: the field says
-  "archive index not available; the catalog and the free-text field still
-  work" and the form goes on. `--plain` never fetches; it validates typed
-  names against the cache when there is one, and says nothing when there
-  is not.
-- "Other packages" and the picker share the index: a typed name that is
-  not in it is refused on the spot with the nearest names ("no `ninja-buld`
-  in noble; did you mean `ninja-build`?"), which is issue 2 above solved.
+- The index is the archive's own `Packages.xz` files (`.gz` as the
+  fallback), `binary-amd64`, from the release pocket and `-updates`, for the
+  components a build enables. Fetched on first use over plain HTTP from the
+  archive (or `--mirror`), each file checked against the size and SHA-256 in
+  the pocket's `Release`, reduced to name, version, component, section and
+  the short description, and cached as one 1.8 MB file under
+  `$XDG_CACHE_HOME/frostroot/index/`. Refreshed when older than seven days
+  or with `--refresh-index`. The recipe directory is never written to; the
+  constraint holds.
+- The index is advisory. The hash check is for integrity, not authenticity:
+  `Release` is read unsigned (frostroot's `pgp` package reads keys and
+  verifies nothing, by design). It can only suggest names, and `build`
+  verifies every package it installs against the signed archive exactly as
+  today. This is said in the README.
+- **Offline is not an error.** No cache and no network: the field says so,
+  becomes a list editor that takes names as typed, and the form goes on.
+  `--plain` never fetches; it checks typed names against the cache when
+  there is one, and says nothing when there is not.
+- A name that is in neither the index nor the catalog is **warned about on
+  the summary page** with the nearest names ("`ninja-buld` — nearest:
+  `ninja-build`"), in both interfaces. The write question still defaults to
+  Write.
 - The catalog stays as the curated shelf at the top of the page; the picker
   is the shelf behind it.
 
-### Task 0: spike on the build host (blocker)
+### Task 0: spike on the build host — done
 
-- How big and how fast: fetch noble's four index files, record compressed
-  and uncompressed sizes, `ReadIndexEntries` time, and the memory of the
-  reduced table. The guess is ~70,000 entries, under 15 MB compressed, a
-  second or two to parse, tens of megabytes resident; the spike replaces
-  the guess.
-- Which compressions the archive offers (`.gz` and `.xz` both, on Ubuntu,
-  is the belief) and whether `-updates` is worth the second fetch.
-- Whether a huh `MultiSelect` with `Filterable(true)` stays responsive with
-  70,000 options, or the picker has to be its own Bubble Tea component with
-  its own filtering. This decides the size of Task 3.
-- What the short description looks like across `main` and `universe`
-  (length, the odd package with none), so the list renders evenly.
+The numbers are in the spec. What they decided: huh's `MultiSelect` takes
+2.9 s a key at 85,855 options, so the picker is its own `huh.Field`; a
+plain substring scan is 2–4 ms a query, so there is no search index and no
+debounce; `.xz` over `.gz` (4 MB less to fetch, 1.3 s more to decode);
+the release pocket and `-updates` but not `-security`; a gzip'd TSV cache
+that loads in 35 ms.
 
-### Task 1: the spec
+### Task 1: the spec — done
 
-`docs/superpowers/specs/2026-09-18-frostroot-picker.md`, with the spike's
-numbers.
+`docs/superpowers/specs/2026-09-18-frostroot-picker.md`. The user looked
+and decided A (all four components, builds too) and B (one field).
 
-### Task 2: the index
+### Task 1b: builds enable all four components — done
 
-`internal/index`: fetch, decompress, reduce, cache, load, search. Search is
-substring over name first and description second, name matches ranked
-above, exact name at the top. `Nearest(name)` for the typo message. Tests
-with a small real excerpt, an unreachable archive, a stale cache, and a
-corrupt cache file that is deleted and refetched rather than trusted.
+`distro`'s table lists `main restricted universe multiverse` for every
+release; `SourceLines` and the picker both read it. Tests: the source
+lines, and that `planOffline` accepts a lock whose `sources` are the old
+two-component lines. README's example lines. Verified in Task 6: an
+existing v0.9 lock and pool rebuild offline to the same bytes; a fresh
+build with a multiverse package installs it, locks it under
+`pool/multiverse/`, vendors and rebuilds identically.
 
-### Task 3: the widget
+### Task 2: the index — done
 
-`KindSearch` in `form`, rendered by whichever the spike chose: a filtered
-huh multiselect fed from the index, or a bespoke component with an input,
-a result list, Space to add, and the chosen names shown above the list.
-The plain interface renders the field as the existing free-text one, index
-validation included.
+`internal/index`: `Open` (cache, fetch, stale fallback), the `Release`
+parser and hash check, reduce, the cache file with its header, `Search`
+with the four ranks and the section filter, `Has`, `Nearest`, `Sections`,
+`Describe`. Tests with a small real excerpt of noble's `Packages`, an
+`httptest` archive, an unreachable archive with and without a cache, a
+stale cache, a header for another mirror, a hash mismatch that clears on
+the second fetch, and a corrupt cache file that is deleted and refetched
+rather than trusted. Records `Nearest`'s real cost over the whole archive.
 
-### Task 4: the validation
+### Task 3: the field and the wiring — done
 
-"Other packages" and "Python packages" gain index-aware validation when a
-cache is present; the message names the release and the nearest names.
-Python names are not in an apt index and stay pattern-only; the message says
-"checked at build time".
+`form.KindSearch`, `form.PackageIndex`, `Host.OpenIndex`; "Other packages"
+changes kind and keeps its key. The plain interface renders it as the
+free-text question it is today. `cli` plugs `internal/index` in, and
+`init`, `edit` and `capture` gain `--refresh-index`, `--mirror` and
+`--ca-bundle`.
 
-### Task 5: docs and verification
+### Task 4: the component — done
 
-README: the Packages page description, the cache location, the refresh
-flag, the advisory note, and the offline behaviour. On the build host: a
-first `init` fetching the index with a visible progress line, a second one
-using the cache, one with the network cut, and one with a misspelled
-package refused before the summary. Frames for the picker at 80×24 join the
-golden set.
+`internal/tui/picker.go`, a `huh.Field`: the query box, the ranked results,
+Space to add and remove, the empty query listing what is chosen, the
+as-typed row, `/` for the section list, paste of several names, the loading
+line with a bar, the no-index list editor, its place kept on the page rather
+than zoomed, ASCII and 60-column layouts. Driver tests for each; golden frames
+at the three sizes and in ASCII.
+
+### Task 5: the warning — done
+
+`form.UnknownPackages(values, index)` and its rendering on the summary
+page and in the plain interface's summary; the wording changes when no
+source is chosen. Python names stay pattern-only and unmentioned.
+
+### Task 6: docs and verification
+
+README: the Packages page, the cache location, the three flags, the
+advisory note, and the offline behaviour. On the build host: a first `init`
+fetching the index with the progress line on screen, a second one using the
+cache with no traffic, one with the network cut and no cache, one with
+`ninja-buld` typed — warned about, and written anyway — `--plain` with and
+without a cache, and `--mirror` at a local copy of the archive.
 
 ## Deliberately not in either
 

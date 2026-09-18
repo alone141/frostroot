@@ -62,9 +62,9 @@ func TestSourceLines(t *testing.T) {
 	}
 	lines := SourceLines(release, "", sampleSources(), "/etc/apt/keyrings")
 	want := []string{
-		"deb http://archive.ubuntu.com/ubuntu jammy main universe",
-		"deb http://archive.ubuntu.com/ubuntu jammy-updates main universe",
-		"deb http://archive.ubuntu.com/ubuntu jammy-security main universe",
+		"deb http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse",
+		"deb http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse",
+		"deb http://archive.ubuntu.com/ubuntu jammy-security main restricted universe multiverse",
 		"deb [signed-by=/etc/apt/keyrings/frostroot-docker.gpg] https://download.docker.com/linux/ubuntu jammy stable",
 		"deb [signed-by=/etc/apt/keyrings/frostroot-ppa-git-core-ppa.gpg] https://ppa.launchpadcontent.net/git-core/ppa/ubuntu jammy main",
 	}

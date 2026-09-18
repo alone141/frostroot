@@ -1,0 +1,34 @@
+Packages
+  Packages
+  Space selects, Enter continues, / filters
+  > [ ] build-essential  gcc, g++, make and the C library headers
+    [ ] cmake  cross-platform build system
+    [ ] gdb  the GNU debugger
+    [ ] pkg-config  compiler and linker flags for installed libraries
+    [ ] clang  the LLVM C/C++ compiler
+    [ ] clang-format  source code formatter
+    [ ] valgrind  memory error detector and profiler
+    [ ] ninja-build  small, fast build tool CMake can drive
+    [ ] python3  the interpreter
+    [ ] python3-pip  package installer (use a venv on 24.04)
+
+┃ Other packages
+┃ type to search the release's archive, or a name; Space adds the row
+┃ > type to search, or a name
+┃ all sections · noble · 85,574 packages · fetched 2 days ago
+┃ > [•] valgrind    1:3.22.0-0ubunt…  instrumentation framework for building dynamic analysis tools
+┃   [•] ninja-buld  ? not in the archive
+┃   [•] meson       1.3.2-1ubuntu1    high-productivity build system
+┃
+┃
+┃
+┃
+┃
+┃ chosen (3): valgrind ninja-buld meson
+┃
+
+  Python packages
+  installed from PyPI into the image's virtual environment, separated by spaces or commas
+  > none
+
+↑/↓ move • space add/remove • / section • shift+tab back • enter next

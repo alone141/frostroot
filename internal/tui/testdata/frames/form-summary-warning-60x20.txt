@@ -1,0 +1,24 @@
+Summary
+Image     lab, Ubuntu 24.04 amd64
+User      student, passwordless sudo
+System    UTC, en_US.UTF-8, systemd on
+Packages  none
+Sources   Ubuntu's archive only
+
+Not in Ubuntu's noble archive:
+  ninja-buld  nearest: ninja-build
+  docker-ce
+The recipe has no other source that could provide them, so build will
+stop at "Unable to locate package" unless one is added.
+
+This is what frostroot.toml will say:
+╭──────────────────────────────────────────────────────────╮
+│ # frostroot recipe: the image you want. Edit it, then r… │
+╰──────────────────────────────────────────────────────────╯
+  ↑/↓ PgUp/PgDn scroll · 23 more lines
+
+┃ Write frostroot.toml?
+┃
+┃   Write     Cancel
+
+←/→ toggle • enter submit • y Write • n Cancel
