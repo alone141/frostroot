@@ -90,6 +90,15 @@ func (s sampleIndex) SectionsMatching(query string) []form.SectionCount {
 	return sections
 }
 
+func (sampleIndex) Lookup(name string) (form.Match, bool) {
+	for _, match := range samplePackages {
+		if match.Name == name {
+			return match, true
+		}
+	}
+	return form.Match{}, false
+}
+
 func (sampleIndex) Has(name string) bool {
 	return slices.ContainsFunc(samplePackages, func(match form.Match) bool { return match.Name == name })
 }

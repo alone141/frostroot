@@ -33,6 +33,8 @@ type PackageIndex interface {
 	// SectionsMatching returns the sections holding matches for query,
 	// largest first.
 	SectionsMatching(query string) []SectionCount
+	// Lookup returns the package of exactly this name, cheaply.
+	Lookup(name string) (Match, bool)
 	// Has reports whether the release has a package of exactly this name.
 	Has(name string) bool
 	// Nearest returns names close to one the release lacks, closest first.

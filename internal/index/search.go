@@ -111,10 +111,21 @@ func sortedSections(counts map[string]int) []SectionCount {
 	return sections
 }
 
+// Lookup returns the package of exactly this name. It is a binary search,
+// where Search is a scan: describing two hundred chosen names, as capture
+// produces them, must not cost two hundred scans.
+func (x *Index) Lookup(name string) (Entry, bool) {
+	position := sort.Search(len(x.entries), func(i int) bool { return x.entries[i].Name >= name })
+	if position < len(x.entries) && x.entries[position].Name == name {
+		return x.entries[position], true
+	}
+	return Entry{}, false
+}
+
 // Has reports whether the release has a package of exactly this name.
 func (x *Index) Has(name string) bool {
-	position := sort.Search(len(x.entries), func(i int) bool { return x.entries[i].Name >= name })
-	return position < len(x.entries) && x.entries[position].Name == name
+	_, isThere := x.Lookup(name)
+	return isThere
 }
 
 // Nearest returns up to limit names close to a name the release lacks, the

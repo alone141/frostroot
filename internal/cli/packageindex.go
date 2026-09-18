@@ -126,6 +126,11 @@ func (x packageIndex) SectionsMatching(query string) []form.SectionCount {
 	return sections
 }
 
+func (x packageIndex) Lookup(name string) (form.Match, bool) {
+	entry, isThere := x.index.Lookup(name)
+	return form.Match(entry), isThere
+}
+
 func (x packageIndex) Has(name string) bool                    { return x.index.Has(name) }
 func (x packageIndex) Nearest(name string, limit int) []string { return x.index.Nearest(name, limit) }
 func (x packageIndex) Describe() string                        { return x.index.Describe() }
