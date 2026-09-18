@@ -788,3 +788,45 @@ func TestPickerKeepsItsHeightWhileASummaryArrives(t *testing.T) {
 		t.Errorf("the field is %d lines while looking up and %d once the summary is there", looking, arrived)
 	}
 }
+
+// TestPickerToggleOffLeavesTheChosenList: with no query the list is the
+// chosen names themselves, so one that was just removed has to leave it.
+// The answer was always right; the list was not, and Space on the row that
+// should have gone put the name back, at the end rather than where it was.
+func TestPickerToggleOffLeavesTheChosenList(t *testing.T) {
+	answer := "alpha beta gamma"
+	picker := newPickerField(context.Background(), form.Field{Key: form.KeyOtherPackages, Title: "Other packages"},
+		&answer, func() string { return "24.04" }, func() []string { return nil }, unicodeGlyphs)
+	picker.Focus()
+	picker.refresh()
+	if len(picker.rows) != 3 {
+		t.Fatalf("rows = %d, want the three chosen names", len(picker.rows))
+	}
+
+	picker.cursor = 1 // beta
+	picker.toggle()
+	if answer != "alpha gamma" {
+		t.Errorf("answer = %q, want %q", answer, "alpha gamma")
+	}
+	if len(picker.rows) != 2 || picker.rows[0].name != "alpha" || picker.rows[1].name != "gamma" {
+		t.Fatalf("rows = %v, want the list to match the answer", rowNames(picker))
+	}
+	// The cursor stays where the person left it rather than jumping home.
+	if picker.cursor != 1 {
+		t.Errorf("cursor = %d, want 1", picker.cursor)
+	}
+	// Space on the row now under the cursor removes gamma; before, the row
+	// there was the stale beta and Space put beta back.
+	picker.toggle()
+	if answer != "alpha" {
+		t.Errorf("answer = %q, want %q", answer, "alpha")
+	}
+}
+
+func rowNames(p *pickerField) []string {
+	names := make([]string, 0, len(p.rows))
+	for _, row := range p.rows {
+		names = append(names, row.name)
+	}
+	return names
+}

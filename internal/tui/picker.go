@@ -466,6 +466,19 @@ func (p *pickerField) toggle() {
 	if strings.EqualFold(strings.TrimSpace(p.input.Value()), row.name) {
 		p.input.SetValue("")
 		p.refresh()
+		return
+	}
+	if strings.TrimSpace(p.input.Value()) == "" {
+		// With no query the list is the chosen names themselves, so a name
+		// just removed has to leave it. Left there, its row would show an
+		// empty box that no longer matches any answer, and Space on it
+		// would put the name back, at the end of the list rather than where
+		// it was. A search list is not rebuilt: its rows come from the
+		// index and do not change, and refreshing would move the cursor off
+		// the row the person is working through.
+		wasAt := p.cursor
+		p.refresh()
+		p.moveCursor(wasAt)
 	}
 }
 

@@ -209,3 +209,34 @@ func TestRunFormEndToEnd(t *testing.T) {
 		}
 	})
 }
+
+// TestSummaryGainsTheWarningWhenTheIndexLands: the preview, and with it the
+// warning about names no archive has, is computed once when the questions
+// end. On a cold cache or with --refresh-index the index fetch can still be
+// running then — the picker is a plain list editor until it lands, so names
+// can be typed and Enter reaches the summary — and the one screen that asks
+// whether to write would carry no warning at all.
+func TestSummaryGainsTheWarningWhenTheIndexLands(t *testing.T) {
+	indexLanded := false
+	preview := func(form.Values) Preview {
+		if !indexLanded {
+			return Preview{Heading: "This is what frostroot.toml will say:", Text: "[image]\n"}
+		}
+		return Preview{Heading: "This is what frostroot.toml will say:", Text: "[image]\n", Warning: "Not in Ubuntu's noble archive:\n  nosuchpkg"}
+	}
+	driver := newFormDriverWithPreview(t, form.Defaults(noHost), preview)
+	driver.pressEnterUntil(stageSummary)
+	if strings.Contains(driver.model.View(), "Not in Ubuntu's") {
+		t.Fatal("the warning was there before the index landed; the test proves nothing")
+	}
+
+	indexLanded = true
+	driver.press(pickerLoadedMsg{})
+	if !strings.Contains(driver.model.View(), "Not in Ubuntu's") {
+		t.Errorf("the summary still has no warning after the index landed:\n%s", driver.model.View())
+	}
+	// The question below is untouched: it holds the answer and the focus.
+	if driver.model.stage != stageSummary {
+		t.Errorf("stage = %d, want the summary", driver.model.stage)
+	}
+}
