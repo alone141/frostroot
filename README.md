@@ -2,10 +2,11 @@
 
 **Freeze an Ubuntu root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
 
-> **Status: v0.7.0.** `init`, `edit`, `capture`, `validate`, `build`,
+> **Status: v0.8.0.** `init`, `edit`, `capture`, `validate`, `build`,
 > `vendor` and `build --offline` work, a recipe can add third-party apt
-> sources (PPAs, Docker, Node.js, VS Code...) and Python packages from PyPI,
-> and two offline rebuilds of one lock produce the same bytes. In a terminal,
+> sources (PPAs, Docker, Node.js, VS Code...), Python packages from PyPI and
+> certificate authorities for a network that inspects TLS, and two offline
+> rebuilds of one lock produce the same bytes. In a terminal,
 > `init`, `edit` and `capture` are a full-screen form driven with the arrow
 > keys; `build` and `vendor` are a progress screen with bars. Every path in
 > this README was run for real: images for Ubuntu 20.04, 22.04 and 24.04 were
@@ -231,8 +232,8 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 | `frostroot edit [--plain]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back; fetches any missing source keys. The file is regenerated from the template, so your own comments in it do not survive. |
 | `frostroot capture [--root DIR] [--force] [--plain]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, writes `frostroot.toml` and the signing keys of the third-party sources it could carry, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys; needs no root. |
 | `frostroot validate` | Checks `frostroot.toml`, including that every source's key file is there and is a key, and prints every problem. No network, no root. |
-| `frostroot build [--mirror URL] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-ubuntu-<release>-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. |
-| `frostroot vendor [--mirror URL] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, and every wheel it names into `vendor/wheels/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name. |
+| `frostroot build [--mirror URL] [--ca-bundle FILE] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-ubuntu-<release>-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. |
+| `frostroot vendor [--mirror URL] [--ca-bundle FILE] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, and every wheel it names into `vendor/wheels/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name. |
 | `frostroot build --offline [--keep-work] [--plain]` | Rebuilds the image from `frostroot.lock` and `vendor/debs/`, without the archive. Fails unless the result has exactly the lock's packages. The lock is read, not written. |
 | `frostroot version` | Prints the version and the commit it was built from. |
 
@@ -241,7 +242,9 @@ the line interface even in a terminal. `--mirror` replaces
 `http://archive.ubuntu.com/ubuntu` in all three pockets, for a local or faster
 mirror; for `vendor` it replaces the mirror recorded in the lock.
 `--keep-work` keeps the work directory after a successful build (it is always
-kept after a failure).
+kept after a failure). `--ca-bundle` names a PEM file of certificate
+authorities to trust while fetching, for a network that inspects TLS; see
+[Networks that inspect TLS](#networks-that-inspect-tls).
 
 | Exit code | Meaning |
 |---|---|
@@ -266,6 +269,7 @@ kept after a failure).
 | `packages.include` | apt package names only; no versions, no suites | preset plus extras |
 | `python.include` | PyPI names only; see [Python packages](#python-packages) | none |
 | `[[sources]]` | extra apt repositories; see [Third-party sources](#third-party-sources) | none |
+| `certificates.include` | PEM files beside the recipe; see [Networks that inspect TLS](#networks-that-inspect-tls) | none |
 
 Unknown fields are an error, so a `[package]` typo fails loudly instead of
 building an image without your packages. `locale` and `timezone` are checked
@@ -393,6 +397,51 @@ which.
 An environment of `numpy`, `pandas` and `jupyterlab` adds about 370 MB to the
 image and about 75 MB to `vendor/`.
 
+## Networks that inspect TLS
+
+Many corporate networks terminate TLS at a proxy and re-sign every response
+with their own certificate authority. Nothing that verifies against the
+public roots alone can talk to anything, and that is two separate problems:
+the build has to fetch, and the image has to work afterwards.
+
+Name the authority in the recipe and both are solved:
+
+```toml
+[certificates]
+include = ["certs/corp-root.pem"]
+```
+
+The file sits beside `frostroot.toml`, like a source's signing key, and holds
+one or more PEM certificates. `build` installs each one into the image under
+`/usr/local/share/ca-certificates/` and runs `update-ca-certificates`, so
+`git clone https://…`, `curl` and `pip` work inside the imported
+distribution. It also trusts them while building: `pip` is given `--cert`,
+`apt` is given `Acquire::https::CaInfo` for a recipe's HTTPS sources, and
+frostroot's own downloads verify against the host's roots **plus** yours, so
+a network that inspects only some hosts still verifies the rest.
+
+The lock records each file's SHA-256, and an offline rebuild refuses a
+certificate that changed since the lock was written.
+
+To trust an authority while building without shipping it in the image:
+
+```bash
+frostroot build --ca-bundle /etc/ssl/corp/proxy-root.pem
+```
+
+That file never reaches the image or the lock, so a build with it produces
+the same bytes as a build without it. `vendor` takes the same flag.
+
+**This costs no integrity.** Wheels install under `--require-hashes` against
+the lock's checksums and `.deb` files are checked against the archive's
+indexes, so a proxy that altered a byte fails the build. The certificate buys
+transport, not trust in what arrives.
+
+If you do not have the proxy's certificate as a file, your browser or your IT
+department has it; `openssl s_client -showcerts -connect pypi.org:443
+</dev/null` prints the chain the proxy presents, and the last certificate in
+it is the root to save.
+
 ## Capturing a machine you already have
 
 Most labs start from a machine that works, not from a blank recipe. Run
@@ -513,6 +562,10 @@ tarball or in an archive; add it to `.gitignore` unless you use git LFS.
   `useWindowsTimezone=false` so the recipe's timezone sticks (WSL otherwise
   resets it to the Windows zone at every start).
 - Your locale and timezone.
+- With `[certificates]`: each authority under
+  `/usr/local/share/ca-certificates/` and merged into
+  `/etc/ssl/certs/ca-certificates.crt`. Nothing `--ca-bundle` named is in the
+  image.
 - With `[python]`: a virtual environment at `/opt/frostroot/venv`, root-owned
   and readable by everyone, with your packages and a pinned pip in it, and
   one line in `/etc/profile.d` that puts it on `PATH`.
@@ -604,14 +657,11 @@ a 20.04 image `user@1000.service` can also fail once. None of them affects
 login, sudo, networking or apt.
 
 **Networks that inspect TLS.** An image trusts the public certificate
-authorities from `ca-certificates`, nothing else. On a network with a TLS
-inspection proxy, HTTPS from inside the image (`git clone https://…`) fails
-until the organisation's CA certificate is added in the image with
-`update-ca-certificates`. The Ubuntu archive is fetched over plain HTTP with
-signed metadata, so a build without extra sources is not affected; a build
-with HTTPS sources (PPAs, Docker...) fetches them with apt on the build host,
-which then has to trust the proxy's certificate, as `curl` would. So does
-`init` when it fetches signing keys.
+authorities from `ca-certificates` plus whatever `[certificates]` names; see
+[Networks that inspect TLS](#networks-that-inspect-tls). The Ubuntu archive
+is fetched over plain HTTP with signed metadata, so it is never affected.
+`init` fetches signing keys with the host's own certificate store, so on such
+a network it needs the authority installed on the build host.
 
 **Building from a Windows checkout.** If `go build` inside WSL reports `error
 obtaining VCS status`, git is refusing a repository owned by Windows; add
@@ -715,6 +765,8 @@ records it.
 | [Reproducible spec](docs/superpowers/specs/2026-09-17-frostroot-reproducible.md) | v0.6: the frozen instant in the lock, apt's auto marks, what byte identity does and does not cover; with the spike and the verification. |
 | [Python spec](docs/superpowers/specs/2026-09-17-frostroot-python.md) | v0.7: `[python]`, the image's virtual environment, the pinned pip, `[[pypi]]` in the lock, wheels in `vendor/`; with the spike and the verification. |
 | [Python plan](docs/superpowers/plans/2026-09-17-frostroot-python.md) | The nine tasks v0.7 was built from. |
+| [Certificates spec](docs/superpowers/specs/2026-09-18-frostroot-certificates.md) | v0.8: `[certificates]`, `--ca-bundle`, what a TLS inspection proxy breaks and where the trust is applied; with the spike and the verification. |
+| [Certificates plan](docs/superpowers/plans/2026-09-18-frostroot-certificates.md) | The ten tasks v0.8 was built from. |
 | [Implementation plan](docs/superpowers/plans/2026-09-15-frostroot-v1.md) | The 13 tasks v1 was built from, with the spike's amendments. |
 | [TUI plan](docs/superpowers/plans/2026-09-17-frostroot-tui.md) | The seven tasks v0.2 was built from. |
 | [Plan review](docs/superpowers/reviews/2026-09-14-frostroot-plan-review.md) | Found four defects that would have shipped a non-booting image |
