@@ -83,9 +83,9 @@ suite = 'jammy'
 arch = 'amd64'
 mirror = 'http://archive.ubuntu.com/ubuntu'
 sources = [
-  'deb http://archive.ubuntu.com/ubuntu jammy main universe',
-  'deb http://archive.ubuntu.com/ubuntu jammy-updates main universe',
-  'deb http://archive.ubuntu.com/ubuntu jammy-security main universe'
+  'deb http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse',
+  'deb http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse',
+  'deb http://archive.ubuntu.com/ubuntu jammy-security main restricted universe multiverse'
 ]
 frostroot_version = '0.6.0'
 requested = [

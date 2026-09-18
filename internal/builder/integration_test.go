@@ -107,7 +107,7 @@ func TestIntegrationNobleTiny(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(lock.Sources) != 3 || !strings.HasSuffix(lock.Sources[1], "noble-updates main universe") || !strings.HasSuffix(lock.Sources[2], "noble-security main universe") {
+		if len(lock.Sources) != 3 || !strings.HasSuffix(lock.Sources[1], "noble-updates main restricted universe multiverse") || !strings.HasSuffix(lock.Sources[2], "noble-security main restricted universe multiverse") {
 			t.Errorf("Sources = %q, want the three pockets", lock.Sources)
 		}
 		if len(lock.Packages) < 150 {
