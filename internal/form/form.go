@@ -24,7 +24,14 @@ const (
 	KindSelect                  // exactly one option
 	KindMultiSelect             // any number of options
 	KindConfirm                 // yes or no
+	KindNote                    // text to read; nothing is answered
 )
+
+// NoteField returns a field that shows text on page and asks nothing: what
+// capture found, before the questions it found it for.
+func NoteField(page, title, text string) Field {
+	return Field{Key: "note:" + page, Page: page, Kind: KindNote, Title: title, Description: text}
+}
 
 // Option is one choice of a Select or MultiSelect field.
 type Option struct {
@@ -84,6 +91,9 @@ const (
 
 // The pages fields are grouped on, in order.
 const (
+	// PageCaptured comes first and holds only what capture has to say; a
+	// page with no fields is not shown, so init and edit never see it.
+	PageCaptured = "Captured"
 	PageImage    = "Image"
 	PageUser     = "User"
 	PageSystem   = "System"
@@ -94,7 +104,7 @@ const (
 
 // Pages returns the page titles in order.
 func Pages() []string {
-	return []string{PageImage, PageUser, PageSystem, PagePackages, PageSources, PageTrust}
+	return []string{PageCaptured, PageImage, PageUser, PageSystem, PagePackages, PageSources, PageTrust}
 }
 
 // Host is what the form reads from the machine it runs on.
