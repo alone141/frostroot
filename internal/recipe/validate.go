@@ -154,13 +154,26 @@ func CheckSource(source Source) []error {
 	return problems
 }
 
+// sourceURLMetacharacters are the characters a "deb" line cannot carry in a
+// URL. Apt splits the line on whitespace — which for it includes the
+// vertical tab and the form feed — reads options out of brackets, and takes
+// "#" as a comment to the end of the line, wherever it sits. Any of them
+// silently produces another source than the recipe names, or none at all.
+//
+// url.Parse already refuses the control characters here, so they are named
+// for the reader and to keep the rule in one place rather than resting on
+// net/url's policy; the space, the brackets and "#" are the ones it lets
+// through. Percent-encoded forms such as %23 stay allowed: they reach apt
+// still encoded, so the line stays one line.
+const sourceURLMetacharacters = " \t\r\n\v\f[]#"
+
 // CheckSourceURL reports why url cannot be an apt source URL, or nil: it
-// must be http or https with a host and no whitespace, because it lands in a
-// "deb" line.
+// must be http or https with a host and none of the characters that would
+// break the "deb" line it lands in.
 func CheckSourceURL(sourceURL string) error {
 	parsed, err := url.Parse(sourceURL)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.Fragment != "" || strings.ContainsAny(sourceURL, " \t\r\n[]") {
-		return fmt.Errorf("invalid source url %q (expected http or https, such as https://download.docker.com/linux/ubuntu)", sourceURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || strings.ContainsAny(sourceURL, sourceURLMetacharacters) {
+		return fmt.Errorf("invalid source url %q (expected http or https with no space, bracket or #, such as https://download.docker.com/linux/ubuntu)", sourceURL)
 	}
 	return nil
 }
