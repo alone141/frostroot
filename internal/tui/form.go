@@ -383,6 +383,12 @@ func (b *formBinding) huhField(field form.Field) huh.Field {
 	case form.KindConfirm:
 		return huh.NewConfirm().Key(field.Key).Title(field.Title).Description(field.Description).
 			Affirmative("Yes").Negative("No").Value(b.flags[field.Key])
+	case form.KindNote:
+		// The text is escaped: a note renders its own markup, and what
+		// capture found is full of underscores. A button to move on makes
+		// the page a page rather than something huh skips over.
+		return huh.NewNote().Title(field.Title).Description(noteText(field.Description)).
+			Next(true).NextLabel("Continue")
 	}
 	return huh.NewNote().Title(field.Title).Description("unsupported field kind")
 }

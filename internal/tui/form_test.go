@@ -75,8 +75,14 @@ func TestFormBindingCoversEveryField(t *testing.T) {
 			t.Errorf("widget for %s has key %q", field.Key, huhField.GetKey())
 		}
 	}
-	if groups := binding.groups(); len(groups) != len(form.Pages()) {
-		t.Errorf("%d groups, want one per page (%d)", len(groups), len(form.Pages()))
+	// One group per page that has a field: the Captured page has none
+	// unless capture puts its note there.
+	pagesWithFields := map[string]bool{}
+	for _, field := range fields {
+		pagesWithFields[field.Page] = true
+	}
+	if groups := binding.groups(); len(groups) != len(pagesWithFields) {
+		t.Errorf("%d groups, want one per page with a field (%d)", len(groups), len(pagesWithFields))
 	}
 	// Untouched, the binding gives back what it started from.
 	defaults := form.Defaults(noHost)

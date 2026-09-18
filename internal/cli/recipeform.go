@@ -46,9 +46,10 @@ func isCharacterDevice(stream any) bool {
 // Nothing is written unless every answer validates and the user confirms.
 // providedKeys are armored signing keys by source name that the caller
 // already has (capture read them from the machine); other missing keys are
-// fetched.
-func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath string, plainRequested bool, providedKeys map[string][]byte) int {
-	fields := form.Fields(a.host())
+// fetched. intro is shown before the questions: what capture has to say,
+// or nothing.
+func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath string, plainRequested bool, providedKeys map[string][]byte, intro []form.Field) int {
+	fields := slices.Concat(intro, form.Fields(a.host()))
 	fullScreen := a.useFullScreen(plainRequested)
 	preview := recipePreview(recipePath)
 	var values form.Values

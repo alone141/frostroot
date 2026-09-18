@@ -89,7 +89,7 @@ func (a *App) runInit(args []string) int {
 		a.stderrf("frostroot: %s already exists; use --force to overwrite it, or frostroot edit to change it\n", recipePath)
 		return exitUserError
 	}
-	return a.runRecipeForm("init", form.Defaults(a.host()), recipePath, *plain, nil)
+	return a.runRecipeForm("init", form.Defaults(a.host()), recipePath, *plain, nil, nil)
 }
 
 // renderRecipe returns imageRecipe as the file init and edit write, byte
