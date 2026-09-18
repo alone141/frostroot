@@ -2,13 +2,15 @@
 
 **Freeze an Ubuntu root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
 
-> **Status: v0.9.0.** `init`, `edit`, `capture`, `validate`, `build`,
+> **Status: v0.10.0.** `init`, `edit`, `capture`, `validate`, `build`,
 > `vendor` and `build --offline` work, a recipe can add third-party apt
 > sources (PPAs, Docker, Node.js, VS Code...), Python packages from PyPI and
 > certificate authorities for a network that inspects TLS, and two offline
 > rebuilds of one lock produce the same bytes. In a terminal,
 > `init`, `edit` and `capture` are a full-screen form driven with the arrow
-> keys that shows the recipe, or the diff, before writing it; `build` and
+> keys in which any package of the release is found by typing (see
+> [Finding packages](#finding-packages)) and which shows the recipe, or the
+> diff, before writing it; `build` and
 > `vendor` are a progress screen with bars, and a failed build says which
 > line of the log explains it. Every path in
 > this README was run for real: images for Ubuntu 20.04, 22.04 and 24.04 were
@@ -873,6 +875,49 @@ diff pane, the summary after a failed build's teardown, a `LANG=C` session,
 Ctrl-C mid-build — is the checklist in the
 [TUI plan](docs/superpowers/plans/2026-09-18-frostroot-tui-2.md#v09-verification);
 the frames stand in for it until it is run.
+
+For v0.10.0 the full-screen form was run for real for the first time, by a
+driver rather than a person: `frostroot init` on the build host inside a
+pseudo-terminal that answers the two questions lipgloss and Bubble Tea ask a
+terminal at start (the background color, the cursor position; `script`
+answers neither, which is why an earlier attempt drew nothing), with keys
+sent when the screen showed what each step waited for, at 100×32 and at
+80×24. With an empty cache the picker said it was fetching, showed 22
+readings such as `8.95 MB / 21.4 MB`, and had noble's 85,574 packages 3.6 s
+after it was reached. `ninja-buld` was offered as typed, added, and marked
+`? not in the archive`; `cmake` found 26 packages, thirteen in `devel`; `/`
+listed them with counts, and Down and Space picked `cmake-doc`. The last page
+said `ninja-buld  nearest: ninja-build` above the recipe, fitted 24 rows, and
+wrote the recipe when told to: a warning, not a refusal. A second run found
+the index there when the picker appeared. With `--mirror` at a port nothing
+listens on and no cache, the field said the index was not available, took
+`htop` as typed, and the recipe was written. With `--mirror` at a local copy
+of the archive the form made exactly ten requests — two `InRelease`, eight
+`Packages.xz` — and the cache file's header named that mirror. `init --plain`
+made no request with or without a cache, said nothing without one, and with
+one printed the same warning between the summary and the recipe, as did
+`edit --plain`; the default archive, being another source, did not use the
+mirror's cache. An integration test opens the real index of all three
+releases: 3.4 to 6.7 s to fetch and reduce, 7 to 9 ms a search, under 2 ms
+for the nearest names, under 90 ms to reopen from the cache.
+
+The components were verified on images. The lock v0.8.0 wrote, which names
+`main universe`, was rebuilt offline by this version from the pool vendored
+then: `1ff441b7…`, the `sha256sum` v0.8.0 produced, with the two-component
+`sources.list` inside. A new recipe asking for `git` and `unrar` built
+online in 433 s: `unrar` locked as
+`pool/multiverse/u/unrar-nonfree/unrar_7.0.7-1build1_amd64.deb`, the other
+258 packages all from `main`, four components in the lock's `sources` and in
+the image's `sources.list`. It was then vendored and rebuilt offline twice, to one `sha256sum`
+(`2f888fc2…`; the online build differs, as it always has, for the reason
+under [Rebuilding offline](#rebuilding-offline)), with `/usr/bin/unrar`
+inside. Of everything in noble's `main`
+and `universe`, 28 packages recommend something only `restricted` or
+`multiverse` provides — blends and games, none in `main`, none in the
+catalog, none in any lock built so far — so an image that asks for none of
+them installs what it did before. What still only a person can check is how
+the picker feels in Windows Terminal; the driver sees what is drawn, not
+whether it is pleasant.
 
 ## Documentation
 
