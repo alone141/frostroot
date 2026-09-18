@@ -144,8 +144,8 @@ func CheckSource(source Source) []error {
 		problems = append(problems, fmt.Errorf("invalid suite %q (letters, digits, dot, dash, underscore)", source.Suite))
 	}
 	for _, component := range source.Components {
-		if !componentPattern.MatchString(component) {
-			problems = append(problems, fmt.Errorf("invalid component %q (lowercase letters, digits, dot, plus, dash)", component))
+		if err := CheckComponent(component); err != nil {
+			problems = append(problems, err)
 		}
 	}
 	if err := CheckKeyPath(source.Key); err != nil {
@@ -174,6 +174,17 @@ func CheckSourceURL(sourceURL string) error {
 	parsed, err := url.Parse(sourceURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || strings.ContainsAny(sourceURL, sourceURLMetacharacters) {
 		return fmt.Errorf("invalid source url %q (expected http or https with no space, bracket or #, such as https://download.docker.com/linux/ubuntu)", sourceURL)
+	}
+	return nil
+}
+
+// CheckComponent reports why component cannot be an apt component, or nil.
+// Capture needs it one name at a time: it reads the components of several
+// copies of one source, and a name it cannot express should be left out
+// rather than spoil the rest.
+func CheckComponent(component string) error {
+	if !componentPattern.MatchString(component) {
+		return fmt.Errorf("invalid component %q (lowercase letters, digits, dot, plus, dash)", component)
 	}
 	return nil
 }

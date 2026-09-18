@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"frostroot/internal/builder"
 	"frostroot/internal/distro"
 	"frostroot/internal/recipe"
 	"frostroot/internal/sources"
@@ -125,20 +126,22 @@ func Read(rootDir string) (Snapshot, error) {
 	snapshot.readLocaleAndTimezone(root)
 
 	carried, left := root.sourcesForRecipe(suite)
-	carriedHosts := map[string]bool{}
+	// The recipe vouches for one repository, not for every repository on its
+	// host: a carried PPA must not cover the other PPAs on Launchpad.
+	carriedIndexes := map[aptIndex]bool{}
 	for _, source := range carried {
 		snapshot.Sources = append(snapshot.Sources, source.source)
 		if snapshot.Keys == nil {
 			snapshot.Keys = map[string][]byte{}
 		}
 		snapshot.Keys[source.source.Name] = source.key
-		carriedHosts[hostOfURI(source.source.URL)] = true
+		carriedIndexes[aptIndex{prefix: builder.AptListPrefix(source.source.URL), suite: source.source.SuiteFor(suite)}] = true
 		snapshot.note("source %q (%s) from %s", source.source.Name, sources.Describe(source.source), source.from)
 	}
 
 	owned, haveOwnership := root.ownedPaths()
 	origins := root.packageOrigins()
-	thirdParty, unsourced := thirdPartyPackageFindings(requested, origins, carriedHosts)
+	thirdParty, unsourced := thirdPartyPackageFindings(requested, origins, carriedIndexes)
 	snapshot.Findings = []Finding{
 		thirdPartySourceFinding(left),
 		thirdParty,

@@ -92,15 +92,36 @@ type indexOrigin struct {
 	rank   int // higher wins when two indexes list one version
 }
 
-// aptListPrefix renders a base URL the way apt names its list files: the
-// scheme dropped, a trailing slash removed, every slash an underscore.
-// http://archive.ubuntu.com/ubuntu becomes archive.ubuntu.com_ubuntu.
-func aptListPrefix(baseURL string) string {
+// aptFileNameQuoted are the characters apt percent-encodes, in lowercase
+// hex, before it turns the slashes of a URL into underscores. The underscore
+// is among them, which is what makes a list file name unambiguous: every
+// underscore in it separates two path segments, and a literal one appears as
+// %5f. Taken from apt's URItoFileName.
+const aptFileNameQuoted = "\\|{}[]<>\"^~_=!@#$%&*"
+
+// AptListPrefix renders a base URL the way apt names its list files: the
+// scheme dropped, a trailing slash removed, the characters above encoded,
+// and every remaining slash an underscore.
+// http://archive.ubuntu.com/ubuntu becomes archive.ubuntu.com_ubuntu, and
+// https://ex.com/my_repo/ubuntu becomes ex.com_my%5frepo_ubuntu.
+func AptListPrefix(baseURL string) string {
 	_, rest, found := strings.Cut(baseURL, "://")
 	if !found {
 		rest = baseURL
 	}
-	return strings.ReplaceAll(strings.TrimRight(rest, "/"), "/", "_")
+	rest = strings.TrimRight(rest, "/")
+	var name strings.Builder
+	for index := range len(rest) {
+		switch character := rest[index]; {
+		case character == '/':
+			name.WriteByte('_')
+		case strings.IndexByte(aptFileNameQuoted, character) >= 0:
+			fmt.Fprintf(&name, "%%%02x", character)
+		default:
+			name.WriteByte(character)
+		}
+	}
+	return name.String()
 }
 
 // indexOrigins lists what a build's apt indexes can come from, so that
@@ -110,9 +131,9 @@ func aptListPrefix(baseURL string) string {
 func indexOrigins(release distro.Release, archiveURL string, sources []recipe.Source) []indexOrigin {
 	var origins []indexOrigin
 	for index, source := range sources {
-		origins = append(origins, indexOrigin{source: source.Name, prefix: aptListPrefix(source.URL), suite: source.SuiteFor(release.Suite), rank: len(sources) - index})
+		origins = append(origins, indexOrigin{source: source.Name, prefix: AptListPrefix(source.URL), suite: source.SuiteFor(release.Suite), rank: len(sources) - index})
 	}
-	archivePrefix := aptListPrefix(archiveURL)
+	archivePrefix := AptListPrefix(archiveURL)
 	for pocketIndex, pocket := range []string{"", "-updates", "-security"} {
 		origins = append(origins, indexOrigin{prefix: archivePrefix, suite: release.Suite + pocket, rank: len(sources) + 1 + pocketIndex})
 	}

@@ -83,11 +83,24 @@ func TestSourceLines(t *testing.T) {
 func TestIndexOrigins(t *testing.T) {
 	release, _ := distro.Lookup("22.04", "amd64")
 	origins := indexOrigins(release, "http://archive.ubuntu.com/ubuntu", sampleSources())
-	if got := aptListPrefix("https://download.docker.com/linux/ubuntu/"); got != "download.docker.com_linux_ubuntu" {
-		t.Errorf("aptListPrefix = %q", got)
+	if got := AptListPrefix("https://download.docker.com/linux/ubuntu/"); got != "download.docker.com_linux_ubuntu" {
+		t.Errorf("AptListPrefix = %q", got)
 	}
-	if got := aptListPrefix("http://127.0.0.1:8099"); got != "127.0.0.1:8099" {
-		t.Errorf("aptListPrefix with a port = %q", got)
+	if got := AptListPrefix("http://127.0.0.1:8099"); got != "127.0.0.1:8099" {
+		t.Errorf("AptListPrefix with a port = %q", got)
+	}
+	// Apt percent-encodes these before it turns slashes into underscores, so
+	// a name it wrote can be read back a segment at a time. Verified against
+	// apt 2.8.3 with apt-get indextargets.
+	for url, want := range map[string]string{
+		"https://ex.com/my_repo/ubuntu": "ex.com_my%5frepo_ubuntu",
+		"https://ex.com/a~b=c!d/ubuntu": "ex.com_a%7eb%3dc%21d_ubuntu",
+		"https://ex.com/a@b$c&d*e/x":    "ex.com_a%40b%24c%26d%2ae_x",
+		"https://ex.com/a%b^c|d/ubuntu": "ex.com_a%25b%5ec%7cd_ubuntu",
+	} {
+		if got := AptListPrefix(url); got != want {
+			t.Errorf("AptListPrefix(%q) = %q, want %q", url, got, want)
+		}
 	}
 	testCases := map[string]string{
 		"archive.ubuntu.com_ubuntu_dists_jammy_main_binary-amd64_Packages":                    "",

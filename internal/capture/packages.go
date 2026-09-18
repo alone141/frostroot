@@ -3,6 +3,7 @@ package capture
 import (
 	"crypto/md5" // dpkg records conffile checksums as MD5; this only compares against them
 	"encoding/hex"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -182,17 +183,53 @@ func isUbuntuArchive(indexFileName string) bool {
 	return false
 }
 
+// aptIndex identifies the repository one apt index file came from: the base
+// URL as apt renders it in a file name, and the suite. The host alone will
+// not do, because every Launchpad PPA shares ppa.launchpadcontent.net, and
+// packages.microsoft.com and deb.nodesource.com serve several repositories
+// each; keying on the host lets one carried source vouch for all of them.
+type aptIndex struct {
+	prefix string
+	suite  string
+}
+
+// Describe renders an index the way the report should name it: the URL apt
+// built the file name from, and the suite.
+func (index aptIndex) Describe() string {
+	path := strings.ReplaceAll(index.prefix, "_", "/")
+	if decoded, err := url.PathUnescape(path); err == nil {
+		path = decoded
+	}
+	return path + " " + index.suite
+}
+
+// aptIndexOf reads an apt list file name back into the repository it came
+// from. Apt writes "<prefix>_dists_<suite>_<component>_binary-<arch>_Packages"
+// and percent-encodes any underscore of its own, so every underscore here
+// separates two segments and the split is exact.
+func aptIndexOf(indexFileName string) (aptIndex, bool) {
+	fields := strings.Split(indexFileName, "_")
+	for position, field := range fields {
+		// The first "dists" wins: a repository whose own path ends in
+		// "dists" would otherwise take the suite from the wrong place.
+		if field == "dists" && position > 0 && position+1 < len(fields) {
+			return aptIndex{prefix: strings.Join(fields[:position], "_"), suite: fields[position+1]}, true
+		}
+	}
+	return aptIndex{}, false
+}
+
 // packageOrigins says, for every package listed in some apt index, whether
-// Ubuntu's archive offers it and which third-party sources do. The map is
-// nil when there are no indexes at all (apt update never ran).
+// Ubuntu's archive offers it and which third-party repositories do. The map
+// is nil when there are no indexes at all (apt update never ran).
 type packageOrigins struct {
 	inUbuntu   map[string]bool
-	thirdParty map[string][]string // package name to index hosts offering it
+	thirdParty map[string][]aptIndex // package name to the indexes offering it
 	hasIndexes bool
 }
 
 func (root systemRoot) packageOrigins() packageOrigins {
-	origins := packageOrigins{inUbuntu: map[string]bool{}, thirdParty: map[string][]string{}}
+	origins := packageOrigins{inUbuntu: map[string]bool{}, thirdParty: map[string][]aptIndex{}}
 	entries, err := os.ReadDir(root.path(aptListsDir))
 	if err != nil {
 		return origins
@@ -201,13 +238,16 @@ func (root systemRoot) packageOrigins() packageOrigins {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_Packages") {
 			continue
 		}
+		index, named := aptIndexOf(entry.Name())
+		if !named {
+			continue // not a dists index: nothing to attribute it to
+		}
 		file, err := os.Open(root.path(aptListsDir + "/" + entry.Name()))
 		if err != nil {
 			continue
 		}
 		origins.hasIndexes = true
 		fromUbuntu := isUbuntuArchive(entry.Name())
-		host, _, _ := strings.Cut(entry.Name(), "_")
 		for _, stanza := range readStanzas(file) {
 			name := stanza["Package"]
 			if name == "" {
@@ -215,8 +255,8 @@ func (root systemRoot) packageOrigins() packageOrigins {
 			}
 			if fromUbuntu {
 				origins.inUbuntu[name] = true
-			} else if !slices.Contains(origins.thirdParty[name], host) {
-				origins.thirdParty[name] = append(origins.thirdParty[name], host)
+			} else if !slices.Contains(origins.thirdParty[name], index) {
+				origins.thirdParty[name] = append(origins.thirdParty[name], index)
 			}
 		}
 		_ = file.Close() // read-only

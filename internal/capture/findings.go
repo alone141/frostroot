@@ -78,7 +78,7 @@ func thirdPartySourceFinding(left []leftSource) Finding {
 // source offers and that source was not carried into the recipe, and the
 // ones no index offers at all. carriedHosts are the hosts of the sources the
 // recipe now holds; their packages are ordinary requested packages.
-func thirdPartyPackageFindings(requested []string, origins packageOrigins, carriedHosts map[string]bool) (thirdParty, unsourced Finding) {
+func thirdPartyPackageFindings(requested []string, origins packageOrigins, carriedIndexes map[aptIndex]bool) (thirdParty, unsourced Finding) {
 	thirdParty = Finding{Area: AreaThirdPartyPackages, Advice: "Their source is not in the recipe, so build looks for them in the Ubuntu archive and fails at the download phase if they are not there."}
 	unsourced = Finding{Area: AreaUnsourcedPackages, Advice: "Installed from a downloaded .deb or from a source since removed; build will not find them."}
 	if !origins.hasIndexes {
@@ -87,12 +87,16 @@ func thirdPartyPackageFindings(requested []string, origins packageOrigins, carri
 		return thirdParty, unsourced
 	}
 	for _, name := range requested {
-		hosts := origins.thirdParty[name]
-		carried := slices.ContainsFunc(hosts, func(host string) bool { return carriedHosts[host] })
+		indexes := origins.thirdParty[name]
+		carried := slices.ContainsFunc(indexes, func(index aptIndex) bool { return carriedIndexes[index] })
 		switch {
 		case origins.inUbuntu[name] || carried:
-		case len(hosts) > 0:
-			thirdParty.Examples = append(thirdParty.Examples, fmt.Sprintf("%s (%s)", name, strings.Join(hosts, ", ")))
+		case len(indexes) > 0:
+			described := make([]string, 0, len(indexes))
+			for _, index := range indexes {
+				described = append(described, index.Describe())
+			}
+			thirdParty.Examples = append(thirdParty.Examples, fmt.Sprintf("%s (%s)", name, strings.Join(described, ", ")))
 		default:
 			unsourced.Examples = append(unsourced.Examples, name)
 		}

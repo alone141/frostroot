@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"frostroot/internal/builder"
 	"frostroot/internal/pgp"
 	"frostroot/internal/recipe"
 )
@@ -179,7 +180,7 @@ func TestReadWSLMachine(t *testing.T) {
 		t.Errorf("third-party sources = %+v", thirdPartySources)
 	}
 	expectations := map[string][]string{
-		AreaThirdPartyPackages: {"golang-1.24 (ppa.launchpadcontent.net)"}, // docker-ce's source is in the recipe now
+		AreaThirdPartyPackages: {"golang-1.24 (ppa.launchpadcontent.net/longsleep/golang-backports/ubuntu noble)"}, // docker-ce's source is in the recipe now
 		AreaUnsourcedPackages:  {"mytool"},
 		AreaModifiedConfig:     {"/etc/adduser.conf"},
 		AreaAddedEtc:           {"/etc/profile.d/go.sh"},
@@ -314,7 +315,7 @@ func TestReportAndSummary(t *testing.T) {
 	for _, wantText := range []string{
 		"# frostroot capture report", "## Captured", "## Not captured",
 		"- Ubuntu 24.04, amd64", "user \"melik\" from /etc/wsl.conf",
-		"### Packages from third-party sources (1)", "- golang-1.24 (ppa.launchpadcontent.net)",
+		"### Packages from third-party sources (1)", "- golang-1.24 (ppa.launchpadcontent.net/longsleep/golang-backports/ubuntu noble)",
 		"### Modified configuration files (1)", "- /etc/adduser.conf",
 		"### The user's home directory (5)", ".ssh (secrets: never copy)",
 	} {
@@ -438,5 +439,104 @@ func TestIsGeneratedEtcPath(t *testing.T) {
 		if got := isGeneratedEtcPath(path); got != want {
 			t.Errorf("isGeneratedEtcPath(%q) = %v, want %v", path, got, want)
 		}
+	}
+}
+
+// TestSourcesForRecipeCarriesTheSignedCopy is the duplicate URI+suite case:
+// a vendor's current instructions add a .sources file beside the .list an
+// older version left, and both name one repository. Deciding on the first
+// copy alone dropped the signed one silently, so the repository reached
+// neither the recipe nor the report.
+func TestSourcesForRecipeCarriesTheSignedCopy(t *testing.T) {
+	root := buildRoot(t, map[string]string{
+		"etc/apt/keyrings/docker.asc": string(pgp.Armor(fakeKeyPacket)),
+		// Read first, and unsigned: on its own it could only be reported.
+		"etc/apt/sources.list.d/docker.list": "deb https://download.docker.com/linux/ubuntu noble stable\n",
+		"etc/apt/sources.list.d/docker.sources": "Types: deb\nURIs: https://download.docker.com/linux/ubuntu\n" +
+			"Suites: noble\nComponents: edge\nSigned-By: /etc/apt/keyrings/docker.asc\n",
+	})
+	carried, left := systemRoot(root).sourcesForRecipe("noble")
+	if len(carried) != 1 || len(left) != 0 {
+		t.Fatalf("carried %+v, left %+v", carried, left)
+	}
+	source := carried[0].source
+	if source.Name != "docker" || source.URL != "https://download.docker.com/linux/ubuntu" {
+		t.Errorf("source = %+v", source)
+	}
+	// Both lines were live, so both components are what the machine fetched.
+	if !slices.Equal(source.Components, []string{"stable", "edge"}) {
+		t.Errorf("components = %v, want [stable edge]", source.Components)
+	}
+	// The key came from the .sources copy, and folding the two is visible.
+	if !strings.Contains(carried[0].from, "docker.sources") || !strings.Contains(carried[0].from, "also listed in") {
+		t.Errorf("from = %q", carried[0].from)
+	}
+}
+
+// TestSourcesForRecipeStillReportsAnUnsignedOnlyRepository keeps the other
+// half honest: with no signed copy, the repository is still reported.
+func TestSourcesForRecipeStillReportsAnUnsignedOnlyRepository(t *testing.T) {
+	root := buildRoot(t, map[string]string{
+		"etc/apt/sources.list.d/docker.list":  "deb https://download.docker.com/linux/ubuntu noble stable\n",
+		"etc/apt/sources.list.d/docker2.list": "deb https://download.docker.com/linux/ubuntu noble edge\n",
+	})
+	carried, left := systemRoot(root).sourcesForRecipe("noble")
+	if len(carried) != 0 || len(left) != 1 {
+		t.Fatalf("carried %+v, left %+v", carried, left)
+	}
+	if !strings.Contains(left[0].reason, "no signed-by key") {
+		t.Errorf("reason = %q", left[0].reason)
+	}
+}
+
+// TestSourcesForRecipePrefersTheMostSpecificFailure: when no copy can be
+// carried, the copy that named a key says more than the one that did not.
+func TestSourcesForRecipePrefersTheMostSpecificFailure(t *testing.T) {
+	root := buildRoot(t, map[string]string{
+		"etc/apt/sources.list.d/a.list": "deb https://x.example/ubuntu noble main\n",
+		"etc/apt/sources.list.d/b.list": "deb [signed-by=/etc/apt/keyrings/gone.gpg] https://x.example/ubuntu noble main\n",
+	})
+	_, left := systemRoot(root).sourcesForRecipe("noble")
+	if len(left) != 1 || !strings.Contains(left[0].reason, "gone.gpg could not be read") {
+		t.Fatalf("left = %+v", left)
+	}
+}
+
+// TestPackageOriginsSeparateRepositoriesOnOneHost is the PPA case: every
+// Launchpad PPA lives on ppa.launchpadcontent.net, so attributing packages
+// to the host alone let one carried PPA vouch for all the others.
+func TestPackageOriginsSeparateRepositoriesOnOneHost(t *testing.T) {
+	const launchpad = "var/lib/apt/lists/ppa.launchpadcontent.net_"
+	root := systemRoot(buildRoot(t, map[string]string{
+		launchpad + "deadsnakes_ppa_ubuntu_dists_noble_main_binary-amd64_Packages":             "Package: python3.13\n",
+		launchpad + "longsleep_golang-backports_ubuntu_dists_noble_main_binary-amd64_Packages": "Package: golang-1.24\n",
+	}))
+	origins := root.packageOrigins()
+	// Only deadsnakes is in the recipe.
+	carriedIndexes := map[aptIndex]bool{
+		{prefix: builder.AptListPrefix("https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu"), suite: "noble"}: true,
+	}
+	thirdParty, unsourced := thirdPartyPackageFindings([]string{"python3.13", "golang-1.24"}, origins, carriedIndexes)
+	if unsourced.Count != 0 {
+		t.Errorf("unsourced = %+v", unsourced)
+	}
+	want := []string{"golang-1.24 (ppa.launchpadcontent.net/longsleep/golang-backports/ubuntu noble)"}
+	if !slices.Equal(thirdParty.Examples, want) {
+		t.Errorf("third-party = %v, want %v", thirdParty.Examples, want)
+	}
+}
+
+func TestAptIndexOf(t *testing.T) {
+	index, ok := aptIndexOf("ppa.launchpadcontent.net_longsleep_golang-backports_ubuntu_dists_noble_main_binary-amd64_Packages")
+	if !ok || index.prefix != "ppa.launchpadcontent.net_longsleep_golang-backports_ubuntu" || index.suite != "noble" {
+		t.Fatalf("aptIndexOf = %+v, ok %v", index, ok)
+	}
+	// Apt writes a literal underscore as %5f, so Describe reads the URL back.
+	escaped, _ := aptIndexOf("ex.com_my%5frepo_ubuntu_dists_noble_main_binary-amd64_Packages")
+	if got := escaped.Describe(); got != "ex.com/my_repo/ubuntu noble" {
+		t.Errorf("Describe = %q", got)
+	}
+	if _, ok := aptIndexOf("weird_file_name_Packages"); ok {
+		t.Error("a name without a dists segment must not be attributed")
 	}
 }

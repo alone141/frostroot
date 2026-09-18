@@ -129,7 +129,7 @@ func listsForSpec(lists map[string]string, spec BootstrapSpec) map[string]string
 	if len(fields) < 3 || strings.HasPrefix(fields[1], "[") {
 		return lists
 	}
-	prefix, suite := aptListPrefix(fields[1]), fields[2]
+	prefix, suite := AptListPrefix(fields[1]), fields[2]
 	renamed := map[string]string{}
 	for name, content := range lists {
 		renamed[strings.Replace(name, "archive.ubuntu.com_ubuntu_dists_jammy", prefix+"_dists_"+suite, 1)] = content
