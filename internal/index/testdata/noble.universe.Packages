@@ -1,0 +1,178 @@
+Package: catch2
+Architecture: amd64
+Version: 3.4.0-1build1
+Multi-Arch: foreign
+Priority: optional
+Section: universe/devel
+Origin: Ubuntu
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Original-Maintainer: Mathieu Mirmont <mat@parad0x.org>
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Installed-Size: 3258
+Filename: pool/universe/c/catch2/catch2_3.4.0-1build1_amd64.deb
+Size: 607414
+MD5sum: b1825a7a79730a0a37da10517196e6ef
+SHA1: 1a7e517bb44d152697f099f3d045e0e983df9704
+SHA256: c5ea160f1e349c8b58a422b231872d066387177aeb751c0e0465ca71a3031656
+SHA512: 32c7a3a2ab9a387d90dd75c4746cbbb0e3bd6dd5c77d312238a85f1f99a987d7c647757c31dfb4c306d74dc0041dd92f1bd493ad42008b5a6eb4dfe2971586fa
+Homepage: https://github.com/catchorg/Catch2
+Description: C++ Automated Test Cases in Headers
+Description-md5: 1e9082084f76573464c9d1a8b1c8745a
+
+Package: cmake-extras
+Architecture: all
+Version: 1.7-2
+Multi-Arch: foreign
+Priority: extra
+Section: universe/libs
+Origin: Ubuntu
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Original-Maintainer: Mike Gabriel <sunweaver@debian.org>
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Installed-Size: 307
+Depends: cmake (>= 3.1), pkg-config, python3
+Suggests: googletest (>= 1.10.0.20201025), libgtest-dev
+Filename: pool/universe/c/cmake-extras/cmake-extras_1.7-2_all.deb
+Size: 57004
+MD5sum: 68af1ded5ff733a64a79fce44a7c1d66
+SHA1: 2ffa7ea8f0bac01abf18e032a1e34a79f43a39c5
+SHA256: f64e411728acaf12f92918af87e00f8124f3d1d60ea825758169615afd7155f9
+SHA512: 0ca9f6d48f425b179e97309ee2fa84fb21814ba4a51f26919909447c05ed9b07f993744cf52a9ebc5e4319c4d4a1c4c15aebf54153af5260b0cd06dfc9a4b15b
+Homepage: https://gitlab.com/ubports/core/cmake-extras/
+Description: Extra CMake utility modules
+Description-md5: 465a216c1db639cf227162be3f5d25cc
+
+Package: cmake-format
+Architecture: all
+Version: 0.6.13-5
+Priority: optional
+Section: universe/devel
+Origin: Ubuntu
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Original-Maintainer: Ian Campbell <ijc@debian.org>
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Installed-Size: 772
+Depends: python3-six (>= 1.13.0), python3-yaml, python3:any, python3-pkg-resources
+Recommends: python3-jinja2, python3-argcomplete
+Filename: pool/universe/c/cmake-format/cmake-format_0.6.13-5_all.deb
+Size: 116104
+MD5sum: e4b5cb808950e4d812f6028ca02ed2d3
+SHA1: 496e097b88b4ef878c78f2b310fd8487f23190f5
+SHA256: 287ec3bc869d0a61edd87a33d1685245577b214a7e91bd0b5303b5ab3523dc21
+SHA512: 1dc536212b98b4187460f6f7b90aef21051a0714f665c8cd6f520401a2bc3300ab997415a4f705651f74ceaf3e42878ddff1fa59c938536f49f4d5a5a9a1e96e
+Homepage: https://github.com/cheshirekow/cmake_format
+Description: source code formatter for cmake listfiles
+Description-md5: c4cd246dad2bc2803f6e2c223ad7948e
+
+Package: extra-cmake-modules
+Architecture: amd64
+Version: 5.115.0-0ubuntu5
+Priority: optional
+Section: universe/libs
+Origin: Ubuntu
+Maintainer: Kubuntu Developers <kubuntu-devel@lists.ubuntu.com>
+Original-Maintainer: Debian Qt/KDE Maintainers <debian-qt-kde@lists.debian.org>
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Installed-Size: 831
+Suggests: qt5-qmake, qtbase5-dev
+Breaks: libkf5package-dev (<< 5.54), libkf5plasma-dev (<< 5.54), libkf5runner-dev (<< 5.54)
+Filename: pool/universe/e/extra-cmake-modules/extra-cmake-modules_5.115.0-0ubuntu5_amd64.deb
+Size: 202376
+MD5sum: 989810525a67341405c0be364212f9e8
+SHA1: 9ff789822d608d3635c8bbc1dd41111bb427fda7
+SHA256: 0c2ff09fc87fbc85d7bd94a630984a3b70ca9b05a7c407f5342190fc5f841e09
+SHA512: 83a315d1da0e2a1e51b8434b9f95d402d58cc190df26275bd3fe9aa6978693794a4a80ed4830aad265c50a2ba3c9f617afd91140abd5339eb61ecd597c2e1b5a
+Homepage: https://invent.kde.org/frameworks/extra-cmake-modules
+Description: Extra modules and scripts for CMake
+Description-md5: 38bf99ea0cb09073ce6ca0cc9aa978da
+
+Package: meson
+Architecture: all
+Version: 1.3.2-1ubuntu1
+Multi-Arch: foreign
+Priority: optional
+Section: universe/devel
+Origin: Ubuntu
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Original-Maintainer: Jussi Pakkanen <jpakkane@gmail.com>
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Installed-Size: 3759
+Depends: python3:any (>= 3.7~), ninja-build (>= 1.6), python3-pkg-resources, python3-setuptools
+Recommends: dpkg-dev
+Filename: pool/universe/m/meson/meson_1.3.2-1ubuntu1_all.deb
+Size: 603950
+MD5sum: f40fa13c9d53d166134921d281005131
+SHA1: 90851f5e9d888f689769fff1be1811e729943608
+SHA256: 5a9ab497255cc51f97866c359fc5cc75a1be4890ad376e471ca45d76bbea4803
+SHA512: 12073b72fd9795a8b6c92118f28da461d1fab6a7d7644d6f142898532f1cb17a5006480d43dbbac6f22e371a9e853d5106800f3fb93115c8bfd1e2f6e8bbc779
+Homepage: https://mesonbuild.com
+Description: high-productivity build system
+Description-md5: 05e8ad52532257641a3b106a0836e789
+
+Package: ninja-build
+Architecture: amd64
+Version: 1.11.1-2
+Multi-Arch: foreign
+Priority: optional
+Section: universe/devel
+Origin: Ubuntu
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Original-Maintainer: Felix Geyer <fgeyer@debian.org>
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Installed-Size: 355
+Depends: libc6 (>= 2.38), libstdc++6 (>= 13.1)
+Suggests: python3
+Filename: pool/universe/n/ninja-build/ninja-build_1.11.1-2_amd64.deb
+Size: 128926
+MD5sum: 8ba5c12c2f44b58855a6bd0558ae3fda
+SHA1: c914c520a3f5eb27d4b880aaf05526e0cbd20f1d
+SHA256: 6a17f76a0f75586f1292f6c61a9b07fd0dec963baf6a102b17673f601c6b323a
+SHA512: 5928ba425325047ab56258822c70419461e778cf885b2fada1e892632f0ad770a0d4b0da724ff248df26e7556cc71233ba839d929c6555981372a0b10413fd84
+Homepage: https://ninja-build.org/
+Description: small build system closest in spirit to Make
+Description-md5: 5ef1371c63de86fcf36c1ddc875d2f26
+
+Package: python3-json-tricks
+Architecture: all
+Version: 3.11.0-4
+Priority: optional
+Section: universe/python
+Source: json-tricks
+Origin: Ubuntu
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Original-Maintainer: Debian Python Team <team+python@tracker.debian.org>
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Installed-Size: 85
+Depends: python3:any
+Filename: pool/universe/j/json-tricks/python3-json-tricks_3.11.0-4_all.deb
+Size: 25024
+MD5sum: ff8995ecddcdab9888313f2585b591ff
+SHA1: 620391d919d5864be327471871942884fb8c583e
+SHA256: 365de68c794d6e8907a2fe1e38501c6581baf70529b894b2ac79648d38ed0fb9
+SHA512: 435d2dafefb9b21f060f3973722cf4df7ca49be32b9e0e524657e7fc431cf37d5dbca86374a4089265c53ad437ccc48c7cc4f79b269b6265c6ffce2c9bc1a3b5
+Homepage: https://github.com/mverleg/pyjson_tricks
+Description: Python module with extra features for JSON files
+Description-md5: 436cecd7aa1e1ddf80a2541e217b5afb
+
+Package: zipcmp
+Architecture: amd64
+Version: 1.7.3-1.1ubuntu2
+Priority: optional
+Section: universe/utils
+Source: libzip
+Origin: Ubuntu
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Original-Maintainer: Stefan Schörghofer <amd1212@4md.gr>
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Installed-Size: 46
+Depends: libc6 (>= 2.34), libzip4t64 (>= 1.0), zlib1g (>= 1:1.1.4)
+Filename: pool/universe/libz/libzip/zipcmp_1.7.3-1.1ubuntu2_amd64.deb
+Size: 11694
+MD5sum: dc1069856e9ab36170adac833d915632
+SHA1: 8a4b7ddadf0d8e2dead8f91b0b59fdc3a33c0c1e
+SHA256: 6bdbe611e5b9eb51f73c880e5d70c82015950da736742f3d395f24097c767d9f
+SHA512: 388b25a42a48cad762dda1139983be0abd2ad176e3eedd0c258db92479ef9a642d90e1094f2326064d7c66e7b33ea9848ff52b39342895c922b4b5e111f664ac
+Homepage: https://libzip.org
+Description: compare contents of zip archives
+Description-md5: b5afa964f0a0ea99413a08675f8e3533
+

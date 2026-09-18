@@ -1,0 +1,56 @@
+Package: git
+Priority: optional
+Section: vcs
+Installed-Size: 21692
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Architecture: amd64
+Version: 1:2.43.0-1ubuntu7.3
+Recommends: ca-certificates, patch, less, ssh-client
+Suggests: gettext-base, git-daemon-run | git-daemon-sysvinit, git-doc, git-email, git-gui, gitk, gitweb, git-cvs, git-mediawiki, git-svn
+Provides: git-completion, git-core
+Depends: libc6 (>= 2.38), libcurl3t64-gnutls (>= 7.56.1), libexpat1 (>= 2.0.1), libpcre2-8-0 (>= 10.34), zlib1g (>= 1:1.2.2), perl, liberror-perl, git-man (>> 1:2.43.0), git-man (<< 1:2.43.0-.)
+Breaks: bash-completion (<< 1:1.90-1), cogito (<= 0.18.2+), dgit (<< 5.1~), git-buildpackage (<< 0.6.5), git-el (<< 1:2.32.0~rc2-1~), gitosis (<< 0.2+20090917-7), gitpkg (<< 0.15), guilt (<< 0.33), openssh-client (<< 1:6.8), stgit (<< 0.15), stgit-contrib (<< 0.15)
+Filename: pool/main/g/git/git_2.43.0-1ubuntu7.3_amd64.deb
+Size: 3679758
+MD5sum: 6c61ddc375af3c756aae3148ac62a57e
+SHA1: f2c23357e9f5e912de92e65aace32c5d12e00723
+SHA256: 099bb129f543adc4c14203334b0fa0a909f8bf038c4d56bc9cc7c774ebf78f87
+SHA512: d052942a22c062e1621b1433e769bbd5d3b26f605162fd619f18718bf47ec495a1f51478b57b065f44556d80f7410e17e2027dd079f9beb9b1a4b62c590ad510
+Homepage: https://git-scm.com/
+Description: fast, scalable, distributed revision control system
+Description-md5: c1f968556452a190fe359bffd151c012
+Multi-Arch: foreign
+Original-Maintainer: Jonathan Nieder <jrnieder@gmail.com>
+Origin: Ubuntu
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Task: cloud-image, cloud-image, ubuntu-wsl, server, ubuntu-server-raspi, kubuntu-desktop, lubuntu-desktop, ubuntustudio-desktop-core, ubuntustudio-desktop
+
+Package: python3
+Source: python3-defaults
+Priority: important
+Section: python
+Installed-Size: 81
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Architecture: amd64
+Version: 3.12.3-0ubuntu2.1
+Replaces: python3-minimal (<< 3.1.2-2)
+Suggests: python3-doc (>= 3.12.3-0ubuntu2.1), python3-tk (>= 3.12.3-0~), python3-venv (>= 3.12.3-0ubuntu2.1)
+Provides: python3-profiler, python3-supported-max (= 3.12), python3-supported-min (= 3.12)
+Depends: python3.12 (>= 3.12.3-0~), libpython3-stdlib (= 3.12.3-0ubuntu2.1)
+Conflicts: python3-distutils
+Pre-Depends: python3-minimal (= 3.12.3-0ubuntu2.1)
+Filename: pool/main/p/python3-defaults/python3_3.12.3-0ubuntu2.1_amd64.deb
+Size: 23004
+MD5sum: 77077b2adf93a4d095ef29932192a9e2
+SHA1: e018d145723b756a30fdd0f6a7c7607fda2ebf69
+SHA256: e691b9cc40841c41bbdc50bd794c876cb1b1801306ea27b06e9a1458180df1e9
+SHA512: 68f5d5db44632c4b711d2ac288dfbebeba95c69722c38c275e4401345d548414edf91a1a3785ded35244820a715f6976ddf300251f63e3238f55c9de10571416
+Homepage: https://www.python.org/
+Description: interactive high-level object-oriented language (default python3 version)
+Description-md5: 0ecdf066f028bd0154785ab35ec2967f
+Multi-Arch: allowed
+Original-Maintainer: Matthias Klose <doko@debian.org>
+Origin: Ubuntu
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Task: cloud-minimal, minimal, server-minimal
+

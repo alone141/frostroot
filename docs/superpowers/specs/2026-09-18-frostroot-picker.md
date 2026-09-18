@@ -134,9 +134,9 @@ widget asks for 200); `total` is what matched, so the list can say "and
 
 **Nearest.** Edit distance with a bound of 2 (3 for names over twelve
 characters), skipping names whose length differs by more than the bound,
-the closest three. Not measured by the spike; the length skip leaves a few
-thousand short comparisons, and it runs only when a name is not found. Task
-2 records the real figure.
+the closest three. Against the real archives: 1.3 to 1.7 ms, and a search
+with its sort 7 to 9 ms, over the 85,574 (noble) to 119,397 (jammy)
+packages of a release; a fetch is 3.4 to 6.7 s, a reopen from the cache under 90 ms.
 
 ### The field — `form.KindSearch`
 
