@@ -187,8 +187,14 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if err != nil {
 		return Result{}, err
 	}
-	if len(imageRecipe.Sources) > 0 && strings.ContainsAny(workRoot, " \t[]") {
-		return Result{}, fmt.Errorf("%w: %s contains a space or a bracket, which an apt signed-by path cannot; set XDG_CACHE_HOME to another directory", ErrBadWorkRoot, workRoot)
+	// Apt splits a "deb" line on whitespace and reads options out of
+	// brackets, and every build hands it a path under the work root: the
+	// signed-by path of an extra source, and the copy:// URL of the
+	// vendored pool an offline build installs from. Neither can be quoted,
+	// so a work root holding one of these characters is refused before
+	// anything is built, whatever the recipe asks for.
+	if strings.ContainsAny(workRoot, " \t[]") {
+		return Result{}, fmt.Errorf("%w: %s contains a space or a bracket, which an apt source line cannot carry; set XDG_CACHE_HOME to another directory", ErrBadWorkRoot, workRoot)
 	}
 	progress := progressOrDiscard(options.Progress)
 	// The lines the image keeps: keys under /etc/apt/keyrings. The lines

@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"frostroot/internal/builder"
+	"frostroot/internal/pki"
 	"frostroot/internal/pool"
 	"frostroot/internal/recipe"
 	"frostroot/internal/tui"
@@ -78,7 +79,7 @@ func (a *App) runVendor(args []string) int {
 		a.stderrf("frostroot: %v\n", err)
 		return exitUserError
 	}
-	rootCAs, ok := a.trustPool(*caBundlePath)
+	rootCAs, ok := a.vendorTrustPool(lock, *caBundlePath)
 	if !ok {
 		return exitUserError
 	}
@@ -350,4 +351,37 @@ func (r *vendorRun) fetchPool(ctx context.Context, report func(builder.ProgressE
 	})
 	r.summaryByPool[poolName] = summary
 	return err
+}
+
+// vendorTrustPool returns the authorities vendor fetches with: the host's
+// store, the certificates the lock names, and --ca-bundle. A build fetches
+// with the recipe's [certificates] as well as the flag (apt's CaInfo holds
+// both), so a recipe whose only authority for an inspecting proxy lives in
+// [certificates] could build and then fail TLS on the very URLs the lock had
+// just recorded. Nothing is installed here: vendor only downloads.
+func (a *App) vendorTrustPool(lock recipe.Lockfile, caBundlePath string) (*x509.CertPool, bool) {
+	bundle, ok := a.readCABundle(caBundlePath)
+	if !ok {
+		return nil, false
+	}
+	var paths []string
+	for _, certificate := range lock.Certificates {
+		paths = append(paths, certificate.Path)
+	}
+	// The same reader the build used, so the two trust the same bytes.
+	certificates, err := builder.ReadCertificates(a.RecipeDir, paths)
+	if err != nil {
+		a.stderrf("frostroot: %v\n", err)
+		return nil, false
+	}
+	extraPEM := append(append([]byte(nil), certificates.PEM...), bundle...)
+	if len(extraPEM) == 0 {
+		return nil, true // the host's own store, which is what a fetch uses anyway
+	}
+	trusted, err := pki.SystemPoolWith(extraPEM)
+	if err != nil {
+		a.stderrf("frostroot: %v\n", err)
+		return nil, false
+	}
+	return trusted, true
 }

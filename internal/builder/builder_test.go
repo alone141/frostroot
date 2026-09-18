@@ -657,6 +657,17 @@ func TestBuildStopsBeforeAnyWork(t *testing.T) {
 			wantError:    ErrBadWorkRoot,
 		},
 		{
+			// The recipe here has no extra sources, which is what used to
+			// skip this check: an offline build still hands apt a
+			// "copy://<work root>/pool" line, and apt splits it on the space.
+			name: "work root with a space",
+			adjust: func(options *Options) {
+				options.Getenv = fakeEnvironment(map[string]string{"XDG_CACHE_HOME": filepath.Join(t.TempDir(), "my cache")})
+			},
+			bootstrapper: &fakeBootstrapper{},
+			wantError:    ErrBadWorkRoot,
+		},
+		{
 			name:         "preflight fails",
 			adjust:       func(*Options) {},
 			bootstrapper: &preflightingBootstrapper{preflightErr: ErrNoKeyring},
