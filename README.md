@@ -2,13 +2,15 @@
 
 **Freeze an Ubuntu root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
 
-> **Status: v0.8.0.** `init`, `edit`, `capture`, `validate`, `build`,
+> **Status: v0.9.0.** `init`, `edit`, `capture`, `validate`, `build`,
 > `vendor` and `build --offline` work, a recipe can add third-party apt
 > sources (PPAs, Docker, Node.js, VS Code...), Python packages from PyPI and
 > certificate authorities for a network that inspects TLS, and two offline
 > rebuilds of one lock produce the same bytes. In a terminal,
 > `init`, `edit` and `capture` are a full-screen form driven with the arrow
-> keys; `build` and `vendor` are a progress screen with bars. Every path in
+> keys that shows the recipe, or the diff, before writing it; `build` and
+> `vendor` are a progress screen with bars, and a failed build says which
+> line of the log explains it. Every path in
 > this README was run for real: images for Ubuntu 20.04, 22.04 and 24.04 were
 > built with `frostroot build`, imported with `wsl --import` on Windows 11,
 > and logged into; a lock was vendored and rebuilt offline twice, to one
@@ -162,19 +164,36 @@ mkdir cpp-lab && cd cpp-lab
 frostroot init
 ```
 
-`init` opens a form. Five pages, each a few questions: the image name and
+`init` opens a form. Six pages, each a few questions: the image name and
 release; the user name and whether it gets passwordless sudo; the timezone
 (type `ist` to filter the list down to `Europe/Istanbul`), locale and whether
 the image boots with systemd; the packages, picked with Space from a catalog
 grouped by category (C/C++, Python, editors, tools...), plus a line for any
 other apt package names; then third-party apt sources, picked from a catalog
 (deadsnakes, git-core, Docker, NodeSource, GitHub CLI, Kitware, LLVM, VS
-Code), plus a line for other PPAs as `owner/name`. Enter moves on, Shift-Tab
-goes back, Ctrl-C leaves without writing. A summary page shows the recipe
-before it is written. You type an image name, a user name and, if you want,
+Code), plus a line for other PPAs as `owner/name`; and last the certificate
+files the image should trust, for a network that inspects TLS, each checked
+to be there and to be a certificate as you type. Enter moves on, Shift-Tab
+goes back, Ctrl-C leaves without writing. The last page shows the recipe
+exactly as it will be written — or, for `edit`, a diff of the file against
+it, with a count and a warning when comments of your own are about to be
+replaced by the template's; when nothing would change, the question defaults
+to not writing. `capture` opens with a page of what it found and what a
+recipe cannot carry. You type an image name, a user name and, if you want,
 extra package names or PPAs; everything else is a choice. The signing keys
 of the sources you picked are fetched, checked against pinned fingerprints
 and saved under `keys/` when the recipe is written.
+
+During `build` and `vendor` the screen is a checklist of phases with a
+spinner, a bar or a count for each, the last lines of mmdebstrap's output in
+a pane (`l` grows it, the arrow keys scroll it), the download rate and the
+time left once ten seconds of downloading have been seen, and a footer with
+the elapsed time and where the log is. It draws down to 60 columns without
+wrapping, and in ASCII when the locale is not UTF-8 (a `LANG=C` session).
+When a build fails, the plain summary that follows the screen prints the
+first line of `mmdebstrap.log` that explains it — apt's `E:`, pip's
+`ERROR:`, the provision script's `frostroot:` — before the tail of the
+output, so a pip traceback or an apt cleanup cannot hide the reason.
 
 ```console
 $ frostroot validate
@@ -230,7 +249,7 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 |---|---|
 | `frostroot init [--force] [--plain]` | Opens the form and writes a commented `frostroot.toml`, then fetches the signing keys of the sources you picked into `keys/`. Refuses to overwrite a recipe without `--force`. Writes nothing unless the answers validate and you confirm. |
 | `frostroot edit [--plain]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back; fetches any missing source keys. The file is regenerated from the template, so your own comments in it do not survive. |
-| `frostroot capture [--root DIR] [--force] [--plain]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, writes `frostroot.toml` and the signing keys of the third-party sources it could carry, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys; needs no root. |
+| `frostroot capture [--root DIR] [--force] [--plain]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, starting with a page of what it found and what a recipe cannot carry, writes `frostroot.toml` and the signing keys of the third-party sources it could carry, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys; needs no root. |
 | `frostroot validate` | Checks `frostroot.toml`, including that every source's key file is there and is a key, and prints every problem. No network, no root. |
 | `frostroot build [--mirror URL] [--ca-bundle FILE] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-ubuntu-<release>-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. |
 | `frostroot vendor [--mirror URL] [--ca-bundle FILE] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, and every wheel it names into `vendor/wheels/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name. |
@@ -682,7 +701,9 @@ user, WSL-ready images.
 capture` (v0.3), vendoring and offline rebuilds with a release process
 (v0.4), third-party apt sources (v0.5), byte-identical offline rebuilds
 (v0.6), Python packages from PyPI (v0.7), certificate authorities for
-networks that inspect TLS (v0.8).
+networks that inspect TLS (v0.8), a form that shows the recipe or the diff
+before writing, capture's findings first, a Trust page, a failed build that
+explains itself, and screens for narrow and non-UTF-8 terminals (v0.9).
 
 **Deliberately not yet:** Fedora or any non-Ubuntu family · flat or unsigned
 apt repositories · npm and cargo lockfiles · Python source distributions ·
@@ -766,6 +787,28 @@ had merely been allowed to trust was left in the image. The
 records the offline rebuilds that matched byte for byte with and without
 `--ca-bundle`, and the one thing not yet proved end to end.
 
+For v0.9.0 the interface was verified two ways. The screens are pinned by
+golden frames — the rendered view at 80×24, 120×40 and 60×20, in UTF-8 and
+in ASCII, compared by `go test` and recorded again with
+`FROSTROOT_UPDATE_FRAMES=1` — and the plain interface, which shares every
+line of logic but the drawing, was run for real on the build host: `init`
+printed the recipe before asking; `edit` on a file with a hand-written
+comment printed "3 lines change; your own comments in the file are replaced
+by the template's" with the comment in the diff, and the file written had
+lost it; an `edit` that changed nothing defaulted to not writing and touched
+nothing; `capture --root /` opened with what it could not carry; and a
+build of a recipe naming `ninja-buld` ended with `the first error in
+mmdebstrap.log, line 1035: E: Unable to locate package ninja-buld` printed
+first — the tail below it, eighty short dpkg lines, held the same line
+seventy lines down, which is what the first line saves reading; the case
+it exists for, an explanation followed by more output than the tail holds,
+is the unit test with three hundred lines of cleanup. What only a person at
+a terminal can check — the full-screen form at 60, 80 and 120 columns, the
+diff pane, the summary after a failed build's teardown, a `LANG=C` session,
+Ctrl-C mid-build — is the checklist in the
+[TUI plan](docs/superpowers/plans/2026-09-18-frostroot-tui-2.md#v09-verification);
+the frames stand in for it until it is run.
+
 ## Documentation
 
 | Document | What it is |
@@ -780,6 +823,7 @@ records the offline rebuilds that matched byte for byte with and without
 | [Python plan](docs/superpowers/plans/2026-09-17-frostroot-python.md) | The nine tasks v0.7 was built from. |
 | [Certificates spec](docs/superpowers/specs/2026-09-18-frostroot-certificates.md) | v0.8: `[certificates]`, `--ca-bundle`, what a TLS inspection proxy breaks and where the trust is applied; with the spike and the verification. |
 | [Certificates plan](docs/superpowers/plans/2026-09-18-frostroot-certificates.md) | The ten tasks v0.8 was built from. |
+| [TUI plan, second round](docs/superpowers/plans/2026-09-18-frostroot-tui-2.md) | What a walk through the interface found, the six tasks v0.9 was built from, and the package picker planned after it. |
 | [Implementation plan](docs/superpowers/plans/2026-09-15-frostroot-v1.md) | The 13 tasks v1 was built from, with the spike's amendments. |
 | [TUI plan](docs/superpowers/plans/2026-09-17-frostroot-tui.md) | The seven tasks v0.2 was built from. |
 | [Plan review](docs/superpowers/reviews/2026-09-14-frostroot-plan-review.md) | Found four defects that would have shipped a non-booting image |

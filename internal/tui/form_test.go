@@ -41,7 +41,13 @@ type formDriver struct {
 
 func newFormDriver(t *testing.T, initial form.Values) *formDriver {
 	t.Helper()
-	model := newFormModel(form.Fields(noHost), initial)
+	return newFormDriverWithPreview(t, initial, nil)
+}
+
+// newFormDriverWithPreview drives a form whose last page shows preview.
+func newFormDriverWithPreview(t *testing.T, initial form.Values, preview PreviewFunc) *formDriver {
+	t.Helper()
+	model := newFormModel(form.Fields(noHost), initial, preview)
 	return &formDriver{driver: newDriver(t, model), model: model}
 }
 
@@ -69,8 +75,14 @@ func TestFormBindingCoversEveryField(t *testing.T) {
 			t.Errorf("widget for %s has key %q", field.Key, huhField.GetKey())
 		}
 	}
-	if groups := binding.groups(); len(groups) != len(form.Pages()) {
-		t.Errorf("%d groups, want one per page (%d)", len(groups), len(form.Pages()))
+	// One group per page that has a field: the Captured page has none
+	// unless capture puts its note there.
+	pagesWithFields := map[string]bool{}
+	for _, field := range fields {
+		pagesWithFields[field.Page] = true
+	}
+	if groups := binding.groups(); len(groups) != len(pagesWithFields) {
+		t.Errorf("%d groups, want one per page with a field (%d)", len(groups), len(pagesWithFields))
 	}
 	// Untouched, the binding gives back what it started from.
 	defaults := form.Defaults(noHost)
@@ -180,7 +192,7 @@ func TestRunFormEndToEnd(t *testing.T) {
 		for range maxKeyPresses {
 			keys = append(keys, "\r")
 		}
-		values, err := RunForm(ctx, form.Fields(noHost), form.Defaults(noHost), pacedKeys(keys...), io.Discard)
+		values, err := RunForm(ctx, form.Fields(noHost), form.Defaults(noHost), nil, pacedKeys(keys...), io.Discard)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -191,7 +203,7 @@ func TestRunFormEndToEnd(t *testing.T) {
 	t.Run("Ctrl-C cancels", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_, err := RunForm(ctx, form.Fields(noHost), form.Defaults(noHost), pacedKeys("\r", "\x03"), io.Discard)
+		_, err := RunForm(ctx, form.Fields(noHost), form.Defaults(noHost), nil, pacedKeys("\r", "\x03"), io.Discard)
 		if !errors.Is(err, ErrCanceled) {
 			t.Errorf("err = %v, want ErrCanceled", err)
 		}

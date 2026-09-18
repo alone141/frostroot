@@ -52,7 +52,9 @@ func TestProgressModelShowsPhasesAndProgress(t *testing.T) {
 		"Download packages", " 50%", "14.1 MB / 28.1 MB",
 		"Install requested packages", "Place tarball",
 		"Get:7 http://archive.ubuntu.com", "mmdebstrap",
-		"log: /var/tmp/frostroot-1000/build-1/mmdebstrap.log", "Ctrl-C interrupts",
+		// At 100 columns the whole path does not fit beside the keys; the
+		// file name is what has to be there.
+		"mmdebstrap.log", "Ctrl-C interrupts", "l grows the log",
 	} {
 		if !strings.Contains(view, wantText) {
 			t.Errorf("view lacks %q:\n%s", wantText, view)

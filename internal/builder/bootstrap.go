@@ -102,10 +102,26 @@ func (m *Mmdebstrap) Run(ctx context.Context, spec BootstrapSpec) error {
 		if ctx.Err() != nil {
 			return fmt.Errorf("mmdebstrap interrupted: %w", ctx.Err())
 		}
-		return fmt.Errorf("mmdebstrap failed: %w\n--- last lines of mmdebstrap output ---\n%s", runErr, strings.TrimRight(outputTail.String(), "\n"))
+		return &BootstrapError{Err: runErr, Tail: strings.TrimRight(outputTail.String(), "\n")}
 	}
 	return nil
 }
+
+// BootstrapError is how a run of mmdebstrap fails: the process error, and
+// the last of its output, which is the best explanation there is of a
+// missing user namespace or an unknown package. It is a type so that the
+// command line can print the line that explains the failure before the
+// tail rather than after it; Error renders both, for everyone else.
+type BootstrapError struct {
+	Err  error
+	Tail string // the last errorTailBytes of output, from a line boundary
+}
+
+func (e *BootstrapError) Error() string {
+	return fmt.Sprintf("mmdebstrap failed: %v\n--- last lines of mmdebstrap output ---\n%s", e.Err, e.Tail)
+}
+
+func (e *BootstrapError) Unwrap() error { return e.Err }
 
 // bootstrapMode returns the value for mmdebstrap's --mode: as configured,
 // otherwise root for uid 0 and unshare for everyone else.

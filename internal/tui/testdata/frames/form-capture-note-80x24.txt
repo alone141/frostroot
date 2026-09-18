@@ -1,0 +1,25 @@
+Captured
+┃ What capture found
+┃ Read /: Ubuntu 24.04, 1893 packages installed, 41 asked for, 2 third-party
+┃ sources with keys.
+┃
+┃ A recipe cannot carry:
+┃   pip packages outside a venv          3
+┃   snap packages                        nothing found
+┃   files under /etc changed by hand     12
+┃
+┃ The details go to frostroot-capture.md, written beside the recipe.
+┃
+┃ Continue
+
+
+
+
+
+
+
+
+
+
+
+enter next

@@ -1,0 +1,39 @@
+Summary
+Image     lab, Ubuntu 24.04 amd64
+User      student, passwordless sudo
+System    UTC, en_US.UTF-8, systemd on
+Packages  none
+Sources   Ubuntu's archive only
+
+Nothing changes: frostroot.toml already says this.
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ # frostroot recipe: the image you want. Edit it, then run: frostroot build                                           │
+│ #                                                                                                                    │
+│ # Versions do not belong here. frostroot build writes the exact version of                                           │
+│ # every installed package to frostroot.lock; commit both files.                                                      │
+│                                                                                                                      │
+│ [image]                                                                                                              │
+│ name = "lab"  # file name of the tarball and name of the WSL distro                                                  │
+│ release = "24.04"                                                                                                    │
+│ arch = "amd64"  # the only architecture in v1                                                                        │
+│                                                                                                                      │
+│ [user]                                                                                                               │
+│ name = "student"                                                                                                     │
+│ sudo = true  # passwordless sudo: this is a lab image, not a hardened server                                         │
+│                                                                                                                      │
+│ [wsl]                                                                                                                │
+│ systemd = true                                                                                                       │
+│ default_user = "student"                                                                                             │
+│                                                                                                                      │
+│ [locale]                                                                                                             │
+│ lang = "en_US.UTF-8"                                                                                                 │
+│ timezone = "UTC"  # kept under WSL instead of following Windows                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+  ↑/↓ PgUp/PgDn scroll · 2 more lines
+
+┃ Nothing changes. Write anyway?
+┃
+┃       Write     Cancel
+
+←/→ toggle • enter submit • y Write • n Cancel

@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"frostroot/internal/capture"
 	"frostroot/internal/export"
@@ -43,9 +45,10 @@ func (a *App) runCapture(args []string) int {
 		a.stderrf("frostroot capture: %v\n", err)
 		return exitUserError
 	}
-	a.stdoutf("Read %s: Ubuntu %s, %d packages installed, %d asked for, %d third-party sources with keys.\n", snapshot.Root, snapshot.Release, snapshot.InstalledCount, len(snapshot.Packages), len(snapshot.Sources))
-
-	if exitCode := a.runRecipeForm("capture", form.FromRecipe(snapshot.Recipe()), recipePath, *plain, snapshot.Keys); exitCode != exitSuccess {
+	// What was read, and what a recipe cannot carry, before the questions:
+	// the packages page is answered knowing what is missing.
+	intro := []form.Field{form.NoteField(form.PageCaptured, "What capture found", captureNoteText(snapshot))}
+	if exitCode := a.runRecipeForm("capture", form.FromRecipe(snapshot.Recipe()), recipePath, *plain, snapshot.Keys, intro); exitCode != exitSuccess {
 		return exitCode
 	}
 
@@ -59,6 +62,21 @@ func (a *App) runCapture(args []string) int {
 		a.stdoutf("  %s\n", line)
 	}
 	return exitSuccess
+}
+
+// captureNoteText is the first page of the capture form: where the values
+// came from, and every area a recipe cannot carry with its count, so that
+// the user decides about packages with the facts. The details are in the
+// report, written with the recipe.
+func captureNoteText(snapshot capture.Snapshot) string {
+	var text strings.Builder
+	fmt.Fprintf(&text, "Read %s: Ubuntu %s, %d packages installed, %d asked for, %d third-party sources with keys.\n\nA recipe cannot carry:\n",
+		snapshot.Root, snapshot.Release, snapshot.InstalledCount, len(snapshot.Packages), len(snapshot.Sources))
+	for _, line := range snapshot.Summary() {
+		text.WriteString("  " + line + "\n")
+	}
+	text.WriteString("\nThe details go to " + captureReportFileName + ", written beside the recipe.")
+	return text.String()
 }
 
 // writeFileAtomically writes content to path through a temporary file in the
