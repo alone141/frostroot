@@ -248,6 +248,23 @@ func TestFromRecipeSplitsSources(t *testing.T) {
 	}
 }
 
+func TestToRecipeRewritesUneditedCatalogSourcesWhenTheReleaseChanges(t *testing.T) {
+	llvm, _ := sources.Lookup("llvm")
+	imageRecipe := recipe.Recipe{
+		Image:   recipe.Image{Name: "lab", Release: "22.04", Arch: "amd64"},
+		Sources: []recipe.Source{llvm.Source("jammy")},
+	}
+	values := FromRecipe(imageRecipe)
+	if values.String(keyOriginalRelease) != "22.04" {
+		t.Fatalf("original release = %q, want 22.04", values.String(keyOriginalRelease))
+	}
+	values[KeyRelease] = "24.04"
+	got := ToRecipe(values)
+	if len(got.Sources) != 1 || !reflect.DeepEqual(got.Sources[0], llvm.Source("noble")) {
+		t.Errorf("Sources = %+v, want LLVM for noble", got.Sources)
+	}
+}
+
 func TestMergeSources(t *testing.T) {
 	docker, _ := sources.Lookup("docker")
 	llvm, _ := sources.Lookup("llvm")
@@ -269,7 +286,7 @@ func TestMergeSources(t *testing.T) {
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			got := MergeSources(testCase.selected, testCase.ppas, testCase.original, "jammy")
+			got := MergeSources(testCase.selected, testCase.ppas, testCase.original, "jammy", "jammy")
 			if !reflect.DeepEqual(got, testCase.want) {
 				t.Errorf("MergeSources =\n%+v\nwant\n%+v", got, testCase.want)
 			}
@@ -285,13 +302,13 @@ func TestMergeSourcesRewritesUneditedCatalogEntriesForTheNewRelease(t *testing.T
 	docker, _ := sources.Lookup("docker")
 	custom := recipe.Source{Name: "corp", URL: "https://apt.corp.example/ubuntu", Key: "keys/corp.asc"}
 	editedDocker := recipe.Source{Name: "docker", URL: "https://mirror.example/docker", Components: []string{"stable"}, Key: "keys/docker.asc"}
-	got := MergeSources([]string{"llvm", "docker"}, "", []recipe.Source{llvm.Source("jammy"), custom, editedDocker}, "noble")
+	got := MergeSources([]string{"llvm", "docker"}, "", []recipe.Source{llvm.Source("jammy"), custom, editedDocker}, "jammy", "noble")
 	want := []recipe.Source{llvm.Source("noble"), custom, editedDocker}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("MergeSources =\n%+v\nwant\n%+v", got, want)
 	}
 	// Docker's catalog row has no {suite}; jammy and noble resolve the same.
-	got = MergeSources([]string{"docker"}, "", []recipe.Source{docker.Source("jammy")}, "noble")
+	got = MergeSources([]string{"docker"}, "", []recipe.Source{docker.Source("jammy")}, "jammy", "noble")
 	if !reflect.DeepEqual(got, []recipe.Source{docker.Source("noble")}) {
 		t.Errorf("docker = %+v, want the catalog row for noble", got)
 	}

@@ -213,7 +213,7 @@ func CertificateName(certificatePath string) string {
 // zero-based inside that file.
 func CertificateInstallFileName(certificatePath string, index int) string {
 	name := CertificateName(certificatePath)
-	if index <= 0 {
+	if index == 0 {
 		return name + ".crt"
 	}
 	return name + "-" + strconv.Itoa(index+1) + ".crt"

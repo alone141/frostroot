@@ -2,6 +2,7 @@ package form
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -108,6 +109,7 @@ func FromRecipe(imageRecipe recipe.Recipe) Values {
 		KeyCertificates:         strings.Join(simpleCertificates, " "),
 		keyOriginalInclude:      slices.Clone(imageRecipe.Packages.Include),
 		keyOriginalSources:      slices.Clone(imageRecipe.Sources),
+		keyOriginalRelease:      imageRecipe.Image.Release,
 		keyOriginalCertificates: exoticCertificates,
 	}
 }
@@ -128,7 +130,7 @@ func ToRecipe(values Values) recipe.Recipe {
 		Packages: recipe.Packages{
 			Include: MergePackages(values.Strings(KeyPackages), values.String(KeyOtherPackages), values.Strings(keyOriginalInclude)),
 		},
-		Sources:      MergeSources(values.Strings(KeySources), values.String(KeyPPAs), values.Sources(keyOriginalSources), releaseSuite(values.String(KeyRelease))),
+		Sources:      mergeAnswerSources(values),
 		Python:       pythonTable(values.String(KeyPythonPackages)),
 		Certificates: certificatesTable(certificatePaths(values)),
 	}
@@ -199,7 +201,7 @@ func Summary(values Values) string {
 		packagesText = strings.Join(packages, " ")
 	}
 	sourcesText := "Ubuntu's archive only"
-	if extra := MergeSources(values.Strings(KeySources), values.String(KeyPPAs), values.Sources(keyOriginalSources), releaseSuite(values.String(KeyRelease))); len(extra) > 0 {
+	if extra := mergeAnswerSources(values); len(extra) > 0 {
 		var names []string
 		for _, source := range extra {
 			names = append(names, sources.Describe(source))
@@ -236,12 +238,18 @@ func SplitSources(recipeSources []recipe.Source) (catalogNames, ppas []string) {
 	return catalogNames, ppas
 }
 
+func mergeAnswerSources(values Values) []recipe.Source {
+	return MergeSources(values.Strings(KeySources), values.String(KeyPPAs), values.Sources(keyOriginalSources), releaseSuite(values.String(keyOriginalRelease)), releaseSuite(values.String(KeyRelease)))
+}
+
 // MergeSources returns the source list a recipe should carry: the
 // hand-written sources of the original recipe, the selected catalog entries
 // resolved for the release, and the PPAs typed, once each by name. Sources
 // that were in the original recipe keep their place and their fields (a
 // catalog entry the user edited by hand stays as edited); new ones follow.
-func MergeSources(selected []string, ppasText string, original []recipe.Source, releaseSuite string) []recipe.Source {
+// originalSuite is the code name those original sources were written for;
+// an unedited catalog row is resolved again for releaseSuite.
+func MergeSources(selected []string, ppasText string, original []recipe.Source, originalSuite, releaseSuite string) []recipe.Source {
 	var wanted []recipe.Source
 	for _, name := range selected {
 		if entry, isCatalog := sources.Lookup(name); isCatalog {
@@ -260,16 +268,13 @@ func MergeSources(selected []string, ppasText string, original []recipe.Source, 
 	var merged []recipe.Source
 	listed := map[string]bool{}
 	for _, source := range original {
-		_, isCatalog := sources.Lookup(source.Name)
+		entry, isCatalog := sources.Lookup(source.Name)
 		owner, name, isPPA := sources.PPAOf(source.URL)
 		isRecognized := isCatalog || (isPPA && source.Name == sources.PPA(owner, name).Name)
 		if (isRecognized && !wantedByName[source.Name]) || listed[source.Name] {
 			continue // deselected, or a duplicate
 		}
-		if entry, isCatalog := sources.Lookup(source.Name); isCatalog && catalogDefaultForAnySuite(entry, source) {
-			// Still the catalog row, possibly for an older release: resolve
-			// it for the release being written. A URL or suite the user
-			// edited by hand is not equal to any catalog default and is kept.
+		if isCatalog && originalSuite != "" && reflect.DeepEqual(source, entry.Source(originalSuite)) {
 			listed[source.Name] = true
 			merged = append(merged, entry.Source(releaseSuite))
 			continue
@@ -284,26 +289,6 @@ func MergeSources(selected []string, ppasText string, original []recipe.Source, 
 		}
 	}
 	return merged
-}
-
-// catalogDefaultForAnySuite reports whether source is the catalog entry as
-// resolved for some Ubuntu release frostroot builds. That is the unedited
-// row init writes; edit that only changes the release must rewrite it.
-func catalogDefaultForAnySuite(entry sources.Entry, source recipe.Source) bool {
-	for _, version := range distro.SupportedVersions() {
-		release, err := distro.Lookup(version, distro.SupportedArch)
-		if err != nil {
-			continue
-		}
-		if sourcesEqual(source, entry.Source(release.Suite)) {
-			return true
-		}
-	}
-	return false
-}
-
-func sourcesEqual(left, right recipe.Source) bool {
-	return left.Name == right.Name && left.URL == right.URL && left.Suite == right.Suite && left.Key == right.Key && slices.Equal(left.Components, right.Components)
 }
 
 // MergePackages returns the package list a recipe should carry: every

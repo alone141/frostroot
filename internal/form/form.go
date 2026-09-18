@@ -93,6 +93,9 @@ const (
 	// keyOriginalSources is not a field either: the recipe's sources as they
 	// were, so hand-written ones survive an edit and the order is kept.
 	keyOriginalSources = "original_sources"
+	// keyOriginalRelease is the Ubuntu release those original sources were
+	// written for, so an unedited catalog row can be resolved for a new one.
+	keyOriginalRelease = "original_release"
 	// keyOriginalCertificates is not a field either: certificate paths the
 	// free-text field cannot hold, because a space or a comma in them would
 	// split them, carried through an edit untouched.
