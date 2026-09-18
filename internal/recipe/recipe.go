@@ -15,13 +15,14 @@ import (
 // Recipe is the content of frostroot.toml. Package versions never appear
 // here; they live in the lock.
 type Recipe struct {
-	Image    Image    `toml:"image"`
-	User     User     `toml:"user"`
-	WSL      WSL      `toml:"wsl"`
-	Locale   Locale   `toml:"locale"`
-	Packages Packages `toml:"packages"`
-	Sources  []Source `toml:"sources,omitempty"`
-	Python   *Python  `toml:"python,omitempty"`
+	Image        Image         `toml:"image"`
+	User         User          `toml:"user"`
+	WSL          WSL           `toml:"wsl"`
+	Locale       Locale        `toml:"locale"`
+	Packages     Packages      `toml:"packages"`
+	Sources      []Source      `toml:"sources,omitempty"`
+	Python       *Python       `toml:"python,omitempty"`
+	Certificates *Certificates `toml:"certificates,omitempty"`
 }
 
 // Source is one [[sources]] table: an apt repository besides the Ubuntu
@@ -103,6 +104,27 @@ func (r Recipe) PythonPackages() []string {
 		return nil
 	}
 	return r.Python.Include
+}
+
+// Certificates is the [certificates] table: certificate authorities the
+// image trusts, and that the build trusts while it fetches. Naming one is
+// how a recipe says it is built inside an organization whose network
+// inspects TLS. The files live beside the recipe, as a source's key does,
+// and the lock records what each one hashed to. The table is a pointer for
+// the same reason [python] is: a recipe without one stays as it was written.
+type Certificates struct {
+	Include []string `toml:"include"` // PEM files, relative to the recipe directory
+}
+
+// CertificatePaths returns the certificate files the recipe names, or nil
+// when it names none. It is the only way the rest of frostroot reads
+// [certificates], so an absent table and an empty list behave the same
+// everywhere.
+func (r Recipe) CertificatePaths() []string {
+	if r.Certificates == nil {
+		return nil
+	}
+	return r.Certificates.Include
 }
 
 // utf8ByteOrderMark is what editors such as Notepad write at the start of a

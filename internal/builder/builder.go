@@ -22,7 +22,7 @@ import (
 )
 
 // Version is the frostroot version recorded in every lockfile.
-const Version = "0.7.0"
+const Version = "0.8.0"
 
 // UbuntuArchiveKeyring is the keyring that verifies the Ubuntu archive's
 // Release files.
@@ -62,7 +62,12 @@ type BootstrapSpec struct {
 	// timestamp in the image is clamped to, passed to mmdebstrap as
 	// SOURCE_DATE_EPOCH; 0 leaves its environment alone.
 	SourceDateEpoch int64
-	Progress        Progress // receives phases and output lines; nil discards them
+	// CaInfoPath is a PEM bundle apt verifies HTTPS sources against, for a
+	// network that inspects TLS; "" leaves apt with the host's own store.
+	// apt fetches a recipe's extra sources on the build host, so this is
+	// where a PPA over HTTPS needs the organization's authority.
+	CaInfoPath string
+	Progress   Progress // receives phases and output lines; nil discards them
 }
 
 // Bootstrapper builds an image tarball. Implementations write the tarball to
@@ -89,6 +94,10 @@ type Options struct {
 	// Offline rebuilds the lock's exact package set from vendor/debs, with no
 	// archive, no network and no keyring, and leaves the lock unchanged.
 	Offline bool
+	// ExtraTrustPEM is certificate authorities this build trusts while it
+	// fetches, from --ca-bundle. They never reach the image or the lock, so
+	// a build with them and a build without them produce the same bytes.
+	ExtraTrustPEM []byte
 }
 
 // Result describes a finished or failed build.
@@ -164,6 +173,11 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if err != nil {
 		return Result{}, err
 	}
+	// So are the certificate authorities, for the same reason.
+	certificates, err := ReadCertificates(options.RecipeDir, imageRecipe.CertificatePaths())
+	if err != nil {
+		return Result{}, err
+	}
 	instant, err := chooseFrozenInstant(getenv, offline, time.Now())
 	if err != nil {
 		return Result{}, err
@@ -219,6 +233,18 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		return Result{}, err
 	}
 
+	// apt fetches a recipe's extra sources on the build host, so an HTTPS
+	// source behind a proxy that inspects TLS needs the authority here too.
+	// Offline there is no source to fetch and no network to inspect.
+	if offline == nil {
+		buildTrustPEM := append(append([]byte(nil), certificates.PEM...), options.ExtraTrustPEM...)
+		caInfoPath, err := writeAptCaInfo(workDir, buildTrustPEM)
+		if err != nil {
+			return Result{WorkDir: workDir}, err
+		}
+		bootstrapSpec.CaInfoPath = caInfoPath
+	}
+
 	// From here on every failure keeps the work directory: it is the only
 	// debugging evidence. Nothing in dist/ or the lock is touched until the
 	// bootstrap has fully succeeded.
@@ -250,6 +276,17 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 			// is what the pool holds, and what the online build resolved with.
 			stageOptions.Python.Pip = LockedPip(offline.lock)
 		}
+	}
+	if len(certificates.Files) > 0 {
+		stageOptions.Certificates = certificates.Files
+		// The recipe's authorities are in the image's own store by the time
+		// the Python step runs, so pointing pip at that store is what lets
+		// it fetch through the proxy that signs with them.
+		stageOptions.Python.TrustImageCertificates = true
+	}
+	if len(options.ExtraTrustPEM) > 0 {
+		stageOptions.ExtraTrust = options.ExtraTrustPEM
+		stageOptions.Python.ExtraTrust = true
 	}
 	if len(sourceKeys) > 0 {
 		stageOptions.Keys = map[string][]byte{}
@@ -332,6 +369,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 			Requested:        requestedPackages,
 			SourceDateEpoch:  instant.epoch,
 			Repositories:     lockRepositories(release, imageRecipe.Sources, sourceKeys),
+			Certificates:     certificates.Locked,
 			Packages:         installedPackages,
 		}
 		if stage.PipReportPath != "" {

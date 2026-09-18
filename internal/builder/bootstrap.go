@@ -141,6 +141,11 @@ func (m *Mmdebstrap) commandLine(spec BootstrapSpec) (args, environment []string
 	if spec.InstallRecommends {
 		args = append(args, `--aptopt=Apt::Install-Recommends "true"`)
 	}
+	if spec.CaInfoPath != "" {
+		// CaInfo replaces apt's certificate store rather than adding to it,
+		// so the file frostroot writes holds the host's certificates as well.
+		args = append(args, `--aptopt=Acquire::https::CaInfo "`+spec.CaInfoPath+`"`)
+	}
 	if len(spec.Include) > 0 {
 		args = append(args, "--include="+strings.Join(spec.Include, ","))
 	}

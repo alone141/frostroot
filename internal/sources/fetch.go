@@ -2,6 +2,7 @@ package sources
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"frostroot/internal/pgp"
+	"frostroot/internal/pki"
 	"frostroot/internal/recipe"
 )
 
@@ -37,7 +39,10 @@ const httpTimeout = 60 * time.Second
 
 // HTTPClient is the Client that uses the network.
 type HTTPClient struct {
-	Client    *http.Client // nil means one honoring the proxy environment with a timeout
+	Client *http.Client // nil means one honoring the proxy environment with a timeout
+	// RootCAs is what the default client verifies HTTPS against; nil means
+	// the host's own roots. Ignored when Client is set.
+	RootCAs   *x509.CertPool
 	UserAgent string
 }
 
@@ -45,7 +50,7 @@ type HTTPClient struct {
 func (c HTTPClient) Get(ctx context.Context, url string) ([]byte, error) {
 	client := c.Client
 	if client == nil {
-		client = &http.Client{Timeout: httpTimeout}
+		client = &http.Client{Timeout: httpTimeout, Transport: pki.Transport(c.RootCAs)}
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

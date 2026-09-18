@@ -28,6 +28,11 @@ type Lockfile struct {
 	// Repositories are the recipe's extra sources as the build used them,
 	// with the checksum of each signing key file. Absent without sources.
 	Repositories []LockRepository `toml:"repositories,omitempty"`
+	// Certificates are the certificate authorities the recipe named, with
+	// the checksum of each file as the build read it. Absent without
+	// [certificates]. A build-time --ca-bundle is deliberately not here: it
+	// changes nothing about the image, so it must not change the lock.
+	Certificates []LockCertificate `toml:"certificates,omitempty"`
 	// Python records the recipe's [python] table as the build used it, and
 	// the tools that resolved the wheels. Absent without Python packages.
 	Python   *LockPython   `toml:"python,omitempty"`
@@ -63,6 +68,16 @@ type LockPyPI struct {
 	Size     int64  `toml:"size,omitempty"` // bytes of the wheel, when the resolver reported it
 	Filename string `toml:"filename"`       // the wheel's file name, as vendor/wheels holds it
 	URL      string `toml:"url"`            // where the wheel was downloaded from
+}
+
+// LockCertificate is one certificate authority the image trusts. Path is
+// the recipe's own spelling, Name what the file is called in the image
+// without its .crt, and SHA256 the digest of the file the build read, so
+// that an offline rebuild refuses a certificate that changed underneath it.
+type LockCertificate struct {
+	Name   string `toml:"name"`
+	Path   string `toml:"path"`
+	SHA256 string `toml:"sha256"`
 }
 
 // LockRepository is one extra source the build installed from.

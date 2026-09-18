@@ -32,7 +32,18 @@ const (
 	PythonRequirementsPath = "/frostroot-requirements.txt"
 	PythonPinPath          = "/frostroot-pip-pin.txt"
 	PythonWheelsPath       = "/frostroot-wheels"
+	// PythonExtraTrustPath is where certificates the build trusts but does
+	// not install are uploaded, and PythonCertPath where the step
+	// concatenates them with the image's own store for pip. Both are gone
+	// before the tarball is made, which is what keeps --ca-bundle out of
+	// the image.
+	PythonExtraTrustPath = "/frostroot-extra-ca.pem"
+	PythonCertPath       = "/frostroot-ca-bundle.pem"
 )
+
+// ImageTrustPath is the image's own certificate store, the file
+// update-ca-certificates regenerates.
+const ImageTrustPath = "/etc/ssl/certs/ca-certificates.crt"
 
 // PinnedPip is the resolver every image's environment gets, whatever the
 // release ships. Ubuntu 22.04's pip is 22.0.2 and 20.04's is 20.0.2, and
@@ -112,7 +123,20 @@ for pipVariable in $(env | sed -n 's/^\(PIP_[A-Za-z0-9_]*\)=.*/\1/p'); do
 done
 PIP_CONFIG_FILE=/dev/null
 export PIP_CONFIG_FILE
-
+{{if .CertPath}}
+# pip verifies against the certificates vendored inside it rather than the
+# image's, so an image that trusts the network's certificate authority is not
+# enough on a network that inspects TLS: pip has to be told. --cert is how,
+# and PIP_CERT left with the rest of the PIP_ environment just above.
+{{- if .ExtraTrustPath}}
+# This build trusts authorities the image does not install, so they are
+# concatenated with the image's store into a file the step deletes. The
+# image's own store comes first, so a network that inspects only some hosts
+# still verifies the rest.
+cat {{shellQuote .ImageTrustPath}} {{shellQuote .ExtraTrustPath}} > {{shellQuote .CertPath}}
+{{- end}}
+pipCert={{shellQuote .CertPath}}
+{{end}}
 venv={{shellQuote .VenvPath}}
 
 python3 -m venv "$venv"
@@ -134,7 +158,7 @@ printf 'pip==%s --hash=sha256:%s\n' {{shellQuote .PipVersion}} {{shellQuote .Pip
 {{- else -}}
 printf 'pip @ %s --hash=sha256:%s\n' {{shellQuote .PipURL}} {{shellQuote .PipSHA256}} > {{shellQuote .PinPath}}
 "$venv"/bin/python -m pip install --no-input --disable-pip-version-check --no-cache-dir --upgrade \
-	--require-hashes --requirement {{shellQuote .PinPath}}
+	{{if .CertPath}}--cert "$pipCert" {{end}}--require-hashes --requirement {{shellQuote .PinPath}}
 {{- end}}
 rm -f {{shellQuote .PinPath}}
 
@@ -164,7 +188,11 @@ rm -rf {{shellQuote .WheelsPath}} {{shellQuote .RequirementsPath}}
 # record what the recipe asked for.
 "$venv"/bin/python -m pip install --no-input --disable-pip-version-check --no-cache-dir \
 	--only-binary=:all: --upgrade --report {{shellQuote .ReportPath}} \
-	{{range .Packages}}{{shellQuote .}} {{end}}
+	{{if .CertPath}}--cert "$pipCert" {{end}}{{range .Packages}}{{shellQuote .}} {{end}}
+{{- if .ExtraTrustPath}}
+# Nothing this build was merely allowed to trust stays in the image.
+rm -f {{shellQuote .CertPath}} {{shellQuote .ExtraTrustPath}}
+{{- end}}
 {{- end}}
 
 # pip compiles as it installs, and what it writes depends on the pip and the
@@ -195,6 +223,12 @@ type pythonScriptValues struct {
 	Packages         []string
 	Offline          bool
 	SourceDateEpoch  int64
+	// CertPath is what pip verifies against, "" to leave it with its own
+	// certificates. ExtraTrustPath is set only when CertPath has to be
+	// assembled from the image's store and uploaded certificates.
+	CertPath       string
+	ExtraTrustPath string
+	ImageTrustPath string
 }
 
 // PythonOptions say how the Python step of a build runs.
@@ -211,6 +245,14 @@ type PythonOptions struct {
 	// the environment's own does the installing. Online this field is
 	// ignored and the pin is always PinnedPip.
 	Pip recipe.LockPyPI
+	// TrustImageCertificates makes pip verify against the image's own
+	// certificate store instead of the one vendored inside it. The recipe's
+	// certificate authorities are in that store by the time this step runs,
+	// which is how they reach pip.
+	TrustImageCertificates bool
+	// ExtraTrust is certificates this build may trust that the image does
+	// not install, from --ca-bundle. They are uploaded, used, and deleted.
+	ExtraTrust bool
 }
 
 // RenderPythonScript renders the script that creates the image's virtual
@@ -225,6 +267,16 @@ func RenderPythonScript(imageRecipe recipe.Recipe, options PythonOptions) (strin
 	pin := PinnedPip
 	if options.Offline {
 		pin = options.Pip
+	}
+	// An offline step installs from a directory and reaches no network, so
+	// it needs no trust at all.
+	certPath, extraTrustPath := "", ""
+	switch {
+	case options.Offline:
+	case options.ExtraTrust:
+		certPath, extraTrustPath = PythonCertPath, PythonExtraTrustPath
+	case options.TrustImageCertificates:
+		certPath = ImageTrustPath
 	}
 	var script strings.Builder
 	err := pythonScriptTemplate.Execute(&script, pythonScriptValues{
@@ -241,6 +293,9 @@ func RenderPythonScript(imageRecipe recipe.Recipe, options PythonOptions) (strin
 		Packages:         packages,
 		Offline:          options.Offline,
 		SourceDateEpoch:  options.SourceDateEpoch,
+		CertPath:         certPath,
+		ExtraTrustPath:   extraTrustPath,
+		ImageTrustPath:   ImageTrustPath,
 	})
 	if err != nil {
 		return "", fmt.Errorf("rendering python script: %w", err)

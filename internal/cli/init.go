@@ -52,6 +52,11 @@ include = {{tomlQuoteList .Packages.Include}}
 # PyPI names, installed into the image's virtual environment, which every
 # login shell finds on PATH. Versions belong in frostroot.lock, as above.
 include = {{tomlQuoteList .Python.Include}}
+{{end}}{{if .Certificates}}
+[certificates]
+# PEM certificate authorities, as files next to this recipe. The image trusts
+# them and so does the build, which is what a network that inspects TLS needs.
+include = {{tomlQuoteList .Certificates.Include}}
 {{end}}{{if .Sources}}
 # Extra apt sources (PPAs, vendor repositories). Each needs its signing key
 # as a file next to this recipe; frostroot init and edit fetch the keys of
