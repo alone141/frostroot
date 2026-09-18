@@ -56,12 +56,17 @@ downloads, package counts for the installs, a scrollable log pane (`l`
 grows it), elapsed time, and the promise that Ctrl-C waits for mmdebstrap.
 Solid; `vendor` reuses it. What does not work as well:
 
-6. **A failure says where the log is, not what it says.** After the screen
-   tears down, a failed build prints the error and
-   `work directory kept at … (mmdebstrap output in mmdebstrap.log)`
-   (`internal/cli/build.go`, `reportKeptWorkDir`). The line that explains
-   the failure — apt's `E:`, the provision script's `frostroot:` message —
-   scrolled through the pane and is gone. The user opens a 2000-line log.
+6. **A failure prints the tail, which may not hold the reason.** After the
+   screen tears down, a failed build prints the error with the last 4 KiB
+   of mmdebstrap's output — the bootstrapper keeps that tail and puts it in
+   its error — and `work directory kept at … (mmdebstrap output in
+   mmdebstrap.log)`. Forty lines is enough when apt's `E:` is at the end.
+   It is not when the explanation is followed by more than that: pip's
+   traceback after its `ERROR:`, dpkg's cleanup after the failing package,
+   the chroot teardown after the provision script's `frostroot:` message.
+   Then the reason scrolled out of the tail too, and the user opens a
+   2000-line log to find it. (An earlier draft of this item said no tail
+   was printed at all; the code corrected it.)
 7. **Layout assumes eighty columns and UTF-8.** The phase title column is a
    fixed 40 cells; below about 70 columns rows wrap and the pane border
    breaks. The glyphs `✓ ✗ · ╭─` and the bar's block characters are
@@ -88,18 +93,22 @@ the progress screen pending, running with a bar, done, failed and
 interrupting, at 80×24 and 120×40. The existing substring tests stay; the
 frames are what lets Tasks 4 and 5 change layout safely.
 
-### Task 1: a failure shows the lines that explain it
+### Task 1: a failure shows the line that explains it, first
 
-After a failed `build` or `vendor`, in both interfaces, the summary prints
-the error, then the last twenty lines of the log under a `mmdebstrap.log,
-last 20 lines:` heading, then the kept-directory line as today. If the log
-holds an `E:` line (apt) or a `frostroot:` line (the provision or Python
-script) earlier than those twenty, that line is printed first, on its own,
-so the cause is not below the fold of the tail. Read from the log file, not
-the screen's buffer, so `--plain` gets exactly the same. Tests use a written
-log fixture: a failure with the `E:` in the tail, one with it 200 lines up,
-one with no marker at all, and an interrupted build, which prints the tail
-too — the user may want to know how far it got.
+After a failed `build`, in both interfaces: the error, then the first line
+of `mmdebstrap.log` that carries an error prefix — apt's and mmdebstrap's
+`E:`, dpkg's `dpkg: error`, pip's `ERROR:`, the provision and Python
+scripts' `frostroot:` — with its line number, then the 4 KiB tail the
+bootstrapper already keeps, then the kept-directory line. The whole log is
+searched, not the tail, because the tail is exactly what the explanation
+has scrolled out of when this matters. The bootstrapper's error becomes a
+type carrying the tail, so the command line can put the cause above it;
+`Error()` renders both unchanged for everyone else. `--plain` and the
+screen share the code, since the screen tears down before the summary.
+`vendor` keeps no log file and its error already names the file and the
+reason, so it is unchanged; an interrupted build is unchanged too. Tests:
+the `E:` 300 lines above the tail, a log with no error prefix, a missing
+log, and the first of several.
 
 ### Task 2: the last page is the recipe, or the diff
 
