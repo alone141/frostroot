@@ -1,0 +1,21 @@
+Image
+┃ Image name
+┃ Names the tarball and the WSL distribution
+┃ > lab
+
+  Ubuntu release
+    Ubuntu 22.04 LTS (jammy)
+  > Ubuntu 24.04 LTS (noble)
+
+
+
+
+
+
+
+
+
+
+
+
+enter next
