@@ -341,7 +341,7 @@ func TestPickerWorksWhileTheIndexLoadsAndAfter(t *testing.T) {
 	messages := make(chan tea.Msg, 16)
 	runCommands(picker.Focus(), messages)
 	progress := <-reportProgress
-	if view := picker.View(); !strings.Contains(view, "fetching the package index") {
+	if view := picker.View(); !strings.Contains(view, "opening the package index") {
 		t.Errorf("view should say the index is on its way:\n%s", view)
 	}
 	progress(12_300_000, 19_400_000)
