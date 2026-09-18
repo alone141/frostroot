@@ -6,14 +6,14 @@ Packages  none
 Sources   Ubuntu's archive only
 
 Nothing changes: frostroot.toml already says this.
-╭────────────────────────────────────────────────────────────────────────────╮
-│ # frostroot recipe: the image you want. Edit it, then run: frostroot build │
-│ #                                                                          │
-│ # Versions do not belong here. frostroot build writes the exact version of │
-│ # every installed package to frostroot.lock; commit both files.            │
-│                                                                            │
-│ [image]                                                                    │
-╰────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ # frostroot recipe: the image you want. Edit it, then run: frostroot build   │
+│ #                                                                            │
+│ # Versions do not belong here. frostroot build writes the exact version of   │
+│ # every installed package to frostroot.lock; commit both files.              │
+│                                                                              │
+│ [image]                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
   ↑/↓ PgUp/PgDn scroll · 18 more lines
 
 ┃ Nothing changes. Write anyway?

@@ -93,6 +93,7 @@ const (
 type formModel struct {
 	binding *formBinding
 	preview PreviewFunc
+	glyphs  glyphSet
 	pages   *huh.Form
 	summary *summaryModel
 	stage   formStage
@@ -103,10 +104,12 @@ type formModel struct {
 
 func newFormModel(fields []form.Field, initial form.Values, preview PreviewFunc) *formModel {
 	binding := newFormBinding(fields, initial)
+	glyphs := glyphsForTerminal()
 	return &formModel{
 		binding: binding,
 		preview: preview,
-		pages:   huh.NewForm(binding.groups()...).WithTheme(formTheme()),
+		glyphs:  glyphs,
+		pages:   huh.NewForm(binding.groups()...).WithTheme(formTheme(glyphs)),
 		width:   defaultWidth,
 		height:  defaultHeight,
 	}
@@ -138,7 +141,7 @@ func (m *formModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.preview != nil {
 				preview = m.preview(values)
 			}
-			m.summary = newSummaryModel(form.Summary(values), preview, m.width, m.height, &m.write)
+			m.summary = newSummaryModel(form.Summary(values), preview, m.glyphs, m.width, m.height, &m.write)
 			return m, tea.Batch(cmd, m.summary.Init())
 		case huh.StateNormal:
 		}
@@ -188,6 +191,8 @@ func (m *formModel) View() string {
 type summaryModel struct {
 	summary  string
 	heading  string
+	text     string // the preview, whole; the pane shows it cut to its width
+	glyphs   glyphSet
 	pane     viewport.Model
 	hasPane  bool
 	question *huh.Form
@@ -196,7 +201,7 @@ type summaryModel struct {
 // newSummaryModel builds the page. write starts as yes, unless writing
 // would change nothing, in which case the question says so and starts as
 // no.
-func newSummaryModel(summary string, preview Preview, width, height int, write *bool) *summaryModel {
+func newSummaryModel(summary string, preview Preview, glyphs glyphSet, width, height int, write *bool) *summaryModel {
 	*write = !preview.Unchanged
 	title := "Write frostroot.toml?"
 	if preview.Unchanged {
@@ -205,14 +210,15 @@ func newSummaryModel(summary string, preview Preview, width, height int, write *
 	page := &summaryModel{
 		summary: summary,
 		heading: preview.Heading,
+		text:    strings.TrimRight(preview.Text, "\n"),
+		glyphs:  glyphs,
 		hasPane: preview.Text != "",
 		question: huh.NewForm(huh.NewGroup(
 			huh.NewConfirm().Title(title).Affirmative("Write").Negative("Cancel").Value(write),
-		)).WithTheme(formTheme()),
+		)).WithTheme(formTheme(glyphs)),
 	}
 	if page.hasPane {
 		page.pane = viewport.New(previewMinimumWidth, previewMinimumHeight)
-		page.pane.SetContent(strings.TrimRight(preview.Text, "\n"))
 	}
 	page.resize(width, height)
 	return page
@@ -222,7 +228,8 @@ func newSummaryModel(summary string, preview Preview, width, height int, write *
 func (s *summaryModel) Init() tea.Cmd { return s.question.Init() }
 
 // resize fits the pane to the terminal, leaving the summary above and the
-// question below their rows.
+// question below their rows, and cuts the lines to the pane's width so that
+// none wraps.
 func (s *summaryModel) resize(width, height int) {
 	if !s.hasPane {
 		return
@@ -230,6 +237,7 @@ func (s *summaryModel) resize(width, height int) {
 	summaryRows := strings.Count(s.summary, "\n") + 2 // its lines and the title
 	s.pane.Width = max(previewMinimumWidth, width-4)
 	s.pane.Height = max(previewMinimumHeight, height-summaryRows-previewFrameRows-questionRows)
+	s.pane.SetContent(fitLines(s.text, s.pane.Width, s.glyphs.ellipsis))
 }
 
 // Update routes a key to the pane when it scrolls, and everything else to
@@ -270,10 +278,10 @@ func (s *summaryModel) View() string {
 		view.WriteByte('\n')
 	}
 	if s.hasPane {
-		view.WriteString(paneStyle.Width(s.pane.Width).Render(s.pane.View()))
+		view.WriteString(paneStyleWith(s.glyphs.border).Width(s.pane.Width + 2).Render(s.pane.View()))
 		view.WriteByte('\n')
 		if s.pane.TotalLineCount() > s.pane.Height {
-			view.WriteString(dimStyle.Render(fmt.Sprintf("  ↑/↓ PgUp/PgDn scroll · %d more lines", s.pane.TotalLineCount()-s.pane.Height)))
+			view.WriteString(dimStyle.Render(fmt.Sprintf("  %s scroll · %d more lines", s.glyphs.scrollHint, s.pane.TotalLineCount()-s.pane.Height)))
 			view.WriteByte('\n')
 		}
 	}
@@ -284,8 +292,25 @@ func (s *summaryModel) View() string {
 
 // formTheme is the look of every form. Base16 uses the terminal's own
 // sixteen colors, so it follows the user's palette on light and dark
-// terminals alike, and it degrades to plain text where colors are off.
-func formTheme() *huh.Theme { return huh.ThemeBase16() }
+// terminals alike, and it degrades to plain text where colors are off. On
+// a terminal whose locale is not UTF-8 the theme's box drawing and marks
+// become ASCII; the colors stay, since they have nothing to do with it.
+func formTheme(glyphs glyphSet) *huh.Theme {
+	theme := huh.ThemeBase16()
+	if !glyphs.ascii {
+		return theme
+	}
+	for _, styles := range []*huh.FieldStyles{&theme.Focused, &theme.Blurred} {
+		styles.Base = styles.Base.BorderStyle(glyphs.border)
+		styles.SelectedPrefix = styles.SelectedPrefix.SetString("[x] ")
+		styles.UnselectedPrefix = styles.UnselectedPrefix.SetString("[ ] ")
+		styles.NextIndicator = styles.NextIndicator.SetString(">")
+		styles.PrevIndicator = styles.PrevIndicator.SetString("<")
+	}
+	theme.Help.ShortSeparator = theme.Help.ShortSeparator.SetString(" | ")
+	theme.Help.FullSeparator = theme.Help.FullSeparator.SetString(" | ")
+	return theme
+}
 
 // noteMarkup escapes what a huh note reads as markup. Its description is
 // rendered with a small markup language in which "_" and "*" toggle italic

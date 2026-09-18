@@ -1,7 +1,7 @@
-frostroot build   cpp-lab · Ubuntu 22.04 (jammy, amd64) · http://archive.ubuntu.com/ubuntu
+frostroot build   cpp-lab · Ubuntu 22.04 (jammy, amd64) · http://archive.ubuntu…
 
   ·  Update package index
-  ⣽   Download packages                        ██░░░░░░░░░░░░░░░░░░  11…12s
+  ⣽  Download packages                        ██░░░░░░░░░░░░░░░░░░  11%      12s
   ·  Extract archives
   ·  Install essential packages
   ·  Install requested packages
@@ -10,14 +10,14 @@ frostroot build   cpp-lab · Ubuntu 22.04 (jammy, amd64) · http://archive.ubunt
   ·  Write frostroot.lock
   ·  Place tarball
 
-╭─ mmdebstrap ───────────────────────────────────────────────────────────────────────────╮
-│                                                                            │
-│                                                                            │
-│                                                                            │
-│                                                                            │
-│                                                                            │
-│                                                                            │
-│                                                                            │
-│                                                                            │
-╰────────────────────────────────────────────────────────────────────────────╯
-  12s elapsed · interrupting: waiting for mmdebstrap to stop (Ctrl-C again to stop waiting)
+╭─ mmdebstrap ─────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+  12s elapsed · interrupting: waiting for mmdebstrap to stop (Ctrl-C again to s…

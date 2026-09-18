@@ -74,6 +74,13 @@ const (
 	phaseFailed
 )
 
+// progressSample is one measured point of a phase counted in bytes, for
+// the rate.
+type progressSample struct {
+	at   time.Time
+	done int64
+}
+
 // phaseState is everything the screen knows about one phase.
 type phaseState struct {
 	status      phaseStatus
@@ -81,18 +88,27 @@ type phaseState struct {
 	finishedAt  time.Time
 	progress    builder.ProgressEvent // the last EventProgress
 	hasProgress bool
+	samples     []progressSample // byte progress over at least the last rateWindow
 }
 
 // Layout constants, in cells and rows.
 const (
 	defaultWidth       = 80
 	defaultHeight      = 24
-	phaseTitleWidth    = 40
+	phaseTitleWidth    = 40 // at most; half the terminal when that is less
 	barWidth           = 20
+	durationWidth      = 7 // "1:02:03"
 	collapsedLogHeight = 8
 	minimumLogHeight   = 3
+	minimumLogWidth    = 10
 	maxLogLines        = 500
 	clockInterval      = time.Second
+	// rateWindow is how far back the rate of a byte phase looks at least,
+	// and rateSettle how much has to have been measured before a rate is
+	// shown: a number from two seconds of downloading is not worth
+	// believing.
+	rateWindow = 10 * time.Second
+	rateSettle = 5 * time.Second
 )
 
 // Messages the model receives besides Bubble Tea's own.
@@ -109,6 +125,7 @@ type progressModel struct {
 	events <-chan builder.ProgressEvent
 	done   <-chan error
 	cancel func()
+	glyphs glyphSet
 
 	phases    []phaseState          // one per screen.Phases
 	rows      map[builder.Phase]int // phase to its index in phases
@@ -131,15 +148,19 @@ type progressModel struct {
 
 func newProgressModel(screen Screen, events <-chan builder.ProgressEvent, done <-chan error, cancel func()) *progressModel {
 	now := time.Now()
+	glyphs := glyphsForTerminal()
+	bar := progress.New(progress.WithWidth(barWidth), progress.WithoutPercentage(), progress.WithDefaultGradient())
+	bar.Full, bar.Empty = glyphs.barFull, glyphs.barEmpty
 	model := &progressModel{
 		screen:    screen,
 		events:    events,
 		done:      done,
 		cancel:    cancel,
+		glyphs:    glyphs,
 		phases:    make([]phaseState, len(screen.Phases)),
 		rows:      make(map[builder.Phase]int, len(screen.Phases)),
-		spinner:   spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(runningStyle)),
-		bar:       progress.New(progress.WithWidth(barWidth), progress.WithoutPercentage(), progress.WithDefaultGradient()),
+		spinner:   spinner.New(spinner.WithSpinner(glyphs.spinner), spinner.WithStyle(runningStyle)),
+		bar:       bar,
 		logView:   viewport.New(defaultWidth-4, collapsedLogHeight),
 		width:     defaultWidth,
 		height:    defaultHeight,
@@ -271,6 +292,9 @@ func (m *progressModel) apply(event builder.ProgressEvent) {
 	case builder.EventProgress:
 		state.progress = event
 		state.hasProgress = true
+		if event.Unit == builder.UnitBytes {
+			state.samples = recentSamples(append(state.samples, progressSample{at: m.now, done: event.Done}), m.now)
+		}
 	case builder.EventPhaseFinished:
 		if state.status != phaseFailed {
 			state.status = phaseDone
@@ -281,6 +305,31 @@ func (m *progressModel) apply(event builder.ProgressEvent) {
 		}
 	case builder.EventLogLine, builder.EventLogFile:
 	}
+}
+
+// recentSamples drops the oldest samples while the ones left still reach
+// back at least rateWindow, so that the rate is measured over that long
+// even when progress arrives seldom.
+func recentSamples(samples []progressSample, now time.Time) []progressSample {
+	first := 0
+	for first+1 < len(samples) && now.Sub(samples[first+1].at) > rateWindow {
+		first++
+	}
+	return samples[first:]
+}
+
+// throughput returns the bytes per second the samples show, or false when
+// they do not span rateSettle yet or show no progress.
+func throughput(samples []progressSample) (float64, bool) {
+	if len(samples) < 2 {
+		return 0, false
+	}
+	first, last := samples[0], samples[len(samples)-1]
+	elapsed := last.at.Sub(first.at)
+	if elapsed < rateSettle || last.done <= first.done {
+		return 0, false
+	}
+	return float64(last.done-first.done) / elapsed.Seconds(), true
 }
 
 // closePhases settles the running phase when the work ends: failed when the
@@ -308,15 +357,21 @@ func (m *progressModel) appendLog(line string) {
 	if len(m.logLines) > maxLogLines {
 		m.logLines = m.logLines[len(m.logLines)-maxLogLines:]
 	}
-	m.logView.SetContent(strings.Join(m.logLines, "\n"))
+	m.setLogContent()
 	if followTail {
 		m.logView.GotoBottom()
 	}
 }
 
+// setLogContent gives the pane its lines, each cut to the pane's width so
+// that none wraps.
+func (m *progressModel) setLogContent() {
+	m.logView.SetContent(fitLines(strings.Join(m.logLines, "\n"), m.logView.Width, m.glyphs.ellipsis))
+}
+
 // resizeLog fits the log pane to the terminal.
 func (m *progressModel) resizeLog() {
-	m.logView.Width = max(10, m.width-4)
+	m.logView.Width = max(minimumLogWidth, m.width-4)
 	fixedRows := 2 + len(m.phases) + 1 + 2 + 2 // header, phases, gap, box frame, footer
 	free := m.height - fixedRows
 	height := collapsedLogHeight
@@ -324,8 +379,14 @@ func (m *progressModel) resizeLog() {
 		height = free
 	}
 	m.logView.Height = max(minimumLogHeight, min(height, max(minimumLogHeight, free)))
-	m.logView.SetContent(strings.Join(m.logLines, "\n"))
+	m.setLogContent()
 	m.logView.GotoBottom()
+}
+
+// titleWidth is the width of the phase column: the usual, or half the
+// terminal when that is narrower, so the detail keeps some room.
+func (m *progressModel) titleWidth() int {
+	return min(phaseTitleWidth, m.width/2)
 }
 
 // Styles.
@@ -336,62 +397,88 @@ var (
 	failedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	runningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
 	warningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	paneStyle    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("8")).Padding(0, 1)
 )
 
 // View implements tea.Model.
 func (m *progressModel) View() string {
 	var view strings.Builder
-	fmt.Fprintf(&view, "%s   %s\n\n", titleStyle.Render(m.screen.Title), m.screen.Subtitle)
+	header := titleStyle.Render(m.screen.Title) + "   " + m.screen.Subtitle
+	view.WriteString(truncateWith(header, m.width, m.glyphs.ellipsis))
+	view.WriteString("\n\n")
 	for index, phase := range m.screen.Phases {
 		view.WriteString(m.phaseLine(phase, m.phases[index]))
 		view.WriteByte('\n')
 	}
 	view.WriteByte('\n')
-	pane := paneStyle.Width(m.logView.Width).Render(m.logView.View())
-	pane = strings.Replace(pane, "╭─", "╭─ "+dimStyle.Render(m.screen.LogTitle)+" ", 1)
-	view.WriteString(pane)
+	view.WriteString(titledPane(m.glyphs, m.screen.LogTitle, m.logView.Width, m.logView.View()))
 	view.WriteByte('\n')
-	view.WriteString(m.footer())
+	view.WriteString(truncateWith(m.footer(), m.width, m.glyphs.ellipsis))
 	return view.String()
 }
 
-// phaseLine renders one row of the phase table.
+// phaseLine renders one row of the phase table: icon, title, detail, and
+// the duration in a column at the right edge.
 func (m *progressModel) phaseLine(phase builder.Phase, state phaseState) string {
-	icon, title := dimStyle.Render("·"), dimStyle.Render(padRight(phase.Title(), phaseTitleWidth))
+	titleWidth := m.titleWidth()
+	// What the detail may take: the row, less the icon and title columns
+	// and the duration column with its gap.
+	detailWidth := m.width - 2 - 1 - 2 - titleWidth - 1 - durationWidth - 1
+	icon, title := dimStyle.Render(m.glyphs.pending), dimStyle.Render(m.padRight(phase.Title(), titleWidth))
 	detail, duration := "", ""
 	switch state.status {
 	case phasePending:
 	case phaseRunning:
-		icon, title = m.spinner.View(), padRight(phase.Title(), phaseTitleWidth)
-		detail = m.progressDetail(state)
+		// The Dot spinner's frames carry a trailing space; the column
+		// does not want it.
+		icon, title = strings.TrimRight(m.spinner.View(), " "), m.padRight(phase.Title(), titleWidth)
+		detail = m.progressDetail(state, detailWidth)
 		duration = formatDuration(m.now.Sub(state.startedAt))
 	case phaseDone:
-		icon, title = doneStyle.Render("✓"), padRight(phase.Title(), phaseTitleWidth)
+		icon, title = doneStyle.Render(m.glyphs.done), m.padRight(phase.Title(), titleWidth)
 		detail = m.finishedDetail(state)
 		duration = formatDuration(state.finishedAt.Sub(state.startedAt))
 	case phaseFailed:
-		icon, title = failedStyle.Render("✗"), padRight(phase.Title(), phaseTitleWidth)
+		icon, title = failedStyle.Render(m.glyphs.failed), m.padRight(phase.Title(), titleWidth)
 		detail = failedStyle.Render("failed")
 		duration = formatDuration(state.finishedAt.Sub(state.startedAt))
 	}
 	line := fmt.Sprintf("  %s  %s %s", icon, title, detail)
 	if duration != "" {
-		line = padRight(line, m.width-8) + dimStyle.Render(duration)
+		// A space always separates the detail from the duration, even when
+		// the detail was cut to fit.
+		line = m.padRight(line, m.width-durationWidth-1) + " " + dimStyle.Render(padLeft(duration, durationWidth))
 	}
 	return line
 }
 
-// progressDetail renders the bar and the words for a running phase.
-func (m *progressModel) progressDetail(state phaseState) string {
+// progressDetail renders the bar and the words for a running phase, and the
+// rate and the time left once a byte phase has been measured for long
+// enough to say. The words give way first when width is short: the bar and
+// the percentage are the part worth keeping.
+func (m *progressModel) progressDetail(state phaseState, width int) string {
 	if !state.hasProgress {
 		return ""
 	}
 	percent, known := state.progress.Percent()
 	if !known {
-		return dimStyle.Render(state.progress.Summary())
+		return dimStyle.Render(truncateWith(state.progress.Summary(), width, m.glyphs.ellipsis))
 	}
-	return fmt.Sprintf("%s %3.0f%%  %s", m.bar.ViewAs(percent/100), percent, dimStyle.Render(truncate(state.progress.Summary(), m.width-phaseTitleWidth-barWidth-22)))
+	words := state.progress.Summary()
+	if state.progress.Unit == builder.UnitBytes {
+		if perSecond, measured := throughput(state.samples); measured {
+			left := time.Duration(float64(state.progress.Total-state.progress.Done)/perSecond) * time.Second
+			words += fmt.Sprintf(" · %s/s · %s left", builder.FormatBytes(int64(perSecond)), formatDuration(left))
+		}
+	}
+	// The percentage is four cells (" 68%"); with the bar and its gaps the
+	// measure is 26, which is exactly what an 80-column terminal leaves.
+	measure := fmt.Sprintf("%s %3.0f%% ", m.bar.ViewAs(percent/100), percent)
+	if lipgloss.Width(measure) > width {
+		// Too narrow for the bar: the number alone still says it.
+		measure = fmt.Sprintf("%3.0f%% ", percent)
+	}
+	words = truncateWith(words, width-lipgloss.Width(measure), m.glyphs.ellipsis)
+	return measure + dimStyle.Render(words)
 }
 
 // finishedDetail says what a finished measured phase did: "28.1 MB", "326 files".
@@ -409,18 +496,25 @@ func (m *progressModel) finishedDetail(state phaseState) string {
 	return ""
 }
 
-// footer renders the last line: elapsed time, log location and keys, or the
-// interruption notice.
+// footer renders the last line: elapsed time, the keys, and where the log
+// is, in that order so that a narrow terminal loses the path rather than
+// the keys; or the interruption notice.
 func (m *progressModel) footer() string {
 	elapsed := formatDuration(m.now.Sub(m.startedAt))
 	if m.interrupting && !m.finished() {
 		return warningStyle.Render(fmt.Sprintf("  %s elapsed · interrupting: waiting for %s to stop (Ctrl-C again to stop waiting)", elapsed, m.screen.LogTitle))
 	}
-	parts := []string{elapsed + " elapsed"}
+	parts := []string{elapsed + " elapsed", "Ctrl-C interrupts", "l grows the log"}
 	if m.logPath != "" {
-		parts = append(parts, "log: "+m.logPath)
+		// The path gives way from the left, so that its file name and the
+		// keys before it are always there; when not even the file name
+		// fits, the log is left out rather than shown as "…g".
+		room := m.width - lipgloss.Width("  "+strings.Join(parts, " · ")+" · log: ")
+		fileName := m.logPath[strings.LastIndex(m.logPath, "/")+1:]
+		if room >= lipgloss.Width(m.glyphs.ellipsis)+lipgloss.Width(fileName) {
+			parts = append(parts, "log: "+shortenLeft(m.logPath, room, m.glyphs.ellipsis))
+		}
 	}
-	parts = append(parts, "Ctrl-C interrupts", "l grows the log")
 	return dimStyle.Render("  " + strings.Join(parts, " · "))
 }
 
@@ -440,26 +534,21 @@ func formatDuration(duration time.Duration) string {
 	}
 }
 
-// padRight pads text with spaces to width cells, or truncates it.
-func padRight(text string, width int) string {
+// padRight pads text with spaces to width cells, or cuts it with the
+// screen's ellipsis.
+func (m *progressModel) padRight(text string, width int) string {
 	textWidth := lipgloss.Width(text)
-	if textWidth >= width {
-		return truncate(text, width)
+	if textWidth > width {
+		return truncateWith(text, width, m.glyphs.ellipsis)
 	}
 	return text + strings.Repeat(" ", width-textWidth)
 }
 
-// truncate cuts text to at most width cells, ending with an ellipsis.
-func truncate(text string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	if lipgloss.Width(text) <= width {
+// padLeft pads text with spaces on the left to width cells.
+func padLeft(text string, width int) string {
+	textWidth := lipgloss.Width(text)
+	if textWidth > width {
 		return text
 	}
-	runes := []rune(text)
-	if width == 1 {
-		return "…"
-	}
-	return string(runes[:min(len(runes), width-1)]) + "…"
+	return strings.Repeat(" ", width-textWidth) + text
 }

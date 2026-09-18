@@ -6,30 +6,30 @@ Packages  none
 Sources   Ubuntu's archive only
 
 4 lines change; your own comments in the file are replaced by the template's:
-╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│   [image]                                                                                                          │
-│ - name = "lab"  # file name of the tarball and name of the WSL distro                                              │
-│ + name = "cpp-lab"  # file name of the tarball and name of the WSL distro                                          │
-│   release = "24.04"                                                                                                │
-│   arch = "amd64"  # the only architecture in v1                                                                    │
-│                                                                                                                    │
-│   [packages]                                                                                                       │
-│ - # my own note about these                                                                                        │
-│ - include = ["git"]                                                                                                │
-│ + include = ["git", "build-essential"]                                                                             │
-│                                                                                                                    │
-│                                                                                                                    │
-│                                                                                                                    │
-│                                                                                                                    │
-│                                                                                                                    │
-│                                                                                                                    │
-│                                                                                                                    │
-│                                                                                                                    │
-│                                                                                                                    │
-│                                                                                                                    │
-│                                                                                                                    │
-│                                                                                                                    │
-╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│   [image]                                                                                                            │
+│ - name = "lab"  # file name of the tarball and name of the WSL distro                                                │
+│ + name = "cpp-lab"  # file name of the tarball and name of the WSL distro                                            │
+│   release = "24.04"                                                                                                  │
+│   arch = "amd64"  # the only architecture in v1                                                                      │
+│                                                                                                                      │
+│   [packages]                                                                                                         │
+│ - # my own note about these                                                                                          │
+│ - include = ["git"]                                                                                                  │
+│ + include = ["git", "build-essential"]                                                                               │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 ┃ Write frostroot.toml?
 ┃

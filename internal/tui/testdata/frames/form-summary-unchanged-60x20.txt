@@ -6,13 +6,11 @@ Packages  none
 Sources   Ubuntu's archive only
 
 Nothing changes: frostroot.toml already says this.
-╭────────────────────────────────────────────────────────╮
-│ # frostroot recipe: the image you want. Edit it, then  │
-│ ru                                                     │
-│ #                                                      │
-│ # Versions do not belong here. frostroot build writes  │
-│ th                                                     │
-╰────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────╮
+│ # frostroot recipe: the image you want. Edit it, then r… │
+│ #                                                        │
+│ # Versions do not belong here. frostroot build writes t… │
+╰──────────────────────────────────────────────────────────╯
   ↑/↓ PgUp/PgDn scroll · 21 more lines
 
 ┃ Nothing changes. Write anyway?

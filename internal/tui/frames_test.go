@@ -136,7 +136,9 @@ var progressScenarios = []struct {
 		} {
 			d.press(eventMsg(builder.ProgressEvent{Phase: builder.PhaseDownload, Kind: builder.EventLogLine, Line: line}))
 		}
+		// A second measurement far enough from the first for a rate.
 		d.press(clockMsg(model.startedAt.Add(20 * time.Second)))
+		d.press(eventMsg(builder.ProgressEvent{Phase: builder.PhaseDownload, Kind: builder.EventProgress, Done: 19_050_000, Total: 28_100_000, Unit: builder.UnitBytes}))
 	}},
 	{name: "progress-done", act: func(d *driver, model *progressModel) {
 		d.press(eventMsg(builder.ProgressEvent{Kind: builder.EventLogFile, Line: "/var/tmp/frostroot-1000/build-1/mmdebstrap.log"}))
@@ -242,6 +244,36 @@ var summaryScenarios = []struct {
 	{name: "form-summary-unchanged", preview: func(form.Values) Preview {
 		return Preview{Heading: "Nothing changes: frostroot.toml already says this.", Text: sampleRecipeText, Unchanged: true}
 	}},
+}
+
+// TestASCIIFrames pins the screens on a terminal whose locale is not UTF-8:
+// the same layouts, drawn without box drawing or symbols.
+func TestASCIIFrames(t *testing.T) {
+	withLocale(t, map[string]string{"LANG": "C"})
+	for _, scenario := range progressScenarios {
+		if scenario.name != "progress-running" && scenario.name != "progress-failed" {
+			continue
+		}
+		t.Run(frameName(scenario.name+"-ascii", 80, 24), func(t *testing.T) {
+			model := newProgressModel(sampleScreen, make(chan builder.ProgressEvent), make(chan error), func() {})
+			model.startedAt, model.now = frameEpoch, frameEpoch
+			d := newDriver(t, model)
+			d.press(tea.WindowSizeMsg{Width: 80, Height: 24})
+			scenario.act(d, model)
+			assertFrame(t, frameName(scenario.name+"-ascii", 80, 24), model.View())
+		})
+	}
+	t.Run(frameName("form-first-page-ascii", 80, 24), func(t *testing.T) {
+		d := newFormDriver(t, form.Defaults(noHost))
+		d.press(tea.WindowSizeMsg{Width: 80, Height: 24})
+		assertFrame(t, frameName("form-first-page-ascii", 80, 24), d.model.View())
+	})
+	t.Run(frameName("form-summary-new-ascii", 80, 24), func(t *testing.T) {
+		d := newFormDriverWithPreview(t, form.Defaults(noHost), summaryScenarios[1].preview)
+		d.press(tea.WindowSizeMsg{Width: 80, Height: 24})
+		d.pressEnterUntil(stageSummary)
+		assertFrame(t, frameName("form-summary-new-ascii", 80, 24), d.model.View())
+	})
 }
 
 func TestFormFrames(t *testing.T) {
