@@ -196,8 +196,13 @@ adds with Space, and says when a name is not in the archive. The spec is
 - **Search, with a section filter**; no browsing tree.
 - **Warn with suggestions, never refuse**: a name the index lacks may come
   from a third-party source (`docker-ce`, `code`, `gh`).
-- **All four components** — open again, see the spec's decision A: builds
-  enable `main` and `universe` only, which the question did not say.
+- **All four components, in builds too.** Builds enabled `main` and
+  `universe` only, which the first question did not say; asked again, the
+  user chose to enable `restricted` and `multiverse` in this release. The
+  lock already replays the image's `deb` lines offline, so old locks are
+  untouched (the spec's decision A).
+- **One merged field**: the picker replaces "Other packages" in the
+  full-screen form (the spec's decision B).
 
 ### The design
 
@@ -237,8 +242,18 @@ that loads in 35 ms.
 
 ### Task 1: the spec — done
 
-`docs/superpowers/specs/2026-09-18-frostroot-picker.md`. **Stop here for
-the user's look**: decisions A (components) and B (one field or two).
+`docs/superpowers/specs/2026-09-18-frostroot-picker.md`. The user looked
+and decided A (all four components, builds too) and B (one field).
+
+### Task 1b: builds enable all four components
+
+`distro`'s table lists `main restricted universe multiverse` for every
+release; `SourceLines` and the picker both read it. Tests: the source
+lines, and that `planOffline` accepts a lock whose `sources` are the old
+two-component lines. README's example lines. Verified in Task 6: an
+existing v0.9 lock and pool rebuild offline to the same bytes; a fresh
+build with a multiverse package installs it, locks it under
+`pool/multiverse/`, vendors and rebuilds identically.
 
 ### Task 2: the index
 

@@ -24,8 +24,11 @@ package is called `ninja-build` has to leave the terminal to find out.
 3. **Warn with suggestions; never refuse.** A name the index does not have
    may come from a third-party source (`docker-ce`, `code`, `gh`), so the
    form says what it sees and the nearest names, and lets it through.
-4. **All four components** — but see "Open decision A" below: a build
-   enables only `main` and `universe` today, which the question did not say.
+4. **All four components**, and — once told that a build enabled only
+   `main` and `universe`, which the first question did not say — **in
+   builds too**. See "Decision A".
+5. **One field**: the picker replaces "Other packages" in the full-screen
+   form rather than sitting beside it. See "Decision B".
 
 ## The spike (2026-09-18, the build host, noble, amd64)
 
@@ -144,7 +147,7 @@ renderings:
 - **Plain** (`--plain`, a pipe, `TERM=dumb`): the free-text question it is
   today. It never fetches. With a cache present, names the index lacks get a
   note after the answer; without one, nothing is said.
-- **Full screen**: the component below. See "Open decision B" for why this
+- **Full screen**: the component below. See "Decision B" for why this
   replaces the free-text field rather than sitting beside it.
 
 `form` gains no network code and `tui` does not import `index`: the field
@@ -243,34 +246,42 @@ about them.
   proxy, as `build` and `vendor` have it. The default archive is plain HTTP
   and needs none; `http_proxy` is honoured as everywhere else.
 
-## Open decision A: which components
+## Decision A: all four components, in builds too
 
-The user chose all four. What the question did not say: `distro` enables
-`main` and `universe` only, in the build's apt sources and in the image's
-`/etc/apt/sources.list`. A picker that offers `nvidia-cuda-toolkit`
-(multiverse) offers a build failure.
+The user chose all four, and then — told that `distro` enables `main` and
+`universe` only, so that a picker offering `nvidia-cuda-toolkit`
+(multiverse) would offer a build failure — chose to make builds enable all
+four in this release, as a stock Ubuntu install and the official WSL image
+do.
 
-- **A1 (recommended for v0.10): the picker indexes what a build enables.**
-  It reads the component list from `distro.Release`, so the two cannot
-  drift. Today that is 70,853 of the 72,499 release-pocket names.
-- **A2: make builds enable all four, in this release.** Real Ubuntu installs
-  do. But it changes `/etc/apt/sources.list` in every image, so an existing
-  lock would stop rebuilding byte-identically unless the lock records the
-  components it was made with — a lock schema addition, an offline-rebuild
-  check, and a verification run of their own. It is a build feature, not a
-  form feature; it deserves its own issue and release, after which A1's
-  picker shows the new components with no change.
+An earlier draft of this section said that needed a lock schema addition to
+keep old locks rebuilding byte-identically. The code corrected it: the lock
+already records the image's `deb` lines (`Lockfile.Sources`), an offline
+rebuild writes `/etc/apt/sources.list` from them and installs from the
+vendored pool, and nothing in `planOffline` recomputes the archive lines. So:
 
-## Open decision B: one field or two
+- `distro` lists `main restricted universe multiverse` for every release.
+  That one table feeds the build's apt sources, the image's
+  `sources.list`, and the picker's index, so the three cannot drift.
+- An existing lock rebuilds offline to the same bytes, with the two
+  components it was made with. An online build re-resolves, as it always
+  has, and its new lock carries the four.
+- No recipe knob. Nobody has asked for fewer components, and a knob is a
+  field `edit` has to carry, the way `[certificates]` taught.
+- What could change for an existing recipe built online: a `Recommends`
+  that only `multiverse` or `restricted` can satisfy now gets installed.
+  The verification looks for it in the catalog's closure.
+
+## Decision B: one field
 
 The plan had "Find a package" beside "Other packages". This spec merges
-them. With two fields the page holds two views of one list that must be kept
-in step, the warning logic exists twice, and the page is 12 + 12 + 3 + 3
-rows on a 24-row terminal. With one, the picker is the list editor and the
-index is optional help. The cost: in the full-screen form the bespoke
-component is the only way to type a package name, so it has to be right —
-which is what the golden frames and the driver tests are for. Plain keeps
-the free-text field either way.
+them, and the user agreed. With two fields the page holds two views of one
+list that must be kept in step, the warning logic exists twice, and the page
+is 12 + 12 + 3 + 3 rows on a 24-row terminal. With one, the picker is the
+list editor and the index is optional help. The cost: in the full-screen
+form the bespoke component is the only way to type a package name, so it
+has to be right — which is what the golden frames and the driver tests are
+for. Plain keeps the free-text field either way.
 
 ## Not in v0.10
 
