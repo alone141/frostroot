@@ -681,7 +681,8 @@ user, WSL-ready images.
 **Since then:** the arrow-key form and progress screen (v0.2), `frostroot
 capture` (v0.3), vendoring and offline rebuilds with a release process
 (v0.4), third-party apt sources (v0.5), byte-identical offline rebuilds
-(v0.6), Python packages from PyPI (v0.7).
+(v0.6), Python packages from PyPI (v0.7), certificate authorities for
+networks that inspect TLS (v0.8).
 
 **Deliberately not yet:** Fedora or any non-Ubuntu family · flat or unsigned
 apt repositories · npm and cargo lockfiles · Python source distributions ·
@@ -752,6 +753,18 @@ and in a login shell `python3` was the environment's
 the locked 2.5.3 and 2.34.2, and `pip --version` was the pinned 24.3.1. The
 [Python spec](docs/superpowers/specs/2026-09-17-frostroot-python.md#verification)
 records it.
+
+For v0.8.0 a 24.04 image with `[certificates]` and `requests`, rebuilt
+offline, was imported the same way: every check above passed,
+`systemctl is-system-running` said `running`, the recipe's authority was at
+`/etc/ssl/certs/corp-root.pem` and `openssl verify` accepted it against the
+image's bundle, `urllib` (which reads the system store) fetched
+`https://pypi.org` through that regenerated bundle, `python3` was the
+environment's with `requests` 2.34.2 and pip 24.3.1, and nothing the build
+had merely been allowed to trust was left in the image. The
+[Certificates spec](docs/superpowers/specs/2026-09-18-frostroot-certificates.md#verification)
+records the offline rebuilds that matched byte for byte with and without
+`--ca-bundle`, and the one thing not yet proved end to end.
 
 ## Documentation
 

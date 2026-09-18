@@ -121,16 +121,41 @@ now names `localhost`. Worth remembering when writing the integration test.
 
 ## Verification
 
-This branch is not done until, on the build host:
+Run on the build host (Ubuntu 24.04 under WSL) once the code was done, with
+a 24.04 recipe naming `certs/corp-root.pem` in `[certificates]` and
+`requests` in `[python]`, built with `--ca-bundle` naming a second,
+different authority so that the two inputs could be told apart.
 
-1. A recipe with a certificate builds, the image's
-   `/etc/ssl/certs/ca-certificates.crt` contains it, and `openssl verify`
-   against it succeeds inside the imported distribution.
-2. Two builds of that recipe are byte-identical.
-3. A build with `--ca-bundle` and a build without it produce the identical
-   tarball, and the lock is unchanged by the flag.
-4. The Python path works behind a private CA: an HTTPS wheel index the public
-   roots do not know, `--ca-bundle`, and an offline rebuild that matches.
+1. **It builds, and the image trusts it.** The lock's `[[certificates]]`
+   entry carries the file's digest, and the `--ca-bundle` authority appears
+   nowhere in the lock. In the image, `corp-root.crt` is under
+   `/usr/local/share/ca-certificates/`, the bundle went from 121 to 122
+   certificates, `openssl verify` accepts the authority against it, and the
+   `--ca-bundle` authority is not there.
+2. **Offline rebuilds match byte for byte, with and without `--ca-bundle`.**
+   Two `build --offline` runs, the second with the flag, one SHA-256
+   (`1ff441b7…`), lock unchanged. This is the run that caught the staging
+   bug: before the fix, the second rebuild would have carried
+   `/frostroot-extra-ca.pem`.
+3. **A changed certificate is refused.** With the file replaced by another
+   authority, `build --offline` stopped with `certificate
+   certs/corp-root.pem changed since the lock was written`.
+4. **The WSL import.** Imported on Windows 11: every README check passed
+   (`student`, passwordless sudo, `systemctl is-system-running` = `running`,
+   DNS, locale, UTC), `/etc/ssl/certs/corp-root.pem` present and verifying,
+   `urllib` — which reads the system store, unlike `requests` — reached
+   `https://pypi.org` through the regenerated bundle, the environment's
+   `python3` had `requests` 2.34.2 and pip 24.3.1, and no `/frostroot-*`
+   file was left at the root.
+
+**Not composed end to end:** a real `frostroot build` resolving wheels from
+an HTTPS index signed by a private authority. The mechanism is proved in two
+halves — the spike, where the pinned pip refused such an index without
+`--cert` and downloaded with it, and the real build, where the same `--cert`
+path is what the step runs, against PyPI through the image's store — but
+frostroot deliberately has no way to point pip at another index, so the two
+halves cannot be joined until `[python] index_url` exists. Whoever builds
+that should close this loop then.
 
 ## Out of scope, and why
 
