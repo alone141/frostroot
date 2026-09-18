@@ -92,6 +92,21 @@ set -eu
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
+{{if .Certificates -}}
+# The certificate files were uploaded by an earlier hook, and this is the
+# whole install: update-ca-certificates writes /etc/ssl/certs/<name>.pem, a
+# subject-hash symlink beside it, and a regenerated bundle. Three rounds over
+# one image produced identical bytes, which is what lets an image that trusts
+# an organization's authority still rebuild byte for byte.
+update-ca-certificates
+for certificate in {{range .Certificates}}{{shellQuote .}} {{end}}; do
+	if ! test -e "/etc/ssl/certs/$certificate.pem"; then
+		echo "frostroot: update-ca-certificates did not install $certificate" >&2
+		exit 1
+	fi
+done
+
+{{end -}}
 user={{shellQuote .UserName}}
 lang={{shellQuote .Locale}}
 charmap={{shellQuote .Charmap}}
@@ -138,6 +153,9 @@ type provisionScriptValues struct {
 	LocaleID string // the locale as `locale -a` lists it, lowercased without dashes
 	Timezone string
 	Sudo     bool
+	// Certificates are the names, without the .crt, of the certificate
+	// authorities uploaded into the image, one per file the recipe named.
+	Certificates []string
 }
 
 // RenderProvisionScript renders the script that sets the timezone, creates the
@@ -165,11 +183,25 @@ func RenderProvisionScript(imageRecipe recipe.Recipe) (string, error) {
 		LocaleID: strings.ToLower(languageAndTerritory) + "." + normalizedCodeset,
 		Timezone: timezone,
 		Sudo:     imageRecipe.User.Sudo,
+		// One name per file the recipe named: a bundle's second and later
+		// certificates install beside the first, and checking the first is
+		// what says the tool ran.
+		Certificates: certificateNames(imageRecipe),
 	})
 	if err != nil {
 		return "", fmt.Errorf("rendering provision script: %w", err)
 	}
 	return script.String(), nil
+}
+
+// certificateNames returns the name of each certificate file the recipe
+// names, without its extension, in recipe order.
+func certificateNames(imageRecipe recipe.Recipe) []string {
+	var names []string
+	for _, certificatePath := range imageRecipe.CertificatePaths() {
+		names = append(names, recipe.CertificateName(certificatePath))
+	}
+	return names
 }
 
 // Stage holds the paths, on the build host, of the files the customize hooks
@@ -216,6 +248,15 @@ type Stage struct {
 	// WheelsDir is the directory of vendored wheels an offline build copies
 	// into the image. Its base name is what the image sees.
 	WheelsDir string
+	// CertificateDir holds the recipe's certificate authorities, one file
+	// per certificate, for upload into the image; CertificateFileNames
+	// lists them in order, each already ending in .crt.
+	CertificateDir       string
+	CertificateFileNames []string
+	// ExtraTrustPath is a bundle this build trusts but does not install,
+	// uploaded for the Python step, which deletes it; empty when the build
+	// was given none.
+	ExtraTrustPath string
 }
 
 // StageOptions say what WriteStage renders besides the provisioning files.
@@ -245,6 +286,13 @@ type StageOptions struct {
 	// WheelsDir is the directory of vendored wheels an offline build copies
 	// into the image; "" online.
 	WheelsDir string
+	// Certificates are the recipe's certificate authorities, one file per
+	// certificate, to install in the image.
+	Certificates []StagedCertificate
+	// ExtraTrust is certificates this build may trust that the image does
+	// not install, from --ca-bundle. They reach the Python step and nothing
+	// else, and never the image.
+	ExtraTrust []byte
 }
 
 // WriteStage renders every provisioning file for imageRecipe into stageDir.
@@ -305,6 +353,24 @@ func WriteStage(stageDir string, imageRecipe recipe.Recipe, options StageOptions
 			return Stage{}, err
 		}
 	}
+	if len(options.Certificates) > 0 {
+		stage.CertificateDir = filepath.Join(stageDir, "certificates")
+		if err := makeDirectoriesWithMode(stage.CertificateDir, 0o755); err != nil {
+			return Stage{}, err
+		}
+		for _, certificate := range options.Certificates {
+			if err := writeStageFile(filepath.Join(stage.CertificateDir, certificate.FileName), certificate.PEM); err != nil {
+				return Stage{}, err
+			}
+			stage.CertificateFileNames = append(stage.CertificateFileNames, certificate.FileName)
+		}
+	}
+	if len(options.ExtraTrust) > 0 && stage.PythonScriptPath != "" {
+		stage.ExtraTrustPath = filepath.Join(stageDir, "extra-ca.pem")
+		if err := writeStageFile(stage.ExtraTrustPath, options.ExtraTrust); err != nil {
+			return Stage{}, err
+		}
+	}
 	if len(options.Keys) > 0 {
 		stage.KeyringDir = filepath.Join(stageDir, "keys")
 		if err := makeDirectoriesWithMode(stage.KeyringDir, 0o755); err != nil {
@@ -333,6 +399,9 @@ func pythonHooks(stage Stage) []string {
 		return nil
 	}
 	var hooks []string
+	if stage.ExtraTrustPath != "" {
+		hooks = append(hooks, "upload "+shellQuote(stage.ExtraTrustPath)+" "+PythonExtraTrustPath)
+	}
 	if stage.RequirementsPath != "" {
 		hooks = append(hooks, "upload "+shellQuote(stage.RequirementsPath)+" "+PythonRequirementsPath)
 	}
@@ -382,6 +451,13 @@ func CustomizeHooks(stage Stage) []string {
 		hooks = append(hooks, `mkdir -p "$1`+ImageKeyringDir+`"`)
 		for _, name := range stage.KeyNames {
 			hooks = append(hooks, "upload "+shellQuote(filepath.Join(stage.KeyringDir, KeyringFileName(name)))+" "+ImageKeyringDir+"/"+KeyringFileName(name))
+		}
+	}
+	if len(stage.CertificateFileNames) > 0 {
+		// Before the provision script, which is what installs them.
+		hooks = append(hooks, `mkdir -p "$1`+ImageCertificateDir+`"`)
+		for _, fileName := range stage.CertificateFileNames {
+			hooks = append(hooks, "upload "+shellQuote(filepath.Join(stage.CertificateDir, fileName))+" "+ImageCertificateDir+"/"+fileName)
 		}
 	}
 	if stage.SourcesListPath != "" {

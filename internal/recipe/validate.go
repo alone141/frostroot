@@ -11,6 +11,7 @@ import (
 
 	"frostroot/internal/distro"
 	"frostroot/internal/pgp"
+	"frostroot/internal/pki"
 )
 
 // Patterns for the values Validate checks. Locale and timezone are
@@ -41,6 +42,10 @@ var (
 	sourceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 	suitePattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	componentPattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9.+-]*$`)
+	// certificateNamePattern is the file name a certificate lands under in
+	// /usr/local/share/ca-certificates. It reaches the provisioning script,
+	// so it is an injection boundary like the locale.
+	certificateNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
 
 // maxUserNameLength is the longest name useradd accepts.
@@ -51,6 +56,9 @@ const maxSourceNameLength = 32
 
 // maxPythonNameLength is the longest project name PyPI accepts.
 const maxPythonNameLength = 100
+
+// maxCertificateNameLength keeps certificate file names short.
+const maxCertificateNameLength = 64
 
 // Validate returns every problem with imageRecipe, one message per problem,
 // or nil when there are none. It needs no network and no root. Whether the
@@ -94,6 +102,18 @@ func Validate(imageRecipe Recipe) []string {
 			problems = append(problems, fmt.Sprintf("python.include names %s twice", normalized))
 		}
 		seenPythonNames[normalized] = true
+	}
+	seenCertificateNames := map[string]bool{}
+	for _, certificatePath := range imageRecipe.CertificatePaths() {
+		if err := CheckCertificatePath(certificatePath); err != nil {
+			addProblem(err)
+			continue
+		}
+		name := CertificateName(certificatePath)
+		if seenCertificateNames[name] {
+			problems = append(problems, fmt.Sprintf("certificates.include: two files would both install as %s.crt", name))
+		}
+		seenCertificateNames[name] = true
 	}
 	seenSourceNames := map[string]bool{}
 	for index, source := range imageRecipe.Sources {
@@ -147,11 +167,69 @@ func CheckSourceURL(sourceURL string) error {
 // CheckKeyPath reports why keyPath cannot name a key file in the recipe
 // directory, or nil: it must be relative and stay inside the directory.
 func CheckKeyPath(keyPath string) error {
-	cleaned := path.Clean(filepath.ToSlash(keyPath))
-	if keyPath == "" || strings.HasPrefix(cleaned, "/") || strings.HasPrefix(cleaned, "../") || cleaned == ".." || cleaned == "." || filepath.IsAbs(keyPath) || strings.ContainsAny(keyPath, "\\\x00") {
+	if !insideRecipeDirectory(keyPath) {
 		return fmt.Errorf("invalid key path %q (a relative path inside the recipe directory, such as keys/docker.asc)", keyPath)
 	}
 	return nil
+}
+
+// insideRecipeDirectory reports whether value names a file the build may
+// read from beside the recipe: relative, and not a way out of the directory.
+func insideRecipeDirectory(value string) bool {
+	if value == "" || filepath.IsAbs(value) || strings.ContainsAny(value, "\\\x00") {
+		return false
+	}
+	cleaned := path.Clean(filepath.ToSlash(value))
+	return !strings.HasPrefix(cleaned, "/") && !strings.HasPrefix(cleaned, "../") && cleaned != ".." && cleaned != "."
+}
+
+// CheckCertificatePath reports why certificatePath cannot name a certificate
+// file in the recipe directory, or nil. Same rule as a source's key, and one
+// more: the file's name becomes a file name inside the image, and reaches
+// the provisioning script.
+func CheckCertificatePath(certificatePath string) error {
+	if !insideRecipeDirectory(certificatePath) {
+		return fmt.Errorf("invalid certificate path %q (a relative path inside the recipe directory, such as certs/corp-root.pem)", certificatePath)
+	}
+	name := CertificateName(certificatePath)
+	if !certificateNamePattern.MatchString(name) || len(name) > maxCertificateNameLength {
+		return fmt.Errorf("invalid certificate file name %q in %q (letters, digits, dot, dash and underscore; 1-%d characters)", name, certificatePath, maxCertificateNameLength)
+	}
+	return nil
+}
+
+// CertificateName is what a certificate file is called in the image, without
+// the .crt that update-ca-certificates requires: the file's base name
+// without its extension, so certs/corp-root.pem becomes corp-root.
+func CertificateName(certificatePath string) string {
+	base := path.Base(path.Clean(filepath.ToSlash(certificatePath)))
+	return strings.TrimSuffix(base, path.Ext(base))
+}
+
+// CertificatePath returns the absolute path of a recipe's certificate file.
+func CertificatePath(recipeDir, certificatePath string) string {
+	return filepath.Join(recipeDir, filepath.FromSlash(certificatePath))
+}
+
+// CheckCertificateFiles checks that every certificate the recipe names
+// exists under recipeDir and holds at least one certificate, one problem per
+// failing file. Validate cannot do this: it has no directory.
+func CheckCertificateFiles(recipeDir string, certificatePaths []string) []string {
+	var problems []string
+	for _, certificatePath := range certificatePaths {
+		if CheckCertificatePath(certificatePath) != nil {
+			continue // already reported by Validate
+		}
+		data, err := os.ReadFile(CertificatePath(recipeDir, certificatePath))
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("certificate %s: %v", certificatePath, err))
+			continue
+		}
+		if _, err := pki.ParseCertificates(data); err != nil {
+			problems = append(problems, fmt.Sprintf("certificate %s: %v", certificatePath, err))
+		}
+	}
+	return problems
 }
 
 // CheckSourceKeys checks that every source's key file exists under
