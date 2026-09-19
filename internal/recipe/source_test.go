@@ -117,6 +117,14 @@ func TestValidateSources(t *testing.T) {
 		{"url with form feed", func(source *Source) { source.URL = "https://x/a\fb" }, "source url"},
 		{"url with bracket", func(source *Source) { source.URL = "https://x/a]" }, "source url"},
 		{"empty url", func(source *Source) { source.URL = "" }, "source url"},
+		// The password would be committed in the recipe, written twice into
+		// the lock, and shipped in the image's own sources.list.
+		{"url with credentials", func(source *Source) {
+			source.URL = "https://buildbot:s3cret@apt.corp.example/ubuntu"
+		}, "credentials"},
+		{"url with a user and no password", func(source *Source) {
+			source.URL = "https://buildbot@apt.corp.example/ubuntu"
+		}, "credentials"},
 		{"suite with space", func(source *Source) { source.Suite = "noble main" }, "suite"},
 		{"suite with slash", func(source *Source) { source.Suite = "./" }, "suite"},
 		{"component with space", func(source *Source) { source.Components = []string{"main universe"} }, "component"},
@@ -155,6 +163,35 @@ func TestValidateSources(t *testing.T) {
 	for _, goodKey := range []string{"keys/docker.asc", "docker.gpg", "keys/sub/x.asc"} {
 		if err := CheckKeyPath(goodKey); err != nil {
 			t.Errorf("CheckKeyPath(%q) = %v", goodKey, err)
+		}
+	}
+}
+
+// A refusal is printed to a terminal, kept in a CI log, and quoted in
+// capture's report, which sits beside a recipe people commit: it must name
+// the URL without repeating the secret it refuses.
+func TestCredentialRefusalsDoNotQuoteTheSecret(t *testing.T) {
+	refusals := map[string]error{
+		"source url":         CheckSourceURL("https://buildbot:s3cret@apt.corp.example/ubuntu"),
+		"source url, token":  CheckSourceURL("https://s3cret@apt.corp.example/ubuntu"),
+		"python index_url":   CheckPythonIndexURL("https://buildbot:s3cret@nexus.example/simple"),
+		"python index token": CheckPythonIndexURL("https://s3cret@nexus.example/simple"),
+	}
+	for name, err := range refusals {
+		if err == nil {
+			t.Errorf("%s: no refusal", name)
+			continue
+		}
+		if strings.Contains(err.Error(), "s3cret") {
+			t.Errorf("%s: the refusal quotes the secret: %v", name, err)
+		}
+		if !strings.Contains(err.Error(), "REDACTED@") || !strings.Contains(err.Error(), ".example/") {
+			t.Errorf("%s: the refusal should still name the host and path: %v", name, err)
+		}
+	}
+	for _, unchanged := range []string{"https://download.docker.com/linux/ubuntu", "not a url at all", "https://x/a%23b", ""} {
+		if got := RedactURLCredentials(unchanged); got != unchanged {
+			t.Errorf("RedactURLCredentials(%q) = %q, want it unchanged", unchanged, got)
 		}
 	}
 }

@@ -511,6 +511,28 @@ func TestSourcesForRecipePrefersTheMostSpecificFailure(t *testing.T) {
 	}
 }
 
+// TestSourcesForRecipeLeavesACredentialedSourceWithoutItsPassword: the
+// recipe refuses a URL carrying credentials, so the source is left behind —
+// and the report, a file written beside the recipe, must say so without
+// copying the password out of the machine's sources.list.
+func TestSourcesForRecipeLeavesACredentialedSourceWithoutItsPassword(t *testing.T) {
+	root := buildRoot(t, map[string]string{
+		"etc/apt/keyrings/corp.asc":        string(pgp.Armor(fakeKeyPacket)),
+		"etc/apt/sources.list.d/corp.list": "deb [signed-by=/etc/apt/keyrings/corp.asc] https://buildbot:s3cret@apt.corp.example/ubuntu noble main\n",
+	})
+	carried, left := systemRoot(root).sourcesForRecipe("noble")
+	if len(carried) != 0 || len(left) != 1 {
+		t.Fatalf("carried %+v, left %+v", carried, left)
+	}
+	reported := left[0].String()
+	if strings.Contains(reported, "s3cret") {
+		t.Errorf("the report line quotes the password: %q", reported)
+	}
+	if !strings.Contains(reported, "credentials") || !strings.Contains(reported, "apt.corp.example/ubuntu") {
+		t.Errorf("the report line should name the repository and the reason: %q", reported)
+	}
+}
+
 // TestPackageOriginsSeparateRepositoriesOnOneHost is the PPA case: every
 // Launchpad PPA lives on ppa.launchpadcontent.net, so attributing packages
 // to the host alone let one carried PPA vouch for all the others.
