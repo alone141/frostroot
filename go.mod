@@ -1,6 +1,6 @@
 module frostroot
 
-go 1.24.2
+go 1.27.1
 
 require (
 	github.com/charmbracelet/bubbles v1.0.0

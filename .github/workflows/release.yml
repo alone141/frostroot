@@ -28,6 +28,14 @@ jobs:
           fi
       - name: Test
         run: go test ./...
+      - name: govulncheck
+        # A release is the one build strangers download and run, so it is the
+        # last place a vulnerable toolchain should be able to reach. CI runs
+        # this on every pull request and on master; repeating it here means a
+        # tag pushed from a branch that never saw CI cannot ship one either.
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+          govulncheck ./...
       - name: Build a static binary
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o frostroot-linux-amd64 ./cmd/frostroot
       - name: Check the binary

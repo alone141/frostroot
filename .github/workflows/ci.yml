@@ -115,3 +115,36 @@ jobs:
       - uses: golangci/golangci-lint-action@v9.3.0
         with:
           version: v2.13.2
+
+  vulncheck:
+    # The toolchain go.mod pins is the one setup-go installs here and in the
+    # release workflow, so the binary people download is built with it. When
+    # go.mod said 1.24.2, govulncheck reported 32 reachable vulnerabilities
+    # in crypto/x509, crypto/tls, net/http, net/url, archive/tar,
+    # encoding/asn1 and encoding/pem — the packages this project's security
+    # rests on — and nothing in CI was looking.
+    #
+    # This job fails on a vulnerability the code can reach. A disclosure can
+    # therefore turn an unrelated pull request red; that is the point, and
+    # the fix is a toolchain bump rather than a wait.
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install govulncheck
+        # Pinned, like every other tool version here: @latest would make the
+        # meaning of a red build depend on the day.
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+      - name: Check the toolchain really is the one go.mod pins
+        # setup-go reads go.mod, but a job that silently used another
+        # toolchain would clear a check it never performed.
+        run: |
+          pinned=$(sed -n 's/^go \([0-9.]*\)$/\1/p' go.mod)
+          running=$(go env GOVERSION)
+          echo "go.mod pins go$pinned; this job runs $running"
+          test "go$pinned" = "$running" || { echo "the toolchain is not the pinned one"; exit 1; }
+      - name: govulncheck
+        run: govulncheck ./...
