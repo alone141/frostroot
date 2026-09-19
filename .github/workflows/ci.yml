@@ -62,14 +62,17 @@ jobs:
         run: |
           set -o pipefail
           go test -tags=integration -timeout 40m -v ./internal/builder/ 2>&1 | tee integration.log
-      - name: A skipped test proves nothing
-        # The prerequisite check above should make this unreachable. It is
-        # here because a skip reads exactly like a pass in the summary, and
-        # this job exists to stop that kind of silence.
+      - name: A bootstrap that never ran proves nothing
+        # Only the three reasons skipUnlessMmdebstrapAvailable gives, not any
+        # skip: TestIntegrationUnreachableWorkRootFailsFast skips as root on
+        # purpose, because root mode has no user namespace to make
+        # unreachable, and that is a fact about the host rather than a job
+        # that did nothing. A missing prerequisite reads exactly like a pass
+        # in the summary, which is what this catches.
         run: |
-          if grep -q -- "--- SKIP" integration.log; then
-            echo "Integration tests skipped rather than ran:"
-            grep -- "--- SKIP" integration.log
+          if grep -qE -- "needs Linux|mmdebstrap not installed|ubuntu-keyring not installed" integration.log; then
+            echo "The integration tests skipped for want of a prerequisite:"
+            grep -E -- "needs Linux|mmdebstrap not installed|ubuntu-keyring not installed" integration.log
             exit 1
           fi
 
