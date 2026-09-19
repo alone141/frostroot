@@ -31,7 +31,12 @@ const (
 	PythonListPath         = "/frostroot-pip-list.json"
 	PythonRequirementsPath = "/frostroot-requirements.txt"
 	PythonPinPath          = "/frostroot-pip-pin.txt"
-	PythonWheelsPath       = "/frostroot-wheels"
+	// PythonPinReportPath is pip's report for the pinned resolver itself,
+	// written only when the recipe names an index. The main resolve leaves
+	// an already-satisfied pin out of its report, so this is the only place
+	// the URL that index served for pip is recorded.
+	PythonPinReportPath = "/frostroot-pip-pin-report.json"
+	PythonWheelsPath    = "/frostroot-wheels"
 	// PythonExtraTrustPath is where certificates the build trusts but does
 	// not install are uploaded, and PythonCertPath where the step
 	// concatenates them with the image's own store for pip. Both are gone
@@ -159,7 +164,7 @@ printf 'pip==%s --hash=sha256:%s\n' {{shellQuote .PipVersion}} {{shellQuote .Pip
 {{- else if .IndexURL -}}
 printf 'pip==%s --hash=sha256:%s\n' {{shellQuote .PipVersion}} {{shellQuote .PipSHA256}} > {{shellQuote .PinPath}}
 "$venv"/bin/python -m pip install --no-input --disable-pip-version-check --no-cache-dir --upgrade \
-	--index-url {{shellQuote .IndexURL}} \
+	--index-url {{shellQuote .IndexURL}} --report {{shellQuote .PinReportPath}} \
 	{{if .CertPath}}--cert "$pipCert" {{end}}--require-hashes --requirement {{shellQuote .PinPath}}
 {{- else -}}
 printf 'pip @ %s --hash=sha256:%s\n' {{shellQuote .PipURL}} {{shellQuote .PipSHA256}} > {{shellQuote .PinPath}}
@@ -227,6 +232,7 @@ type pythonScriptValues struct {
 	PipSHA256        string
 	PipVersion       string
 	IndexURL         string
+	PinReportPath    string
 	Packages         []string
 	Offline          bool
 	SourceDateEpoch  int64
@@ -298,6 +304,7 @@ func RenderPythonScript(imageRecipe recipe.Recipe, options PythonOptions) (strin
 		PipSHA256:        pin.SHA256,
 		PipVersion:       pin.Version,
 		IndexURL:         imageRecipe.PythonIndexURL(),
+		PinReportPath:    PythonPinReportPath,
 		Packages:         packages,
 		Offline:          options.Offline,
 		SourceDateEpoch:  options.SourceDateEpoch,
@@ -562,4 +569,49 @@ func sortedWheels(wheels []recipe.LockPyPI) []recipe.LockPyPI {
 		return strings.Compare(recipe.NormalizePythonName(left.Name), recipe.NormalizePythonName(right.Name))
 	})
 	return sorted
+}
+
+// ParsePinReport reads the report of the pinned resolver's own install and
+// returns the pip it recorded. A build resolving from an index named by the
+// recipe installs pip from there, and the main resolve leaves an
+// already-satisfied pin out of its own report, so this is the only record of
+// the URL that index served. Without it the lock would name
+// files.pythonhosted.org for pip — the one host such a network blocks — and
+// vendor would fail on the very file the build had just installed.
+func ParsePinReport(reader io.Reader) (recipe.LockPyPI, error) {
+	var report pipReport
+	if err := json.NewDecoder(reader).Decode(&report); err != nil {
+		return recipe.LockPyPI{}, fmt.Errorf("%w: %w", ErrBadPipReport, err)
+	}
+	if major, _, _ := strings.Cut(report.Version, "."); major != pipReportVersion {
+		return recipe.LockPyPI{}, fmt.Errorf("%w: version %q, want %s", ErrBadPipReport, report.Version, pipReportVersion)
+	}
+	for _, item := range report.Install {
+		if recipe.NormalizePythonName(item.Metadata.Name) != "pip" {
+			continue
+		}
+		wheel, err := wheelFromReport(item)
+		if err != nil {
+			return recipe.LockPyPI{}, err
+		}
+		// The resolver is nobody's request: it is there so the rest can be
+		// installed, which is how withPinnedPip records it too.
+		wheel.Auto = true
+		return wheel, nil
+	}
+	return recipe.LockPyPI{}, fmt.Errorf("%w: it installed no pip", ErrBadPipReport)
+}
+
+// withResolvedPin replaces the pip recorded from the compile-time constant
+// with the one an index actually served. The constant's checksum still
+// decided which file was accepted, so only where it came from differs.
+func withResolvedPin(wheels []recipe.LockPyPI, pin recipe.LockPyPI) []recipe.LockPyPI {
+	replaced := slices.Clone(wheels)
+	for index, wheel := range replaced {
+		if recipe.NormalizePythonName(wheel.Name) == "pip" {
+			replaced[index] = pin
+			return replaced
+		}
+	}
+	return append(replaced, pin)
 }

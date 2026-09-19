@@ -450,3 +450,41 @@ func TestRenderProvisionScriptIsValidShell(t *testing.T) {
 		t.Errorf("sh -n with certificates: %v: %s", err, output)
 	}
 }
+
+// TestStagePinReportOnlyWhenTheRecipeNamesAnIndex: the pinned resolver's own
+// report is the only record of where an index served pip, so a build that
+// names one downloads it — and removes it before the tarball, like every
+// other file the step writes. A build resolving from PyPI stages exactly
+// what it did before, so its image is unchanged.
+func TestStagePinReportOnlyWhenTheRecipeNamesAnIndex(t *testing.T) {
+	withIndex := sampleRecipe()
+	withIndex.Python = &recipe.Python{Include: []string{"requests"}, IndexURL: "https://nexus.example.com/repository/pypi/simple"}
+	stage, err := WriteStage(t.TempDir(), withIndex, StageOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stage.PipPinReportPath == "" {
+		t.Fatal("a recipe naming an index must stage the pinned resolver's report")
+	}
+	hooks := strings.Join(CustomizeHooks(stage), "\n")
+	if !strings.Contains(hooks, "download "+PythonPinReportPath+" ") {
+		t.Errorf("the pin report is never downloaded:\n%s", hooks)
+	}
+	if !strings.Contains(hooks, PythonPinReportPath+`"`) || !strings.Contains(hooks, "rm -f ") {
+		t.Errorf("the pin report is never removed, so it would reach the image:\n%s", hooks)
+	}
+
+	// Without an index there is no pin report at all.
+	plain := sampleRecipe()
+	plain.Python = &recipe.Python{Include: []string{"requests"}}
+	plainStage, err := WriteStage(t.TempDir(), plain, StageOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plainStage.PipPinReportPath != "" {
+		t.Error("a recipe resolving from PyPI must stage no pin report")
+	}
+	if strings.Contains(strings.Join(CustomizeHooks(plainStage), "\n"), "download "+PythonPinReportPath+" ") {
+		t.Error("a recipe resolving from PyPI must not download one either")
+	}
+}
