@@ -298,3 +298,15 @@ func FormatFingerprint(fingerprint string) string {
 	}
 	return strings.Join(groups, " ")
 }
+
+// FormatFingerprints groups every fingerprint of a set for display and joins
+// them with "and". A message about a key file names all of them: the file
+// becomes a signed-by keyring whole, so naming only the first would say less
+// than what is trusted.
+func FormatFingerprints(fingerprints []string) string {
+	grouped := make([]string, 0, len(fingerprints))
+	for _, fingerprint := range fingerprints {
+		grouped = append(grouped, FormatFingerprint(fingerprint))
+	}
+	return strings.Join(grouped, " and ")
+}

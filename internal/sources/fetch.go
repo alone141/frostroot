@@ -76,11 +76,16 @@ func (c HTTPClient) Get(ctx context.Context, url string) ([]byte, error) {
 	return body, nil
 }
 
-// FetchedKey is a key that was downloaded and checked.
+// FetchedKey is a key file that was downloaded and checked.
 type FetchedKey struct {
 	Armored     []byte // what to write as the key file
-	Fingerprint string
-	SourceURL   string // where it came from
+	Fingerprint string // the first primary key of the file
+	// Fingerprints names every primary key the file holds, each of them
+	// checked against the pinned set. This is what installing the file
+	// trusts, since apt accepts a Release signed by any key in a signed-by
+	// keyring; Fingerprint alone says less than that.
+	Fingerprints []string
+	SourceURL    string // where it came from
 }
 
 // FetchKey fetches and checks the signing key file of source: a catalog
@@ -102,9 +107,9 @@ func FetchKey(ctx context.Context, client Client, source recipe.Source) (Fetched
 		return FetchedKey{}, fmt.Errorf("the key of %s from %s: %w", source.Name, keyURL, err)
 	}
 	if unpinned, found := firstUnpinned(key.Fingerprints, pinned); found {
-		return FetchedKey{}, fmt.Errorf("%w: the file %s serves for %s holds %s; pinned is %s", ErrFingerprintMismatch, keyURL, source.Name, pgp.FormatFingerprint(unpinned), formatFingerprints(pinned))
+		return FetchedKey{}, fmt.Errorf("%w: the file %s serves for %s holds %s; pinned is %s", ErrFingerprintMismatch, keyURL, source.Name, pgp.FormatFingerprint(unpinned), pgp.FormatFingerprints(pinned))
 	}
-	return FetchedKey{Armored: pgp.Armor(key.Binary), Fingerprint: key.Fingerprint, SourceURL: keyURL}, nil
+	return FetchedKey{Armored: pgp.Armor(key.Binary), Fingerprint: key.Fingerprint, Fingerprints: key.Fingerprints, SourceURL: keyURL}, nil
 }
 
 // firstUnpinned returns the first of the fetched primary keys that pinned
@@ -122,15 +127,6 @@ func firstUnpinned(fetched, pinned []string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-// formatFingerprints renders a pinned set the way an error message wants it.
-func formatFingerprints(fingerprints []string) string {
-	grouped := make([]string, 0, len(fingerprints))
-	for _, fingerprint := range fingerprints {
-		grouped = append(grouped, pgp.FormatFingerprint(fingerprint))
-	}
-	return strings.Join(grouped, " and ")
 }
 
 // keyLocation says where source's key is and which keys its file may hold.

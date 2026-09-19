@@ -229,11 +229,24 @@ func (a *App) fetchMissingKeys(commandName string, recipeSources []recipe.Source
 			failed = true
 			continue
 		}
-		a.stdoutf("Saved the signing key of %s from %s into %s (fingerprint %s)\n", source.Name, origin, source.Key, pgp.FormatFingerprint(key.Fingerprint))
+		a.stdoutf("Saved the signing key of %s from %s into %s (%s)\n", source.Name, origin, source.Key, describeFingerprints(key.Fingerprints))
 	}
 	if failed {
 		a.stderrf("frostroot %s: %s is written, but frostroot validate will refuse it until every key is in place; frostroot edit fetches them again\n", commandName, recipeFileName)
 		return exitUserError
 	}
 	return exitSuccess
+}
+
+// describeFingerprints names the primary keys of a saved key file, for the
+// line that tells the user what was saved. A key file may hold more than one
+// primary key — GitHub's keyring holds two — and it is installed whole as the
+// source's signed-by keyring, where apt accepts a Release signed by any key
+// in it. Naming only the first would under-report what is being trusted.
+func describeFingerprints(fingerprints []string) string {
+	label := "fingerprint"
+	if len(fingerprints) > 1 {
+		label = "fingerprints"
+	}
+	return label + " " + pgp.FormatFingerprints(fingerprints)
 }
