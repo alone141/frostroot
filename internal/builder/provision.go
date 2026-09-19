@@ -239,6 +239,10 @@ type Stage struct {
 	// PipReportPath is where an online build downloads pip's installation
 	// report to, for the wheels the lock records.
 	PipReportPath string
+	// PipPinReportPath is where a build whose recipe names a Python index
+	// downloads pip's report for the pinned resolver. Only that build writes
+	// one, so a build resolving from PyPI stages exactly what it did before.
+	PipPinReportPath string
 	// PipListPath is where an offline build downloads the environment's
 	// package list to, to compare with the lock.
 	PipListPath string
@@ -346,6 +350,9 @@ func WriteStage(stageDir string, imageRecipe recipe.Recipe, options StageOptions
 			stage.WheelsDir = options.WheelsDir
 		} else {
 			stage.PipReportPath = filepath.Join(stageDir, "pip-report.json")
+			if imageRecipe.PythonIndexURL() != "" {
+				stage.PipPinReportPath = filepath.Join(stageDir, "pip-pin-report.json")
+			}
 		}
 	}
 	for path, content := range contentByPath {
@@ -417,10 +424,15 @@ func pythonHooks(stage Stage) []string {
 	if stage.PipReportPath != "" {
 		hooks = append(hooks, "download "+PythonReportPath+" "+shellQuote(stage.PipReportPath))
 	}
+	if stage.PipPinReportPath != "" {
+		hooks = append(hooks, "download "+PythonPinReportPath+" "+shellQuote(stage.PipPinReportPath))
+	}
 	if stage.PipListPath != "" {
 		hooks = append(hooks, "download "+PythonListPath+" "+shellQuote(stage.PipListPath))
 	}
-	return append(hooks, `rm -f "$1`+PythonReportPath+`" "$1`+PythonListPath+`"`)
+	// Every file the step wrote goes before the tarball is made, so none of
+	// them reaches an image.
+	return append(hooks, `rm -f "$1`+PythonReportPath+`" "$1`+PythonPinReportPath+`" "$1`+PythonListPath+`"`)
 }
 
 // writeStageFile writes a world-readable stage file whatever the umask.

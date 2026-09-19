@@ -632,3 +632,62 @@ func TestRenderPythonScriptWithAnInternalIndex(t *testing.T) {
 		t.Error("a recipe naming no index must resolve from PyPI exactly as before")
 	}
 }
+
+// pinReportJSON is pip's report for the pinned resolver's own install, as an
+// index other than PyPI answers it.
+const pinReportJSON = `{"version":"1","pip_version":"24.3.1","install":[{"requested":true,
+"metadata":{"name":"pip","version":"24.3.1"},
+"download_info":{"url":"https://nexus.example.com/repository/pypi/pip-24.3.1-py3-none-any.whl",
+"archive_info":{"hashes":{"sha256":"3790624780082365f47549d032f3770eeb2b1e8bd1f7b2e02dace1afa361b4ed"}}}}]}`
+
+// TestPinnedPipIsRecordedFromTheIndexThatServedIt: with an index named by the
+// recipe, pip comes from there, but the main resolve leaves an
+// already-satisfied pin out of its report — so without the pinned step's own
+// report the lock would name files.pythonhosted.org, the one host such a
+// network blocks, and vendor would fail on the file the build had installed.
+func TestPinnedPipIsRecordedFromTheIndexThatServedIt(t *testing.T) {
+	pin, err := ParsePinReport(strings.NewReader(pinReportJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pin.Name != "pip" || pin.Version != "24.3.1" {
+		t.Fatalf("pin = %+v", pin)
+	}
+	if pin.URL != "https://nexus.example.com/repository/pypi/pip-24.3.1-py3-none-any.whl" {
+		t.Errorf("url = %q, want the index's", pin.URL)
+	}
+	if pin.SHA256 != PinnedPip.SHA256 {
+		t.Errorf("sha256 = %q, want the pinned one: the checksum still decides which file is accepted", pin.SHA256)
+	}
+	if !pin.Auto {
+		t.Error("the resolver is nobody's request, so it is recorded as automatic")
+	}
+
+	// It replaces the entry withPinnedPip added from the constant, rather
+	// than being added beside it.
+	wheels := withPinnedPip([]recipe.LockPyPI{{Name: "requests", Version: "2.32.3"}})
+	replaced := withResolvedPin(wheels, pin)
+	pipEntries := 0
+	for _, wheel := range replaced {
+		if wheel.Name == "pip" {
+			pipEntries++
+			if wheel.URL != pin.URL {
+				t.Errorf("pip url = %q, want the index's", wheel.URL)
+			}
+		}
+	}
+	if pipEntries != 1 {
+		t.Errorf("%d pip entries, want exactly one", pipEntries)
+	}
+}
+
+func TestParsePinReportRefusesAReportWithoutPip(t *testing.T) {
+	noPip := `{"version":"1","pip_version":"24.3.1","install":[{"metadata":{"name":"requests","version":"2.32.3"},
+"download_info":{"url":"https://x/requests.whl","archive_info":{"hashes":{"sha256":"aa"}}}}]}`
+	if _, err := ParsePinReport(strings.NewReader(noPip)); err == nil {
+		t.Error("a pin report that installed no pip must be refused")
+	}
+	if _, err := ParsePinReport(strings.NewReader(`{"version":"9"}`)); err == nil {
+		t.Error("an unknown report version must be refused")
+	}
+}

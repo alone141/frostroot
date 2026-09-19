@@ -399,6 +399,17 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 				PipVersion:  pythonResult.PipVersion,
 				IndexURL:    imageRecipe.PythonIndexURL(),
 			}
+			// A build resolving from an index named by the recipe installed
+			// pip from there too, and only the pinned step's own report says
+			// at what URL. Recording the constant's PyPI address instead
+			// would send vendor to the host such a network blocks.
+			if stage.PipPinReportPath != "" {
+				pin, err := readPinReport(stage.PipPinReportPath)
+				if err != nil {
+					return failBuild(err)
+				}
+				pythonResult.Wheels = withResolvedPin(pythonResult.Wheels, pin)
+			}
 			lock.PyPI = pythonResult.Wheels
 			result.PythonPackageCount = len(pythonResult.Wheels)
 		}
@@ -481,6 +492,16 @@ func readPipReport(path string, requested []string) (PythonResult, error) {
 	}
 	defer func() { _ = file.Close() }() // read-only: closing cannot lose data
 	return ParsePipReport(file, requested)
+}
+
+// readPinReport reads the report of the pinned resolver's own install.
+func readPinReport(path string) (recipe.LockPyPI, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return recipe.LockPyPI{}, fmt.Errorf("bootstrap did not produce pip's report for the pinned resolver: %w", err)
+	}
+	defer func() { _ = file.Close() }() // read-only: closing cannot lose data
+	return ParsePinReport(file)
 }
 
 // readPipList reads the package list an offline build downloaded out of the

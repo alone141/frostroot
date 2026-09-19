@@ -549,6 +549,10 @@ rather than passing it on. The lock records the index under `[python]`, the
 fetches from there. An offline rebuild whose recipe names a different
 `index_url` than the lock is a lock mismatch, like a changed apt source.
 
+The pinned pip is recorded in the lock at the URL that index served, not at
+its usual `files.pythonhosted.org` address, so `vendor` fetches every file —
+pip included — from the one place such a network allows.
+
 It must be `https`, because PyPI has no package signing: TLS is the only
 thing between the resolve and whatever answers, and the hashes that first
 resolve writes are pinned from then on. It must carry no credentials, since
