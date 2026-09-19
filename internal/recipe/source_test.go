@@ -104,6 +104,17 @@ func TestValidateSources(t *testing.T) {
 		{"url without host", func(source *Source) { source.URL = "https:///y" }, "source url"},
 		{"url with space", func(source *Source) { source.URL = "https://x/a b" }, "source url"},
 		{"url with fragment", func(source *Source) { source.URL = "https://download.docker.com/linux/ubuntu#stable" }, "source url"},
+		// Apt comments to the end of the line wherever the # sits, so a
+		// trailing one kills the suite and components just as a fragment
+		// does. url.Parse reports no Fragment for it, which is why the
+		// character itself is what the check looks for.
+		{"url with trailing hash", func(source *Source) { source.URL = "https://download.docker.com/linux/ubuntu#" }, "source url"},
+		{"url with hash inside the path", func(source *Source) { source.URL = "https://x/a#b" }, "source url"},
+		// Apt counts these as whitespace and would take the rest of the URL
+		// for the suite. url.Parse refuses them first; these pin the rule
+		// whatever net/url does with control characters later.
+		{"url with vertical tab", func(source *Source) { source.URL = "https://x/a\vb" }, "source url"},
+		{"url with form feed", func(source *Source) { source.URL = "https://x/a\fb" }, "source url"},
 		{"url with bracket", func(source *Source) { source.URL = "https://x/a]" }, "source url"},
 		{"empty url", func(source *Source) { source.URL = "" }, "source url"},
 		{"suite with space", func(source *Source) { source.Suite = "noble main" }, "suite"},
@@ -133,7 +144,10 @@ func TestValidateSources(t *testing.T) {
 	if problems := Validate(imageRecipe); len(problems) != 1 || !strings.Contains(problems[0], "used twice") {
 		t.Errorf("duplicate names: Validate = %q", problems)
 	}
-	for _, goodURL := range []string{"http://apt.llvm.org/noble/", "https://packages.microsoft.com/repos/code", "https://ppa.launchpadcontent.net/git-core/ppa/ubuntu"} {
+	// %23 reaches apt still encoded, so the "deb" line stays one line and
+	// the suite and components still apply: refusing it would be stricter
+	// than the format needs.
+	for _, goodURL := range []string{"http://apt.llvm.org/noble/", "https://packages.microsoft.com/repos/code", "https://ppa.launchpadcontent.net/git-core/ppa/ubuntu", "https://x/a%23b"} {
 		if err := CheckSourceURL(goodURL); err != nil {
 			t.Errorf("CheckSourceURL(%q) = %v", goodURL, err)
 		}

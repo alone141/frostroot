@@ -58,8 +58,15 @@ func (root systemRoot) aptSources() []aptSource {
 func parseOneLineSources(file, content string) []aptSource {
 	var entries []aptSource
 	for _, line := range strings.Split(content, "\n") {
+		// Apt takes "#" as a comment to the end of the line wherever it
+		// sits, not only at the start, so a hand-added "# vendor" after the
+		// components is not two more components. Cutting there also matches
+		// what apt does with a "#" inside the URL: the rest of the line
+		// goes with it, and what is left names no suite, so nothing is
+		// carried. Verified against apt 2.8.3 with apt-get indextargets.
+		line, _, _ = strings.Cut(line, "#")
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+		if line == "" {
 			continue
 		}
 		fields := strings.Fields(line)
@@ -145,32 +152,86 @@ func (s leftSource) String() string { return s.description + ": " + s.reason }
 // rest are reported. releaseSuite is the machine's code name, so a source
 // on that suite gets the recipe's default.
 func (root systemRoot) sourcesForRecipe(releaseSuite string) (carried []carriedSource, left []leftSource) {
-	usedNames := map[string]bool{}
-	seen := map[string]bool{}
+	// One URI and suite can be listed more than once: a .sources file added
+	// by a vendor's current instructions, beside the .list its older ones
+	// left behind. They are one repository, so they are decided together
+	// rather than the first copy standing for all of them.
+	var identities []string
+	copies := map[string][]aptSource{}
 	for _, entry := range root.aptSources() {
 		if isUbuntuArchiveURI(entry.uri) {
 			continue
 		}
 		identity := entry.uri + " " + entry.suite
-		if seen[identity] {
+		if _, grouped := copies[identity]; !grouped {
+			identities = append(identities, identity)
+		}
+		copies[identity] = append(copies[identity], entry)
+	}
+	usedNames := map[string]bool{}
+	for _, identity := range identities {
+		source, problem := root.carryOneSource(copies[identity], releaseSuite, usedNames)
+		if problem != nil {
+			left = append(left, *problem)
 			continue
 		}
-		seen[identity] = true
-		description := fmt.Sprintf("%s (%s %s)", entry.file, entry.uri, entry.suite)
+		usedNames[source.source.Name] = true
+		carried = append(carried, source)
+	}
+	return carried, left
+}
+
+// describeAptSource names an entry for the report.
+func describeAptSource(entry aptSource) string {
+	return fmt.Sprintf("%s (%s %s)", entry.file, entry.uri, entry.suite)
+}
+
+// carryOneSource turns every copy of one URI and suite into a single recipe
+// source, or reports why none of them can be carried. Copies that name a
+// signing key are tried first, so a signed .sources entry wins over the
+// unsigned .list beside it instead of the file order deciding; the same
+// order picks which failure to report, because "the key could not be read"
+// tells a person more than "no signed-by key".
+func (root systemRoot) carryOneSource(entries []aptSource, releaseSuite string, usedNames map[string]bool) (carriedSource, *leftSource) {
+	var ordered []aptSource
+	for _, entry := range entries {
+		if entry.signedBy != "" {
+			ordered = append(ordered, entry)
+		}
+	}
+	for _, entry := range entries {
+		if entry.signedBy == "" {
+			ordered = append(ordered, entry)
+		}
+	}
+	// The components belong to the repository, not to whichever copy wins.
+	components := unionComponents(entries)
+	var firstProblem *leftSource
+	refuse := func(entry aptSource, reason string) {
+		if firstProblem == nil {
+			firstProblem = &leftSource{describeAptSource(entry), reason}
+		}
+	}
+	for _, entry := range ordered {
 		if entry.suite == "./" || entry.suite == "/" || strings.HasSuffix(entry.suite, "/") {
-			left = append(left, leftSource{description, "a flat repository without a suite, which the recipe cannot express"})
+			refuse(entry, "a flat repository without a suite, which the recipe cannot express")
 			continue
 		}
 		if entry.signedBy == "" {
-			left = append(left, leftSource{description, "no signed-by key: it relies on /etc/apt/trusted.gpg.d or apt-key, and the recipe needs the key as a file"})
+			refuse(entry, "no signed-by key: it relies on /etc/apt/trusted.gpg.d or apt-key, and the recipe needs the key as a file")
 			continue
 		}
 		key, keyOrigin, err := root.sourceKey(entry.signedBy)
 		if err != nil {
-			left = append(left, leftSource{description, err.Error()})
+			refuse(entry, err.Error())
 			continue
 		}
-		source := recipe.Source{Name: sourceNameFor(entry.uri, entry.suite, releaseSuite, usedNames), URL: strings.TrimRight(entry.uri, "/"), Suite: entry.suite, Components: slices.Clone(entry.components)}
+		source := recipe.Source{
+			Name:       sourceNameFor(entry.uri, entry.suite, releaseSuite, usedNames),
+			URL:        strings.TrimRight(entry.uri, "/"),
+			Suite:      entry.suite,
+			Components: slices.Clone(components),
+		}
 		if source.Suite == releaseSuite {
 			source.Suite = ""
 		}
@@ -179,13 +240,45 @@ func (root systemRoot) sourcesForRecipe(releaseSuite string) (carried []carriedS
 		}
 		source.Key = sources.KeyPathFor(source.Name)
 		if problems := recipe.CheckSource(source); len(problems) > 0 {
-			left = append(left, leftSource{description, "fields the recipe cannot express: " + problems[0].Error()})
+			refuse(entry, "fields the recipe cannot express: "+problems[0].Error())
 			continue
 		}
-		usedNames[source.Name] = true
-		carried = append(carried, carriedSource{source: source, key: key, from: entry.file + ", key " + keyOrigin})
+		return carriedSource{source: source, key: key, from: sourceOrigin(entry, entries, keyOrigin)}, nil
 	}
-	return carried, left
+	return carriedSource{}, firstProblem
+}
+
+// unionComponents returns every component the copies of one repository name,
+// once each and in the order the files list them. Apt fetched all of them,
+// so carrying only the winning copy's would quietly drop what the other was
+// installing from. A name the recipe cannot express is left out rather than
+// allowed to spoil the source: the entry it came from is reported anyway.
+func unionComponents(entries []aptSource) []string {
+	var components []string
+	for _, entry := range entries {
+		for _, component := range entry.components {
+			if recipe.CheckComponent(component) == nil && !slices.Contains(components, component) {
+				components = append(components, component)
+			}
+		}
+	}
+	return components
+}
+
+// sourceOrigin says where a carried source came from, naming the other files
+// that list the same repository so that folding them together is visible.
+func sourceOrigin(chosen aptSource, entries []aptSource, keyOrigin string) string {
+	var others []string
+	for _, entry := range entries {
+		if entry.file != chosen.file && !slices.Contains(others, entry.file) {
+			others = append(others, entry.file)
+		}
+	}
+	origin := chosen.file + ", key " + keyOrigin
+	if len(others) > 0 {
+		origin += " (also listed in " + strings.Join(others, ", ") + ")"
+	}
+	return origin
 }
 
 // sourceKey reads a Signed-By value as a key: inline, or a file under the
@@ -198,7 +291,11 @@ func (root systemRoot) sourceKey(signedBy string) (armored []byte, origin string
 		}
 		return pgp.Armor(key.Binary), "inline in the source file", nil
 	}
-	data, err := os.ReadFile(root.path(strings.TrimPrefix(signedBy, "/")))
+	keyPath, inside := root.pathInRoot(strings.TrimPrefix(signedBy, "/"))
+	if !inside {
+		return nil, "", fmt.Errorf("the signed-by key %s is outside %s, so it belongs to this machine rather than the one being captured", signedBy, root)
+	}
+	data, err := os.ReadFile(keyPath)
 	if err != nil {
 		return nil, "", fmt.Errorf("the signed-by key %s could not be read: %w", signedBy, err)
 	}
@@ -212,9 +309,6 @@ func (root systemRoot) sourceKey(signedBy string) (armored []byte, origin string
 // sourceNameSeparators replaces every run of characters a source name cannot
 // hold.
 var sourceNameSeparators = regexp.MustCompile(`[^a-z0-9-]+`)
-
-// maxSourceNameLength mirrors the recipe's rule.
-const maxSourceNameLength = 32
 
 // sourceNameFor names a captured source: the catalog's name when the URL
 // and suite are a catalog entry's, "ppa-<owner>-<name>" for a PPA, otherwise
@@ -242,8 +336,8 @@ func sourceNameFor(uri, suite, releaseSuite string, usedNames map[string]bool) s
 		if name == "" {
 			name = "source"
 		}
-		if len(name) > maxSourceNameLength-3 {
-			name = strings.TrimRight(name[:maxSourceNameLength-3], "-")
+		if len(name) > recipe.MaxSourceNameLength-3 {
+			name = strings.TrimRight(name[:recipe.MaxSourceNameLength-3], "-")
 		}
 	}
 	unique := name
@@ -251,14 +345,4 @@ func sourceNameFor(uri, suite, releaseSuite string, usedNames map[string]bool) s
 		unique = fmt.Sprintf("%s-%d", name, suffix)
 	}
 	return unique
-}
-
-// hostOfURI returns the host of a source URI, as apt's index file names
-// start with it.
-func hostOfURI(uri string) string {
-	parsed, err := url.Parse(uri)
-	if err != nil {
-		return ""
-	}
-	return parsed.Host
 }

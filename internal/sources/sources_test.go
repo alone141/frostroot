@@ -211,3 +211,41 @@ func TestFetchKeyFailures(t *testing.T) {
 		})
 	}
 }
+
+// TestPPASourceNameFitsAndSeparates: a PPA name must fit the recipe's limit,
+// and two long ones must not land on the same name. Short names must not
+// change at all: they are already in recipes and in keys/<name>.asc.
+func TestPPASourceNameFitsAndSeparates(t *testing.T) {
+	for ppa, want := range map[string]string{
+		"deadsnakes/ppa":             "ppa-deadsnakes-ppa",
+		"git-core/ppa":               "ppa-git-core-ppa",
+		"longsleep/golang-backports": "ppa-longsleep-golang-backports",
+	} {
+		owner, name, err := ParsePPA(ppa)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := PPA(owner, name).Name; got != want {
+			t.Errorf("PPA(%q).Name = %q, want the unchanged %q", ppa, got, want)
+		}
+	}
+	long := []string{"canonical-server/server-backports", "canonical-server/server-backports-two", "someone-else/a-very-long-archive-name"}
+	seen := map[string]string{}
+	for _, ppa := range long {
+		owner, name, err := ParsePPA(ppa)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := PPA(owner, name).Name
+		if len(got) > recipe.MaxSourceNameLength {
+			t.Errorf("PPA(%q).Name = %q, %d characters (limit %d)", ppa, got, len(got), recipe.MaxSourceNameLength)
+		}
+		if problems := recipe.CheckSource(PPA(owner, name)); len(problems) > 0 {
+			t.Errorf("PPA(%q) is not a valid source: %v", ppa, problems)
+		}
+		if other, taken := seen[got]; taken {
+			t.Errorf("%s and %s both became %q", other, ppa, got)
+		}
+		seen[got] = ppa
+	}
+}

@@ -51,6 +51,10 @@ type LockPython struct {
 	Venv        string   `toml:"venv"`                  // absolute path of the virtual environment in the image
 	Interpreter string   `toml:"interpreter"`           // the interpreter that created it, as it reports itself
 	PipVersion  string   `toml:"pip_version,omitempty"` // the pip that resolved the wheels
+	// IndexURL is the index the wheels were resolved from, or "" for PyPI.
+	// A rebuild whose recipe names another one is a lock mismatch: the same
+	// name can be a different project on a different index.
+	IndexURL string `toml:"index_url,omitempty"`
 }
 
 // LockPyPI is one package in the image's virtual environment and the wheel it

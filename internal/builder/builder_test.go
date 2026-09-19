@@ -129,7 +129,7 @@ func listsForSpec(lists map[string]string, spec BootstrapSpec) map[string]string
 	if len(fields) < 3 || strings.HasPrefix(fields[1], "[") {
 		return lists
 	}
-	prefix, suite := aptListPrefix(fields[1]), fields[2]
+	prefix, suite := AptListPrefix(fields[1]), fields[2]
 	renamed := map[string]string{}
 	for name, content := range lists {
 		renamed[strings.Replace(name, "archive.ubuntu.com_ubuntu_dists_jammy", prefix+"_dists_"+suite, 1)] = content
@@ -657,6 +657,17 @@ func TestBuildStopsBeforeAnyWork(t *testing.T) {
 			wantError:    ErrBadWorkRoot,
 		},
 		{
+			// The recipe here has no extra sources, which is what used to
+			// skip this check: an offline build still hands apt a
+			// "copy://<work root>/pool" line, and apt splits it on the space.
+			name: "work root with a space",
+			adjust: func(options *Options) {
+				options.Getenv = fakeEnvironment(map[string]string{"XDG_CACHE_HOME": filepath.Join(t.TempDir(), "my cache")})
+			},
+			bootstrapper: &fakeBootstrapper{},
+			wantError:    ErrBadWorkRoot,
+		},
+		{
 			name:         "preflight fails",
 			adjust:       func(*Options) {},
 			bootstrapper: &preflightingBootstrapper{preflightErr: ErrNoKeyring},
@@ -1071,6 +1082,21 @@ func TestBuildOfflineRefusesBeforeAnyWork(t *testing.T) {
 			wantText:  "added to the recipe: ninja-build; packages removed from the recipe: build-essential",
 		},
 		{
+			// The same name can be a different project on a different index,
+			// so a rebuild that resolved elsewhere is not the image the lock
+			// describes, the way a changed apt source is not.
+			name: "recipe python index changed",
+			prepare: func(t *testing.T, options Options) recipe.Recipe {
+				t.Helper()
+				writeVendoredLock(t, options)
+				imageRecipe := sampleRecipe()
+				imageRecipe.Python = &recipe.Python{Include: []string{"requests"}, IndexURL: "https://nexus.example.com/repository/pypi/simple"}
+				return imageRecipe
+			},
+			wantError: ErrLockMismatch,
+			wantText:  "python index_url is https://nexus.example.com/repository/pypi/simple, the lock resolved from PyPI",
+		},
+		{
 			name: "pool incomplete",
 			prepare: func(t *testing.T, options Options) recipe.Recipe {
 				t.Helper()
@@ -1166,4 +1192,32 @@ func TestBuildCanceledKeepsWorkDirAndWritesNothing(t *testing.T) {
 		t.Fatal("an interrupted build keeps its work directory like any other failure")
 	}
 	assertNoBuildOutput(t, options)
+}
+
+// TestBuildLeavesNoTarballWhenTheLockCannotBePlaced: Build promises that a
+// failed build writes no lock and no tarball. The tarball is placed first,
+// so a lock that cannot be renamed into place used to leave dist/ holding a
+// new image beside an older lock, with nothing saying the two disagree; an
+// offline rebuild or a vendor run would then work from the wrong lock.
+// A directory in the lock's place is what makes the rename fail here.
+func TestBuildLeavesNoTarballWhenTheLockCannotBePlaced(t *testing.T) {
+	options, _ := newTestOptions(t)
+	lockPath := filepath.Join(options.RecipeDir, LockFileName)
+	if err := os.MkdirAll(filepath.Join(lockPath, "occupied"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	result, err := buildWith(&fakeBootstrapper{}, options)
+	if err == nil {
+		t.Fatal("a build whose lock cannot be placed must fail")
+	}
+	if !strings.Contains(err.Error(), "placing lock") {
+		t.Errorf("error = %v, want it to name the lock", err)
+	}
+	if _, statErr := os.Stat(expectedTarballPath(options)); !os.IsNotExist(statErr) {
+		t.Errorf("dist/ still holds a tarball the lock does not describe: %v", statErr)
+	}
+	if result.WorkDir == "" {
+		t.Error("a failed build keeps its work directory")
+	}
+	assertNoTemporaryFiles(t, options.RecipeDir)
 }

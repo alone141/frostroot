@@ -599,3 +599,36 @@ func TestRenderPythonScriptIsValidShell(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderPythonScriptWithAnInternalIndex: the networks that inspect TLS
+// are very often the ones that block pypi.org and mandate an internal
+// mirror. The resolve goes through it, and so does the pinned pip, whose
+// direct files.pythonhosted.org URL is exactly what such a network blocks.
+func TestRenderPythonScriptWithAnInternalIndex(t *testing.T) {
+	const index = "https://nexus.example.com/repository/pypi/simple"
+	imageRecipe := pythonRecipe()
+	imageRecipe.Python.IndexURL = index
+	script := renderPythonScript(t, imageRecipe, PythonOptions{})
+
+	for _, want := range []string{
+		"--index-url '" + index + "'",
+		// pip by version, not by URL: the direct URL is what is blocked.
+		"printf 'pip==%s --hash=sha256:%s\\n' '" + PinnedPip.Version + "'",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("the script lacks %q:\n%s", want, script)
+		}
+	}
+	// The hash still decides which file is accepted.
+	if !strings.Contains(script, PinnedPip.SHA256) {
+		t.Error("the pinned pip lost its hash, so any wheel the index offers would do")
+	}
+	if strings.Contains(script, PinnedPip.URL) {
+		t.Error("the direct pypi URL is still there, which the network blocks")
+	}
+	// Without an index the direct URL is still how pip is pinned.
+	plain := renderPythonScript(t, pythonRecipe(), PythonOptions{})
+	if !strings.Contains(plain, PinnedPip.URL) || strings.Contains(plain, "--index-url") {
+		t.Error("a recipe naming no index must resolve from PyPI exactly as before")
+	}
+}

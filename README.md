@@ -528,6 +528,35 @@ which.
 An environment of `numpy`, `pandas` and `jupyterlab` adds about 370 MB to the
 image and about 75 MB to `vendor/`.
 
+### Resolving from an internal index
+
+The networks that inspect TLS are very often the same networks that block
+pypi.org and mandate an internal mirror — Artifactory, Nexus, devpi. Name it
+in the recipe:
+
+```toml
+[python]
+include = ["requests"]
+index_url = "https://nexus.example.com/repository/pypi/simple"
+```
+
+`build` resolves through it and installs its pinned pip through it as well,
+since the direct `files.pythonhosted.org` URL that pin normally uses is
+exactly what such a network blocks. The hash still decides which file is
+accepted, so an index offering another build of that pip fails the install
+rather than passing it on. The lock records the index under `[python]`, the
+`[[pypi]]` URLs are whatever pip reported — the mirror's — and `vendor`
+fetches from there. An offline rebuild whose recipe names a different
+`index_url` than the lock is a lock mismatch, like a changed apt source.
+
+It must be `https`, because PyPI has no package signing: TLS is the only
+thing between the resolve and whatever answers, and the hashes that first
+resolve writes are pinned from then on. It must carry no credentials, since
+a recipe is committed and reviewed. It replaces PyPI rather than adding to
+it: `--extra-index-url` invites dependency confusion and is deliberately not
+offered. The field has no question in the form yet; write it by hand, and
+`frostroot edit` gives it back unchanged.
+
 ## Networks that inspect TLS
 
 Many corporate networks terminate TLS at a proxy and re-sign every response
@@ -589,6 +618,25 @@ image name from the hostname. Third-party apt sources that have a signing
 key (`signed-by` in a `.list` file, `Signed-By` in a `.sources` file, as a
 key file or inline) become `[[sources]]` entries, with their keys saved
 under `keys/`; sources without one, and flat repositories, are reported.
+
+The certificate authorities an organization added, in
+`/usr/local/share/ca-certificates`, become `[certificates]` entries saved
+under `certs/`, so a machine behind a proxy that inspects TLS keeps its trust
+in the image. They live outside `/etc`, which is why nothing else capture
+reads would find them. `/etc/ssl/certs` is not copied: `update-ca-certificates`
+regenerates it from that directory and from the `ca-certificates` package, so
+a certificate only found there is reported instead, with what to do about it.
+
+A machine installed from the Ubuntu installer needs two things said about
+it. Its package list is long, because the installer marks much of its seed
+as manually installed and capture cannot tell those from what you chose.
+And its kernel, bootloader, firmware and drivers — `linux-image-*`,
+`grub-*`, `linux-firmware`, `*-microcode`, `nvidia-driver-*`, `mdadm`,
+`lvm2` and the rest — belong to the machine, not to an image: WSL supplies
+its own kernel and has no bootloader or disks to assemble. Capture leaves
+those out and lists every one under "Packages that belong to the machine",
+so you can put back any you meant. `linux-tools-*` is not among them: perf
+is useful inside WSL. Snaps stay report-only.
 
 Two rules, both deliberate:
 
@@ -829,7 +877,9 @@ capture` (v0.3), vendoring and offline rebuilds with a release process
 (v0.6), Python packages from PyPI (v0.7), certificate authorities for
 networks that inspect TLS (v0.8), a form that shows the recipe or the diff
 before writing, capture's findings first, a Trust page, a failed build that
-explains itself, and screens for narrow and non-UTF-8 terminals (v0.9).
+explains itself, and screens for narrow and non-UTF-8 terminals (v0.9), a
+package picker that searches the whole Ubuntu archive from inside the form
+(v0.10), and the same search for PyPI names (v0.11).
 
 **Deliberately not yet:** Fedora or any non-Ubuntu family · flat or unsigned
 apt repositories · npm and cargo lockfiles · Python source distributions ·

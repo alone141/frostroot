@@ -52,8 +52,9 @@ var (
 // maxUserNameLength is the longest name useradd accepts.
 const maxUserNameLength = 32
 
-// maxSourceNameLength keeps keyring file names short.
-const maxSourceNameLength = 32
+// MaxSourceNameLength keeps keyring file names short. Capture and the PPA
+// namer hold to the same limit, so it is one constant rather than three.
+const MaxSourceNameLength = 32
 
 // maxPythonNameLength is the longest project name PyPI accepts.
 const maxPythonNameLength = 100
@@ -104,6 +105,9 @@ func Validate(imageRecipe Recipe) []string {
 		}
 		seenPythonNames[normalized] = true
 	}
+	if indexURL := imageRecipe.PythonIndexURL(); indexURL != "" {
+		addProblem(CheckPythonIndexURL(indexURL))
+	}
 	seenCertificateNames := map[string]bool{}
 	for _, certificatePath := range imageRecipe.CertificatePaths() {
 		if err := CheckCertificatePath(certificatePath); err != nil {
@@ -134,8 +138,8 @@ func Validate(imageRecipe Recipe) []string {
 // the recipe directory.
 func CheckSource(source Source) []error {
 	var problems []error
-	if !sourceNamePattern.MatchString(source.Name) || len(source.Name) > maxSourceNameLength {
-		problems = append(problems, fmt.Errorf("invalid source name %q (lowercase letters, digits and dashes; 1-%d characters)", source.Name, maxSourceNameLength))
+	if !sourceNamePattern.MatchString(source.Name) || len(source.Name) > MaxSourceNameLength {
+		problems = append(problems, fmt.Errorf("invalid source name %q (lowercase letters, digits and dashes; 1-%d characters)", source.Name, MaxSourceNameLength))
 	}
 	if err := CheckSourceURL(source.URL); err != nil {
 		problems = append(problems, err)
@@ -144,8 +148,8 @@ func CheckSource(source Source) []error {
 		problems = append(problems, fmt.Errorf("invalid suite %q (letters, digits, dot, dash, underscore)", source.Suite))
 	}
 	for _, component := range source.Components {
-		if !componentPattern.MatchString(component) {
-			problems = append(problems, fmt.Errorf("invalid component %q (lowercase letters, digits, dot, plus, dash)", component))
+		if err := CheckComponent(component); err != nil {
+			problems = append(problems, err)
 		}
 	}
 	if err := CheckKeyPath(source.Key); err != nil {
@@ -154,13 +158,54 @@ func CheckSource(source Source) []error {
 	return problems
 }
 
+// sourceURLMetacharacters are the characters a "deb" line cannot carry in a
+// URL. Apt splits the line on whitespace — which for it includes the
+// vertical tab and the form feed — reads options out of brackets, and takes
+// "#" as a comment to the end of the line, wherever it sits. Any of them
+// silently produces another source than the recipe names, or none at all.
+//
+// url.Parse already refuses the control characters here, so they are named
+// for the reader and to keep the rule in one place rather than resting on
+// net/url's policy; the space, the brackets and "#" are the ones it lets
+// through. Percent-encoded forms such as %23 stay allowed: they reach apt
+// still encoded, so the line stays one line.
+const sourceURLMetacharacters = " \t\r\n\v\f[]#"
+
 // CheckSourceURL reports why url cannot be an apt source URL, or nil: it
-// must be http or https with a host and no whitespace, because it lands in a
-// "deb" line.
+// must be http or https with a host and none of the characters that would
+// break the "deb" line it lands in.
 func CheckSourceURL(sourceURL string) error {
 	parsed, err := url.Parse(sourceURL)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.Fragment != "" || strings.ContainsAny(sourceURL, " \t\r\n[]") {
-		return fmt.Errorf("invalid source url %q (expected http or https, such as https://download.docker.com/linux/ubuntu)", sourceURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || strings.ContainsAny(sourceURL, sourceURLMetacharacters) {
+		return fmt.Errorf("invalid source url %q (expected http or https with no space, bracket or #, such as https://download.docker.com/linux/ubuntu)", sourceURL)
+	}
+	return nil
+}
+
+// CheckComponent reports why component cannot be an apt component, or nil.
+// Capture needs it one name at a time: it reads the components of several
+// copies of one source, and a name it cannot express should be left out
+// rather than spoil the rest.
+func CheckComponent(component string) error {
+	if !componentPattern.MatchString(component) {
+		return fmt.Errorf("invalid component %q (lowercase letters, digits, dot, plus, dash)", component)
+	}
+	return nil
+}
+
+// CheckPythonIndexURL reports why indexURL cannot be the [python] index_url,
+// or nil. It must be https with a host: PyPI has no package signing, so TLS
+// is the only thing standing between the resolve and whatever answers, and
+// the hashes that first resolve writes into the lock are then pinned
+// forever. It must carry no credentials either, because a recipe is a file
+// people commit and review.
+func CheckPythonIndexURL(indexURL string) error {
+	parsed, err := url.Parse(indexURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || strings.ContainsAny(indexURL, sourceURLMetacharacters) {
+		return fmt.Errorf("invalid python index_url %q (expected https with no space or #, such as https://nexus.example.com/repository/pypi/simple)", indexURL)
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("invalid python index_url %q (it carries credentials, which must not be committed in a recipe)", indexURL)
 	}
 	return nil
 }
@@ -198,6 +243,11 @@ func CheckCertificatePath(certificatePath string) error {
 	}
 	return nil
 }
+
+// CertificatesDirName is where recipe directories keep certificate files,
+// as keys/ holds signing keys. Nothing requires it — any relative path
+// inside the recipe directory is valid — but capture and the docs use it.
+const CertificatesDirName = "certs"
 
 // CertificateName is what a certificate file is called in the image, without
 // the .crt that update-ca-certificates requires: the file's base name

@@ -1,16 +1,26 @@
 package capture
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/md5"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
+	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"frostroot/internal/builder"
 	"frostroot/internal/pgp"
 	"frostroot/internal/recipe"
 )
@@ -179,7 +189,7 @@ func TestReadWSLMachine(t *testing.T) {
 		t.Errorf("third-party sources = %+v", thirdPartySources)
 	}
 	expectations := map[string][]string{
-		AreaThirdPartyPackages: {"golang-1.24 (ppa.launchpadcontent.net)"}, // docker-ce's source is in the recipe now
+		AreaThirdPartyPackages: {"golang-1.24 (ppa.launchpadcontent.net/longsleep/golang-backports/ubuntu noble)"}, // docker-ce's source is in the recipe now
 		AreaUnsourcedPackages:  {"mytool"},
 		AreaModifiedConfig:     {"/etc/adduser.conf"},
 		AreaAddedEtc:           {"/etc/profile.d/go.sh"},
@@ -314,7 +324,7 @@ func TestReportAndSummary(t *testing.T) {
 	for _, wantText := range []string{
 		"# frostroot capture report", "## Captured", "## Not captured",
 		"- Ubuntu 24.04, amd64", "user \"melik\" from /etc/wsl.conf",
-		"### Packages from third-party sources (1)", "- golang-1.24 (ppa.launchpadcontent.net)",
+		"### Packages from third-party sources (1)", "- golang-1.24 (ppa.launchpadcontent.net/longsleep/golang-backports/ubuntu noble)",
 		"### Modified configuration files (1)", "- /etc/adduser.conf",
 		"### The user's home directory (5)", ".ssh (secrets: never copy)",
 	} {
@@ -438,5 +448,316 @@ func TestIsGeneratedEtcPath(t *testing.T) {
 		if got := isGeneratedEtcPath(path); got != want {
 			t.Errorf("isGeneratedEtcPath(%q) = %v, want %v", path, got, want)
 		}
+	}
+}
+
+// TestSourcesForRecipeCarriesTheSignedCopy is the duplicate URI+suite case:
+// a vendor's current instructions add a .sources file beside the .list an
+// older version left, and both name one repository. Deciding on the first
+// copy alone dropped the signed one silently, so the repository reached
+// neither the recipe nor the report.
+func TestSourcesForRecipeCarriesTheSignedCopy(t *testing.T) {
+	root := buildRoot(t, map[string]string{
+		"etc/apt/keyrings/docker.asc": string(pgp.Armor(fakeKeyPacket)),
+		// Read first, and unsigned: on its own it could only be reported.
+		"etc/apt/sources.list.d/docker.list": "deb https://download.docker.com/linux/ubuntu noble stable\n",
+		"etc/apt/sources.list.d/docker.sources": "Types: deb\nURIs: https://download.docker.com/linux/ubuntu\n" +
+			"Suites: noble\nComponents: edge\nSigned-By: /etc/apt/keyrings/docker.asc\n",
+	})
+	carried, left := systemRoot(root).sourcesForRecipe("noble")
+	if len(carried) != 1 || len(left) != 0 {
+		t.Fatalf("carried %+v, left %+v", carried, left)
+	}
+	source := carried[0].source
+	if source.Name != "docker" || source.URL != "https://download.docker.com/linux/ubuntu" {
+		t.Errorf("source = %+v", source)
+	}
+	// Both lines were live, so both components are what the machine fetched.
+	if !slices.Equal(source.Components, []string{"stable", "edge"}) {
+		t.Errorf("components = %v, want [stable edge]", source.Components)
+	}
+	// The key came from the .sources copy, and folding the two is visible.
+	if !strings.Contains(carried[0].from, "docker.sources") || !strings.Contains(carried[0].from, "also listed in") {
+		t.Errorf("from = %q", carried[0].from)
+	}
+}
+
+// TestSourcesForRecipeStillReportsAnUnsignedOnlyRepository keeps the other
+// half honest: with no signed copy, the repository is still reported.
+func TestSourcesForRecipeStillReportsAnUnsignedOnlyRepository(t *testing.T) {
+	root := buildRoot(t, map[string]string{
+		"etc/apt/sources.list.d/docker.list":  "deb https://download.docker.com/linux/ubuntu noble stable\n",
+		"etc/apt/sources.list.d/docker2.list": "deb https://download.docker.com/linux/ubuntu noble edge\n",
+	})
+	carried, left := systemRoot(root).sourcesForRecipe("noble")
+	if len(carried) != 0 || len(left) != 1 {
+		t.Fatalf("carried %+v, left %+v", carried, left)
+	}
+	if !strings.Contains(left[0].reason, "no signed-by key") {
+		t.Errorf("reason = %q", left[0].reason)
+	}
+}
+
+// TestSourcesForRecipePrefersTheMostSpecificFailure: when no copy can be
+// carried, the copy that named a key says more than the one that did not.
+func TestSourcesForRecipePrefersTheMostSpecificFailure(t *testing.T) {
+	root := buildRoot(t, map[string]string{
+		"etc/apt/sources.list.d/a.list": "deb https://x.example/ubuntu noble main\n",
+		"etc/apt/sources.list.d/b.list": "deb [signed-by=/etc/apt/keyrings/gone.gpg] https://x.example/ubuntu noble main\n",
+	})
+	_, left := systemRoot(root).sourcesForRecipe("noble")
+	if len(left) != 1 || !strings.Contains(left[0].reason, "gone.gpg could not be read") {
+		t.Fatalf("left = %+v", left)
+	}
+}
+
+// TestPackageOriginsSeparateRepositoriesOnOneHost is the PPA case: every
+// Launchpad PPA lives on ppa.launchpadcontent.net, so attributing packages
+// to the host alone let one carried PPA vouch for all the others.
+func TestPackageOriginsSeparateRepositoriesOnOneHost(t *testing.T) {
+	const launchpad = "var/lib/apt/lists/ppa.launchpadcontent.net_"
+	root := systemRoot(buildRoot(t, map[string]string{
+		launchpad + "deadsnakes_ppa_ubuntu_dists_noble_main_binary-amd64_Packages":             "Package: python3.13\n",
+		launchpad + "longsleep_golang-backports_ubuntu_dists_noble_main_binary-amd64_Packages": "Package: golang-1.24\n",
+	}))
+	origins := root.packageOrigins()
+	// Only deadsnakes is in the recipe.
+	carriedIndexes := map[aptIndex]bool{
+		{prefix: builder.AptListPrefix("https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu"), suite: "noble"}: true,
+	}
+	thirdParty, unsourced := thirdPartyPackageFindings([]string{"python3.13", "golang-1.24"}, origins, carriedIndexes)
+	if unsourced.Count != 0 {
+		t.Errorf("unsourced = %+v", unsourced)
+	}
+	want := []string{"golang-1.24 (ppa.launchpadcontent.net/longsleep/golang-backports/ubuntu noble)"}
+	if !slices.Equal(thirdParty.Examples, want) {
+		t.Errorf("third-party = %v, want %v", thirdParty.Examples, want)
+	}
+}
+
+func TestAptIndexOf(t *testing.T) {
+	index, ok := aptIndexOf("ppa.launchpadcontent.net_longsleep_golang-backports_ubuntu_dists_noble_main_binary-amd64_Packages")
+	if !ok || index.prefix != "ppa.launchpadcontent.net_longsleep_golang-backports_ubuntu" || index.suite != "noble" {
+		t.Fatalf("aptIndexOf = %+v, ok %v", index, ok)
+	}
+	// Apt writes a literal underscore as %5f, so Describe reads the URL back.
+	escaped, _ := aptIndexOf("ex.com_my%5frepo_ubuntu_dists_noble_main_binary-amd64_Packages")
+	if got := escaped.Describe(); got != "ex.com/my_repo/ubuntu noble" {
+		t.Errorf("Describe = %q", got)
+	}
+	if _, ok := aptIndexOf("weird_file_name_Packages"); ok {
+		t.Error("a name without a dists segment must not be attributed")
+	}
+}
+
+// TestCaptureKeepsSignedByInsideTheRoot: with --root DIR the tree was
+// written by another machine, so a Signed-By that climbs out of it, or a
+// symlink that leaves it without climbing, must not read this machine's
+// files into the recipe.
+func TestCaptureKeepsSignedByInsideTheRoot(t *testing.T) {
+	outside := t.TempDir()
+	hostKey := filepath.Join(outside, "host.asc")
+	if err := os.WriteFile(hostKey, pgp.Armor(fakeKeyPacket), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := buildRoot(t, map[string]string{
+		"etc/apt/sources.list.d/climb.list": "deb [signed-by=/etc/apt/keyrings/../../../../" +
+			strings.TrimPrefix(hostKey, "/") + "] https://climb.example/ubuntu noble main\n",
+		"etc/apt/sources.list.d/link.list": "deb [signed-by=/etc/apt/keyrings/link.asc] https://link.example/ubuntu noble main\n",
+		"etc/apt/keyrings/link.asc":        "-> " + hostKey,
+	})
+	carried, left := systemRoot(root).sourcesForRecipe("noble")
+	if len(carried) != 0 {
+		t.Fatalf("a key outside the root was carried: %+v", carried)
+	}
+	if len(left) != 2 {
+		t.Fatalf("left = %+v", left)
+	}
+	for _, source := range left {
+		if !strings.Contains(source.reason, "outside") {
+			t.Errorf("reason = %q, want it to say the key is outside the root", source.reason)
+		}
+	}
+}
+
+// A Signed-By with a harmless ".." that stays inside the root still works:
+// the rule is about leaving, not about the characters.
+func TestCaptureAllowsDotDotThatStaysInsideTheRoot(t *testing.T) {
+	root := buildRoot(t, map[string]string{
+		"etc/apt/sources.list.d/x.list": "deb [signed-by=/etc/apt/keyrings/../keyrings/x.asc] https://x.example/ubuntu noble main\n",
+		"etc/apt/keyrings/x.asc":        string(pgp.Armor(fakeKeyPacket)),
+	})
+	carried, left := systemRoot(root).sourcesForRecipe("noble")
+	if len(carried) != 1 || len(left) != 0 {
+		t.Fatalf("carried %+v, left %+v", carried, left)
+	}
+}
+
+// TestParseOneLineSourcesStripsComments: apt takes "#" as a comment to the
+// end of the line wherever it sits, so a hand-added note after the
+// components is not two more components. It used to make CheckSource refuse
+// the source, which reported a working repository as one it could not carry.
+func TestParseOneLineSourcesStripsComments(t *testing.T) {
+	entries := parseOneLineSources("/etc/apt/sources.list", strings.Join([]string{
+		"deb [signed-by=/k.gpg] https://example.com noble main # vendor said so",
+		"# a whole-line comment",
+		"   ",
+		"deb [signed-by=/k.gpg] https://two.example noble main universe",
+		"deb [signed-by=/k.gpg] https://hash.example/a#b noble main", // apt drops this line
+	}, "\n"))
+	if len(entries) != 2 {
+		t.Fatalf("entries = %+v, want the two apt would use", entries)
+	}
+	if !slices.Equal(entries[0].components, []string{"main"}) {
+		t.Errorf("components = %v, want [main]", entries[0].components)
+	}
+	if !slices.Equal(entries[1].components, []string{"main", "universe"}) {
+		t.Errorf("components = %v, want [main universe]", entries[1].components)
+	}
+}
+
+// selfSignedPEM returns one certificate, for fixtures that need a real one.
+func selfSignedPEM(t *testing.T, commonName string) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               pkix.Name{CommonName: commonName},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+// TestCaptureCarriesTheMachinesCertificateAuthorities: the authorities an
+// organization added live in /usr/local/share/ca-certificates, which is
+// outside /etc and so outside everything else capture reads. They are
+// exactly what a machine behind a TLS-inspecting proxy needs in its image.
+func TestCaptureCarriesTheMachinesCertificateAuthorities(t *testing.T) {
+	corp := selfSignedPEM(t, "corp-root")
+	root := systemRoot(buildRoot(t, map[string]string{
+		"usr/local/share/ca-certificates/corp root.crt": string(corp),
+		"usr/local/share/ca-certificates/notes.txt":     "not a certificate, and not a .crt",
+		"usr/local/share/ca-certificates/broken.crt":    "-----BEGIN CERTIFICATE-----\nnonsense\n-----END CERTIFICATE-----\n",
+	}))
+	carried, left := root.certificatesForRecipe()
+	if len(carried) != 1 {
+		t.Fatalf("carried %+v, want the one real certificate", carried)
+	}
+	// The file name becomes one the recipe accepts, and the path is relative.
+	if carried[0].path != "certs/corp-root.pem" {
+		t.Errorf("path = %q, want certs/corp-root.pem", carried[0].path)
+	}
+	if err := recipe.CheckCertificatePath(carried[0].path); err != nil {
+		t.Errorf("the path the recipe would hold is invalid: %v", err)
+	}
+	if !strings.Contains(string(carried[0].pem), "BEGIN CERTIFICATE") {
+		t.Errorf("pem = %q", carried[0].pem)
+	}
+	// A .crt that is not a certificate is reported, not written as one.
+	if len(left) != 1 || !strings.Contains(left[0].description, "broken.crt") {
+		t.Errorf("left = %+v, want the unreadable .crt reported", left)
+	}
+}
+
+// TestCaptureReportsTrustNoPackageOwns: update-ca-certificates rebuilds
+// /etc/ssl/certs, so a file put there by hand is not carried and will not
+// survive into an image. Capture's rule is that it says so.
+func TestCaptureReportsTrustNoPackageOwns(t *testing.T) {
+	root := systemRoot(buildRoot(t, map[string]string{
+		"etc/ssl/certs/ca-certificates.crt": "the generated bundle",
+		"etc/ssl/certs/DigiCert.pem":        "owned by the ca-certificates package",
+		"etc/ssl/certs/by-hand.pem":         "put here by someone",
+	}))
+	owned := map[string]bool{"/etc/ssl/certs/DigiCert.pem": true}
+	finding := root.unaccountedTrustFinding(owned, true, nil)
+	if finding.Count != 1 || !slices.Equal(finding.Examples, []string{"/etc/ssl/certs/by-hand.pem"}) {
+		t.Errorf("finding = %+v, want only the hand-placed file", finding)
+	}
+	// Without dpkg's file lists the area is unavailable, not empty.
+	if unavailable := root.unaccountedTrustFinding(nil, false, nil); unavailable.Unavailable == "" {
+		t.Error("with no ownership data the area must say it could not be checked")
+	}
+}
+
+// TestCaptureLeavesOutPackagesThatBelongToTheMachine: capture works on any
+// amd64 Ubuntu root, including one installed from the Ubuntu installer,
+// which marks its kernel, bootloader, firmware and drivers as manual. Those
+// read as packages someone asked for, and WSL has its own kernel and no
+// bootloader, so carrying them is dead weight whose maintainer scripts slow
+// every build. They are left out, and never silently.
+func TestCaptureLeavesOutPackagesThatBelongToTheMachine(t *testing.T) {
+	var status strings.Builder
+	machine := []string{
+		"linux-image-generic", "linux-headers-6.8.0-45", "linux-modules-6.8.0-45",
+		"linux-generic-hwe-24.04", "linux-firmware", "grub-efi-amd64", "shim-signed",
+		"intel-microcode", "amd64-microcode", "nvidia-driver-550", "nvidia-dkms-550",
+		"ubuntu-drivers-common", "efibootmgr", "os-prober", "initramfs-tools",
+		"cryptsetup-initramfs", "mdadm", "lvm2",
+	}
+	// linux-tools-* is perf and friends, useful inside WSL: a bare "linux-"
+	// prefix would sweep it up with the kernel, and must not.
+	keep := []string{"build-essential", "git", "linux-tools-generic", "linux-tools-common"}
+	for _, name := range append(append([]string{}, machine...), keep...) {
+		fmt.Fprintf(&status, "Package: %s\nStatus: install ok installed\nPriority: optional\nArchitecture: amd64\n\n", name)
+	}
+	fmt.Fprint(&status, "Package: dpkg\nStatus: install ok installed\nPriority: required\nArchitecture: amd64\n\n")
+
+	root := buildRoot(t, map[string]string{
+		"etc/os-release":      "ID=ubuntu\nVERSION_ID=\"24.04\"\n",
+		"etc/hostname":        "server\n",
+		"etc/passwd":          "root:x:0:0::/root:/bin/bash\nadmin:x:1000:1000::/home/admin:/bin/bash\n",
+		"var/lib/dpkg/status": status.String(),
+	})
+	snapshot, err := Read(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range machine {
+		if slices.Contains(snapshot.Packages, name) {
+			t.Errorf("%s belongs to the machine and must not be in the recipe", name)
+		}
+	}
+	for _, name := range keep {
+		if !slices.Contains(snapshot.Packages, name) {
+			t.Errorf("%s is useful in an image and must stay in the recipe", name)
+		}
+	}
+	finding := snapshot.Finding(AreaMachinePackages)
+	if finding.Count != len(machine) {
+		t.Errorf("finding count = %d, want %d: %v", finding.Count, len(machine), finding.Examples)
+	}
+	for _, name := range machine {
+		if !slices.Contains(finding.Examples, name) {
+			t.Errorf("%s was left out without being reported", name)
+		}
+	}
+}
+
+// A WSL root has none of them, and the area reports nothing found rather
+// than going missing.
+func TestCaptureMachinePackagesAreNothingOnAWSLRoot(t *testing.T) {
+	root := buildRoot(t, map[string]string{
+		"etc/os-release":      "ID=ubuntu\nVERSION_ID=\"24.04\"\n",
+		"etc/hostname":        "wsl\n",
+		"etc/passwd":          "root:x:0:0::/root:/bin/bash\nmelik:x:1000:1000::/home/melik:/bin/bash\n",
+		"var/lib/dpkg/status": "Package: dpkg\nStatus: install ok installed\nPriority: required\nArchitecture: amd64\n\nPackage: git\nStatus: install ok installed\nPriority: optional\nArchitecture: amd64\n\n",
+	})
+	snapshot, err := Read(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finding := snapshot.Finding(AreaMachinePackages)
+	if finding.Area != AreaMachinePackages || finding.Count != 0 {
+		t.Errorf("finding = %+v, want the area present with nothing found", finding)
 	}
 }

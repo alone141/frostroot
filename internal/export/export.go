@@ -41,6 +41,10 @@ func Place(sourcePath, destinationPath string, onCopyProgress CopyProgressFunc) 
 	return place(sourcePath, destinationPath, os.Rename, onCopyProgress)
 }
 
+// removeFile is os.Remove. A test replaces it to prove that a copy whose
+// source cannot be removed is still a placed file.
+var removeFile = os.Remove
+
 // renameFunc has the signature of os.Rename. Tests pass their own to simulate
 // a move across filesystems.
 type renameFunc func(oldPath, newPath string) error
@@ -59,7 +63,15 @@ func place(sourcePath, destinationPath string, rename renameFunc, onCopyProgress
 	if err := copyAcrossFilesystems(sourcePath, destinationPath, onCopyProgress); err != nil {
 		return err
 	}
-	return os.Remove(sourcePath)
+	// The destination already holds the new bytes, so the move has happened.
+	// Removing the source is tidying, not part of placing, and it sits in a
+	// work directory the caller is about to delete anyway. Returning its
+	// error would tell the caller that a file which did arrive did not, and
+	// the caller acts on that by refusing to write the lock that describes
+	// it. Remove on drvfs, the mount WSL uses for Windows drives, is exactly
+	// where this happens.
+	_ = removeFile(sourcePath)
+	return nil
 }
 
 // copyAcrossFilesystems copies sourcePath over destinationPath through a

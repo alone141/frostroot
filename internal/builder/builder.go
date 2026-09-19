@@ -187,8 +187,14 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if err != nil {
 		return Result{}, err
 	}
-	if len(imageRecipe.Sources) > 0 && strings.ContainsAny(workRoot, " \t[]") {
-		return Result{}, fmt.Errorf("%w: %s contains a space or a bracket, which an apt signed-by path cannot; set XDG_CACHE_HOME to another directory", ErrBadWorkRoot, workRoot)
+	// Apt splits a "deb" line on whitespace and reads options out of
+	// brackets, and every build hands it a path under the work root: the
+	// signed-by path of an extra source, and the copy:// URL of the
+	// vendored pool an offline build installs from. Neither can be quoted,
+	// so a work root holding one of these characters is refused before
+	// anything is built, whatever the recipe asks for.
+	if strings.ContainsAny(workRoot, " \t[]") {
+		return Result{}, fmt.Errorf("%w: %s contains a space or a bracket, which an apt source line cannot carry; set XDG_CACHE_HOME to another directory", ErrBadWorkRoot, workRoot)
 	}
 	progress := progressOrDiscard(options.Progress)
 	// The lines the image keeps: keys under /etc/apt/keyrings. The lines
@@ -249,12 +255,21 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	// debugging evidence. Nothing in dist/ or the lock is touched until the
 	// bootstrap has fully succeeded.
 	result := Result{WorkDir: workDir, Offline: offline != nil, SourceDateEpoch: instant.epoch, Reproducible: instant.fromLock}
-	var temporaryLockPath string
+	var temporaryLockPath, placedTarballPath string
 	failBuild := func(err error) (Result, error) {
+		// Best effort throughout: the build has already failed, and that
+		// error is the one returned.
 		if temporaryLockPath != "" {
-			// Best effort: the build has already failed, and that error is the
-			// one returned.
 			_ = os.Remove(temporaryLockPath)
+		}
+		if placedTarballPath != "" {
+			// The tarball is placed before the lock, so a lock that cannot be
+			// renamed into place would leave dist/ holding a new image beside
+			// the lock of an older one. Nothing says the two disagree, and an
+			// offline rebuild or a vendor run would then work from the wrong
+			// lock. Build promises a failed build writes no tarball, so the
+			// one just placed goes again.
+			_ = os.Remove(placedTarballPath)
 		}
 		return result, err
 	}
@@ -382,6 +397,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 				Venv:        PythonVenvPath,
 				Interpreter: pythonResult.Interpreter,
 				PipVersion:  pythonResult.PipVersion,
+				IndexURL:    imageRecipe.PythonIndexURL(),
 			}
 			lock.PyPI = pythonResult.Wheels
 			result.PythonPackageCount = len(pythonResult.Wheels)
@@ -406,6 +422,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if err := export.Place(bootstrapSpec.TarballPath, tarballPath, reportCopied); err != nil {
 		return failBuild(fmt.Errorf("placing tarball: %w", err))
 	}
+	placedTarballPath = tarballPath
 	if temporaryLockPath != "" {
 		// The lock goes into place only after the tarball has landed, so a
 		// lock never describes an image that does not exist.

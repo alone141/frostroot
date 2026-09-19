@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -365,5 +366,78 @@ func TestVersion(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// writeLockCertificate saves the server's own certificate authority beside
+// the recipe and records it in the lock, the way a build does for a recipe
+// with [certificates].
+func writeLockCertificate(t *testing.T, fixture *vendorFixture) {
+	t.Helper()
+	dir := filepath.Join(fixture.recipeDir, "certs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	authority := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: fixture.server.Certificate().Raw})
+	if err := os.WriteFile(filepath.Join(dir, "corp.pem"), authority, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fixture.lock.Certificates = []recipe.LockCertificate{{Name: "corp", Path: "certs/corp.pem", SHA256: "unused-here"}}
+	fixture.saveLock(t)
+}
+
+// TestVendorTrustsTheRecipeCertificates: a build fetches with the recipe's
+// [certificates] as well as --ca-bundle, so a recipe whose only authority
+// for an inspecting proxy lives there must vendor without the flag too.
+// Otherwise build records https URLs that vendor then refuses.
+func TestVendorTrustsTheRecipeCertificates(t *testing.T) {
+	fixture := newVendorFixture(t)
+	writeLockCertificate(t, fixture)
+	var stdout, stderr bytes.Buffer
+	app := newVendorApp(fixture, &stdout, &stderr)
+	app.VendorClient = nil // the real trust path, not the server's own client
+	if exitCode := app.Run([]string{"vendor"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr.String())
+	}
+	for _, entry := range fixture.lock.Packages {
+		if _, err := os.Stat(filepath.Join(fixture.recipeDir, "vendor", "debs", filepath.Base(entry.Filename))); err != nil {
+			t.Errorf("%s was not vendored: %v", entry.Name, err)
+		}
+	}
+}
+
+// The other half: with no authority for it anywhere, the same fetch must
+// still refuse the private certificate rather than trust it.
+func TestVendorWithoutAnyAuthorityRefusesThePrivateCertificate(t *testing.T) {
+	fixture := newVendorFixture(t)
+	var stdout, stderr bytes.Buffer
+	app := newVendorApp(fixture, &stdout, &stderr)
+	app.VendorClient = nil
+	if exitCode := app.Run([]string{"vendor"}); exitCode == exitSuccess {
+		t.Fatal("vendor trusted a certificate no authority signed")
+	}
+	if !strings.Contains(stderr.String(), "certificate") && !strings.Contains(stderr.String(), "x509") {
+		t.Errorf("stderr does not say the certificate is the problem:\n%s", stderr.String())
+	}
+}
+
+// A certificate the lock names but the recipe directory no longer holds is
+// reported before anything is downloaded: vendoring against a different set
+// of authorities than the build used should not happen quietly.
+func TestVendorReportsAMissingLockCertificate(t *testing.T) {
+	fixture := newVendorFixture(t)
+	writeLockCertificate(t, fixture)
+	if err := os.Remove(filepath.Join(fixture.recipeDir, "certs", "corp.pem")); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor"}); exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d", exitCode, exitUserError)
+	}
+	if !strings.Contains(stderr.String(), "certs/corp.pem") {
+		t.Errorf("stderr does not name the missing certificate:\n%s", stderr.String())
+	}
+	if fixture.requests.Load() != 0 {
+		t.Error("a refused vendor must not download")
 	}
 }

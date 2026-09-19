@@ -152,6 +152,16 @@ func (m *formModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 	case stageSummary:
+		// The summary's warning is computed from the package index as it
+		// stood when the questions ended. On a cold cache or with
+		// --refresh-index that fetch can still be in flight: names are
+		// typed into a picker that is a plain list editor until it lands,
+		// Enter reaches this page, and the warning about names no archive
+		// has would be missing from the one screen that asks whether to
+		// write. The index arriving is a reason to say it now.
+		if _, indexLoaded := msg.(pickerLoadedMsg); indexLoaded && m.preview != nil {
+			m.summary.setPreview(m.preview(m.binding.values()), m.width, m.height)
+		}
 		cmd, state := m.summary.Update(msg)
 		switch state {
 		case huh.StateAborted:
@@ -233,6 +243,22 @@ func newSummaryModel(summary string, preview Preview, glyphs glyphSet, width, he
 
 // Init starts the question.
 func (s *summaryModel) Init() tea.Cmd { return s.question.Init() }
+
+// setPreview replaces what the page shows above the question when the
+// preview is worth computing again, such as a package index that finished
+// loading after the questions did. The question itself is left alone: it
+// holds the answer and the focus, and the values it is about have not
+// changed.
+func (s *summaryModel) setPreview(preview Preview, width, height int) {
+	s.heading = preview.Heading
+	s.warning = strings.TrimRight(preview.Warning, "\n")
+	s.text = strings.TrimRight(preview.Text, "\n")
+	s.hasPane = preview.Text != ""
+	if s.hasPane && s.pane.Width == 0 {
+		s.pane = viewport.New(previewMinimumWidth, previewMinimumHeight)
+	}
+	s.resize(width, height)
+}
 
 // resize fits the pane to the terminal, leaving the summary above and the
 // question below their rows, and cuts the lines to the pane's width so that

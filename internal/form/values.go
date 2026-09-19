@@ -110,6 +110,7 @@ func FromRecipe(imageRecipe recipe.Recipe) Values {
 		keyOriginalSources:      slices.Clone(imageRecipe.Sources),
 		keyOriginalRelease:      imageRecipe.Image.Release,
 		keyOriginalCertificates: exoticCertificates,
+		keyPythonIndexURL:       imageRecipe.PythonIndexURL(),
 	}
 }
 
@@ -130,7 +131,7 @@ func ToRecipe(values Values) recipe.Recipe {
 			Include: MergePackages(values.Strings(KeyPackages), values.String(KeyOtherPackages), values.Strings(keyOriginalInclude)),
 		},
 		Sources:      mergeAnswerSources(values),
-		Python:       pythonTable(values.String(KeyPythonPackages)),
+		Python:       pythonTable(values.String(KeyPythonPackages), values.String(keyPythonIndexURL)),
 		Certificates: certificatesTable(certificatePaths(values)),
 	}
 }
@@ -157,12 +158,15 @@ func splitCertificatePaths(paths []string) (simple, exotic []string) {
 
 // pythonTable returns the [python] table for an answer, or nil when it names
 // no package: a recipe that asks for nothing keeps no table.
-func pythonTable(answer string) *recipe.Python {
+func pythonTable(answer, indexURL string) *recipe.Python {
 	packages := splitPackageList(answer)
 	if len(packages) == 0 {
 		return nil
 	}
-	return &recipe.Python{Include: packages}
+	// index_url is written by hand and has no field of its own, so the form
+	// gives back what the recipe had. A table with no packages keeps none of
+	// it: there is nothing left for an index to resolve.
+	return &recipe.Python{Include: packages, IndexURL: indexURL}
 }
 
 // certificatesTable returns the [certificates] table for the paths, or nil

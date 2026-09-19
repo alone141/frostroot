@@ -100,6 +100,10 @@ const (
 	// free-text field cannot hold, because a space or a comma in them would
 	// split them, carried through an edit untouched.
 	keyOriginalCertificates = "original_certificates"
+	// keyPythonIndexURL is not a field either: [python] index_url is written
+	// by hand, and the form must give it back unchanged rather than drop it
+	// the first time someone runs frostroot edit.
+	keyPythonIndexURL = "python_index_url"
 )
 
 // The pages fields are grouped on, in order.
@@ -265,11 +269,22 @@ func sourceOptions() []Option {
 }
 
 // checkPPAList validates a free-text list of PPAs. An empty list is fine.
+// Two PPAs whose source names would be the same are refused here: the
+// recipe holds one source per name, so the second would otherwise be
+// dropped on the way to the summary without anything being said.
 func checkPPAList(text string) error {
+	byName := map[string]string{}
 	for _, ppa := range splitPackageList(text) {
-		if _, _, err := sources.ParsePPA(ppa); err != nil {
+		owner, name, err := sources.ParsePPA(ppa)
+		if err != nil {
 			return err
 		}
+		sourceName := sources.PPA(owner, name).Name
+		identity := owner + "/" + name
+		if other, taken := byName[sourceName]; taken && other != identity {
+			return fmt.Errorf("%s and %s would both be called %q; the recipe can hold only one, so keep one of them", other, identity, sourceName)
+		}
+		byName[sourceName] = identity
 	}
 	return nil
 }

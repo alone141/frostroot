@@ -102,6 +102,19 @@ type Packages struct {
 // stays as it was written, and is absent from a recipe Save writes.
 type Python struct {
 	Include []string `toml:"include"` // PyPI distribution names, without versions
+	// IndexURL replaces PyPI as the index the packages resolve from, for a
+	// network that mandates an internal mirror. Empty means PyPI.
+	IndexURL string `toml:"index_url,omitempty"`
+}
+
+// PythonIndexURL returns the index the recipe resolves Python packages
+// from, or "" for PyPI. Like PythonPackages, it is the only way the rest of
+// frostroot reads the field, so an absent table behaves as an empty one.
+func (r Recipe) PythonIndexURL() string {
+	if r.Python == nil {
+		return ""
+	}
+	return r.Python.IndexURL
 }
 
 // PythonPackages returns the PyPI names the recipe asks for, or nil when it

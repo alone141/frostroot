@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"frostroot/internal/builder"
 	"frostroot/internal/distro"
 	"frostroot/internal/recipe"
 	"frostroot/internal/sources"
@@ -55,6 +56,10 @@ type Snapshot struct {
 	// and Keys their signing keys, armored, by source name.
 	Sources []recipe.Source
 	Keys    map[string][]byte
+	// Certificates are the authorities the machine added under
+	// /usr/local/share/ca-certificates, by the recipe-relative path the
+	// recipe names them at. The caller writes them beside the recipe.
+	Certificates map[string][]byte
 
 	InstalledCount int // packages installed, for the report
 	// Evidence says, one line each, where every captured value came from.
@@ -70,7 +75,7 @@ func (s Snapshot) Recipe() recipe.Recipe {
 	if packages == nil {
 		packages = []string{}
 	}
-	return recipe.Recipe{
+	imageRecipe := recipe.Recipe{
 		Image:    recipe.Image{Name: s.ImageName, Release: s.Release, Arch: s.Arch},
 		User:     recipe.User{Name: s.UserName, Sudo: s.Sudo},
 		WSL:      recipe.WSL{Systemd: s.Systemd, DefaultUser: s.UserName},
@@ -78,6 +83,10 @@ func (s Snapshot) Recipe() recipe.Recipe {
 		Packages: recipe.Packages{Include: packages},
 		Sources:  slices.Clone(s.Sources),
 	}
+	if paths := s.certificatePaths(); len(paths) > 0 {
+		imageRecipe.Certificates = &recipe.Certificates{Include: paths}
+	}
+	return imageRecipe
 }
 
 // Read describes the system installed under rootDir ("/" for the running
@@ -107,7 +116,7 @@ func Read(rootDir string) (Snapshot, error) {
 	snapshot.InstalledCount = len(installed)
 
 	auto, haveAutoMarks := root.autoInstalled()
-	requested, dropped := requestedPackages(installed, auto)
+	requested, dropped, machinePackages := requestedPackages(installed, auto)
 	snapshot.Packages = requested
 	switch {
 	case haveAutoMarks:
@@ -118,6 +127,9 @@ func Read(rootDir string) (Snapshot, error) {
 	if len(dropped) > 0 {
 		snapshot.note("dropped %d installed names that are not valid apt package names: %v", len(dropped), dropped)
 	}
+	if len(machinePackages) > 0 {
+		snapshot.note("left out %d packages that belong to the machine rather than the image (kernel, bootloader, firmware, drivers)", len(machinePackages))
+	}
 
 	snapshot.readIdentity(root)
 	accounts := root.accounts()
@@ -125,22 +137,40 @@ func Read(rootDir string) (Snapshot, error) {
 	snapshot.readLocaleAndTimezone(root)
 
 	carried, left := root.sourcesForRecipe(suite)
-	carriedHosts := map[string]bool{}
+	// The recipe vouches for one repository, not for every repository on its
+	// host: a carried PPA must not cover the other PPAs on Launchpad.
+	carriedIndexes := map[aptIndex]bool{}
 	for _, source := range carried {
 		snapshot.Sources = append(snapshot.Sources, source.source)
 		if snapshot.Keys == nil {
 			snapshot.Keys = map[string][]byte{}
 		}
 		snapshot.Keys[source.source.Name] = source.key
-		carriedHosts[hostOfURI(source.source.URL)] = true
+		carriedIndexes[aptIndex{prefix: builder.AptListPrefix(source.source.URL), suite: source.source.SuiteFor(suite)}] = true
 		snapshot.note("source %q (%s) from %s", source.source.Name, sources.Describe(source.source), source.from)
+	}
+
+	carriedCertificates, leftCertificates := root.certificatesForRecipe()
+	for _, certificate := range carriedCertificates {
+		if snapshot.Certificates == nil {
+			snapshot.Certificates = map[string][]byte{}
+		}
+		snapshot.Certificates[certificate.path] = certificate.pem
+		snapshot.note("certificate %q from %s", certificate.path, certificate.from)
 	}
 
 	owned, haveOwnership := root.ownedPaths()
 	origins := root.packageOrigins()
-	thirdParty, unsourced := thirdPartyPackageFindings(requested, origins, carriedHosts)
+	thirdParty, unsourced := thirdPartyPackageFindings(requested, origins, carriedIndexes)
+	unaccounted := root.unaccountedTrustFinding(owned, haveOwnership, carriedCertificates)
+	for _, certificate := range leftCertificates {
+		unaccounted.Examples = append(unaccounted.Examples, certificate.String())
+		unaccounted.Count++
+	}
 	snapshot.Findings = []Finding{
 		thirdPartySourceFinding(left),
+		unaccounted,
+		machinePackageFinding(machinePackages),
 		thirdParty,
 		unsourced,
 		modifiedConfigFinding(root.modifiedConffiles(installed)),
@@ -223,7 +253,15 @@ func (s *Snapshot) readUser(root systemRoot, accounts []account) (homeDir string
 	primaryGID := -1
 	if chosen != nil {
 		primaryGID = chosen.gid
-		homeDir = filepath.Join(string(root), filepath.FromSlash(chosen.home))
+		// The home directory comes out of the captured passwd file, so with
+		// --root DIR it is a path that tree chose. Only entry names are ever
+		// read from it, but they should be that tree's names and not this
+		// machine's.
+		if resolved, inside := root.pathInRoot(chosen.home); inside {
+			homeDir = resolved
+		} else {
+			s.note("home directory %q is outside %s, so it was not read", chosen.home, root)
+		}
 	}
 	groups = root.groupsOf(s.UserName, primaryGID)
 	hasSudo, evidence := root.sudoEvidence(s.UserName, groups)
@@ -252,4 +290,15 @@ func (s *Snapshot) readLocaleAndTimezone(root systemRoot) {
 		s.Timezone = fallbackTimezone
 		s.note("timezone %q: neither /etc/timezone nor the /etc/localtime link names a zone", fallbackTimezone)
 	}
+}
+
+// Finding returns the finding for an area, or the zero Finding when the
+// snapshot has none for it. The intro note asks for one area by name.
+func (s Snapshot) Finding(area string) Finding {
+	for _, finding := range s.Findings {
+		if finding.Area == area {
+			return finding
+		}
+	}
+	return Finding{}
 }

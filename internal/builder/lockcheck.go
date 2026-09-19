@@ -123,6 +123,11 @@ func planOffline(recipeDir string, imageRecipe recipe.Recipe, release distro.Rel
 		return nil, err
 	}
 	differences = append(differences, CheckCertificatesAgainstLock(certificates.Locked, lock.Certificates)...)
+	// The same name can be a different project on a different index, so a
+	// rebuild that resolved elsewhere is not the image the lock describes.
+	if wanted, locked := imageRecipe.PythonIndexURL(), lockedPythonIndexURL(lock); wanted != locked {
+		differences = append(differences, fmt.Sprintf("python index_url is %s, the lock resolved from %s", describeIndexURL(wanted), describeIndexURL(locked)))
+	}
 	if len(differences) > 0 {
 		return nil, fmt.Errorf("%w: %s; run frostroot build online, then frostroot vendor", ErrLockMismatch, strings.Join(differences, "; "))
 	}
@@ -138,6 +143,23 @@ func planOffline(recipeDir string, imageRecipe recipe.Recipe, release distro.Rel
 		wheelEntries: wheelEntries,
 		wheelPoolDir: filepath.Join(recipeDir, filepath.FromSlash(pool.WheelsDirName)),
 	}, nil
+}
+
+// lockedPythonIndexURL returns the index the lock resolved from, or "" for
+// PyPI, whether or not the lock has a [python] table at all.
+func lockedPythonIndexURL(lock recipe.Lockfile) string {
+	if lock.Python == nil {
+		return ""
+	}
+	return lock.Python.IndexURL
+}
+
+// describeIndexURL names an index for a message, PyPI included.
+func describeIndexURL(indexURL string) string {
+	if indexURL == "" {
+		return "PyPI"
+	}
+	return indexURL
 }
 
 // lockedPythonRequested returns the Python packages the lock's recipe asked

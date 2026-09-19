@@ -38,6 +38,40 @@ func (root systemRoot) path(relative string) string {
 	return filepath.Join(string(root), filepath.FromSlash(relative))
 }
 
+// contains reports whether path is the root or sits under it. Join has
+// already folded away any "..", so this catches a path that climbed out.
+func (root systemRoot) contains(path string) bool {
+	relative, err := filepath.Rel(string(root), path)
+	if err != nil {
+		return false
+	}
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
+}
+
+// pathInRoot resolves a path the captured system chose itself, such as a
+// Signed-By option or a passwd home directory, and refuses one that leaves
+// the root. With the default --root / nothing can leave; with --root DIR it
+// matters, because that tree was written by some other machine and a
+// "../../.." or a symlink in it would otherwise read this one. Symlinks are
+// resolved too, since leaving the root takes no ".." at all. A path that
+// does not exist yet cannot be resolved, and is left for the caller to
+// report as the unreadable file it is.
+func (root systemRoot) pathInRoot(relative string) (string, bool) {
+	resolved := root.path(relative)
+	if !root.contains(resolved) {
+		return "", false
+	}
+	realRoot, err := filepath.EvalSymlinks(string(root))
+	if err != nil {
+		realRoot = string(root)
+	}
+	realPath, err := filepath.EvalSymlinks(resolved)
+	if err != nil {
+		return resolved, true // not there: ReadFile says so, and says which file
+	}
+	return resolved, systemRoot(realRoot).contains(realPath)
+}
+
 // readText returns a file's content, or "" and false when it cannot be read.
 func (root systemRoot) readText(relative string) (string, bool) {
 	content, err := os.ReadFile(root.path(relative))

@@ -52,7 +52,10 @@ include = {{tomlQuoteList .Packages.Include}}
 # PyPI names, installed into the image's virtual environment, which every
 # login shell finds on PATH. Versions belong in frostroot.lock, as above.
 include = {{tomlQuoteList .Python.Include}}
-{{end}}{{if .Certificates}}
+{{if .Python.IndexURL}}# The index they resolve from instead of PyPI, for a network that mandates an
+# internal mirror. https only, and no credentials: this file is committed.
+index_url = {{tomlQuote .Python.IndexURL}}
+{{end}}{{end}}{{if .Certificates}}
 [certificates]
 # PEM certificate authorities, as files next to this recipe. The image trusts
 # them and so does the build, which is what a network that inspects TLS needs.
