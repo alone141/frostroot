@@ -5,6 +5,7 @@ import (
 	"flag"
 	"strings"
 	"sync"
+	"time"
 
 	"frostroot/internal/distro"
 	"frostroot/internal/form"
@@ -24,7 +25,7 @@ type indexFlags struct {
 func addIndexFlags(flags *flag.FlagSet) *indexFlags {
 	parsed := &indexFlags{}
 	flags.StringVar(&parsed.mirror, "mirror", "", "fetch the package index from this archive `URL` instead of Ubuntu's")
-	flags.StringVar(&parsed.caBundle, "ca-bundle", "", "trust the certificate authorities in this PEM `FILE` when the mirror is https, as a network that inspects TLS needs")
+	flags.StringVar(&parsed.caBundle, "ca-bundle", "", "trust the certificate authorities in this PEM `FILE` when fetching an https mirror, source or key, as a network that inspects TLS needs")
 	flags.StringVar(&parsed.pythonIndex, "python-index", "", "search this PEP 691 simple index `URL` instead of PyPI's")
 	flags.BoolVar(&parsed.refresh, "refresh-index", false, "fetch the package index again even when the cached one is fresh")
 	return parsed
@@ -32,8 +33,9 @@ func addIndexFlags(flags *flag.FlagSet) *indexFlags {
 
 // indexUsageText is what the usage of a command with the form says about
 // the index; the flags themselves are listed after it.
-const indexUsageText = `The form searches the release's apt archive and PyPI, each fetched once and
-kept under $XDG_CACHE_HOME/frostroot/index (or ~/.cache) for a week. They
+const indexUsageText = `The form searches the release's apt archive, the sources the recipe adds
+and PyPI, each fetched once and kept under $XDG_CACHE_HOME/frostroot/index
+(or ~/.cache) for a week. They
 only suggest names: build checks every package against the signed archive,
 and pip resolves the Python ones. --plain never fetches; it checks names
 against the cached indexes when there are any.
@@ -118,7 +120,14 @@ func (p *packageIndexes) Known(request form.IndexRequest) form.PackageIndex {
 // the line above the results: the archive alone is worth searching, and a
 // vendor being down is no reason for the picker to stop working.
 func (p *packageIndexes) get(ctx context.Context, request form.IndexRequest, progress func(int64, int64), offline bool) (form.PackageIndex, error) {
+	// An offline answer is remembered under a key of its own. It is built
+	// from whatever is cached, so letting it share a key with a fetch would
+	// let a week-old cache read on the summary page displace the index
+	// --refresh-index had just gone and got.
 	key := request.Key()
+	if offline {
+		key += "\x00offline"
+	}
 	p.mutex.Lock()
 	if opened, isOpened := p.opened[key]; isOpened {
 		p.mutex.Unlock()
@@ -135,31 +144,42 @@ func (p *packageIndexes) get(ctx context.Context, request form.IndexRequest, pro
 		options.Refresh = false
 	}
 	fetched := &cumulativeProgress{report: progress}
-	archive, err := p.archive(ctx, request.Release, options, fetched)
-	if err != nil {
-		return nil, err
-	}
-	parts := []*index.Index{archive}
+	var parts []*index.Index
 	var unreachable []string
+	// The archive not being there is no more fatal than a source not being
+	// there: a recipe that adds Docker can still be told what Docker has.
+	// Only when nothing at all can be read is there no index, and then the
+	// archive's own error is the one worth reporting.
+	archive, archiveErr := p.archive(ctx, request.Release, options, fetched, offline)
+	if archiveErr == nil {
+		parts = append(parts, archive)
+	} else {
+		unreachable = append(unreachable, "archive")
+	}
 	for _, wanted := range request.Sources {
 		opened, err := p.source(ctx, options, index.Source{
 			Name:       wanted.Name,
 			URL:        wanted.URL,
 			Suite:      wanted.SuiteFor(release.Suite),
 			Components: wanted.ComponentsOrDefault(),
-		}, fetched)
+		}, fetched, offline)
 		if err != nil {
 			unreachable = append(unreachable, wanted.Name)
 			continue
 		}
 		parts = append(parts, opened)
 	}
-	adapted := packageIndex{index.Union(parts, unreachable)}
-	if len(unreachable) == 0 {
-		// Only a whole answer is remembered. One missing a repository that
-		// was down would otherwise be handed to every later question about
-		// these answers, including after the network came back; the parts
-		// it is made of are each cached, so building it again is cheap.
+	merged := index.Union(parts, unreachable)
+	if merged == nil {
+		return nil, archiveErr
+	}
+	adapted := packageIndex{merged}
+	if len(unreachable) == 0 || offline {
+		// Only a whole answer is remembered, so that a repository which was
+		// down is tried again rather than left out of every later answer.
+		// An offline answer is remembered whatever it is missing: it fetches
+		// nothing, so asking it again would miss exactly the same thing at
+		// the price of merging the whole archive afresh.
 		p.mutex.Lock()
 		p.opened[key] = adapted
 		p.mutex.Unlock()
@@ -169,7 +189,7 @@ func (p *packageIndexes) get(ctx context.Context, request form.IndexRequest, pro
 
 // archive opens a release's own index, once per release however many
 // requests ask for it.
-func (p *packageIndexes) archive(ctx context.Context, releaseVersion string, options index.Options, fetched *cumulativeProgress) (*index.Index, error) {
+func (p *packageIndexes) archive(ctx context.Context, releaseVersion string, options index.Options, fetched *cumulativeProgress, offline bool) (*index.Index, error) {
 	p.mutex.Lock()
 	opened, isOpened := p.archives[releaseVersion]
 	p.mutex.Unlock()
@@ -182,16 +202,21 @@ func (p *packageIndexes) archive(ctx context.Context, releaseVersion string, opt
 		return nil, err
 	}
 	fetched.done()
-	p.mutex.Lock()
-	p.archives[releaseVersion] = opened
-	p.mutex.Unlock()
+	if !offline {
+		// What a fetch opened is what later questions get. An offline read
+		// keeps to its own answer: it may be a stale cache, and the fetch it
+		// would displace is the one that was asked for.
+		p.mutex.Lock()
+		p.archives[releaseVersion] = opened
+		p.mutex.Unlock()
+	}
 	return opened, nil
 }
 
 // source opens one third-party repository, once per repository. A failure
 // is not remembered: a vendor that was down when the picker was first
 // reached may be up when the answers change and it is asked for again.
-func (p *packageIndexes) source(ctx context.Context, options index.Options, wanted index.Source, fetched *cumulativeProgress) (*index.Index, error) {
+func (p *packageIndexes) source(ctx context.Context, options index.Options, wanted index.Source, fetched *cumulativeProgress, offline bool) (*index.Index, error) {
 	key := strings.Join(append([]string{wanted.Name, wanted.URL, wanted.Suite}, wanted.Components...), "\t")
 	p.mutex.Lock()
 	opened, isOpened := p.sources[key]
@@ -200,16 +225,34 @@ func (p *packageIndexes) source(ctx context.Context, options index.Options, want
 		return opened, nil
 	}
 	options.Progress = fetched.of()
+	if !offline {
+		// One repository may not hold up the rest. A host that answers
+		// nothing at all would otherwise cost the picker two waits of the
+		// header timeout, once for InRelease and once for Release, before
+		// the next source is even tried.
+		withDeadline, stop := context.WithTimeout(ctx, sourceTimeout)
+		defer stop()
+		ctx = withDeadline
+	}
 	opened, err := p.openSource(ctx, options, wanted)
 	if err != nil {
+		fetched.abandon()
 		return nil, err
 	}
 	fetched.done()
-	p.mutex.Lock()
-	p.sources[key] = opened
-	p.mutex.Unlock()
+	if !offline {
+		p.mutex.Lock()
+		p.sources[key] = opened
+		p.mutex.Unlock()
+	}
 	return opened, nil
 }
+
+// sourceTimeout bounds one source's whole fetch. A source is a suite's
+// InRelease and one Packages file, tens to hundreds of kilobytes; the
+// archive, which is 21 MB, has no such bound and needs none, because it is
+// the thing being waited for rather than something in the way of it.
+const sourceTimeout = 20 * time.Second
 
 // cumulativeProgress adds several downloads up for one progress line. Each
 // reports its own bytes from nought, so what came before is carried as a
@@ -224,11 +267,16 @@ type cumulativeProgress struct {
 }
 
 // of returns the progress function of the next download, or nil when there
-// is nobody to report to.
+// is nobody to report to. It clears what the last one reported, so a
+// download that never reports — one answered from the cache — adds nothing,
+// and one that failed leaves nothing.
 func (c *cumulativeProgress) of() func(doneBytes, totalBytes int64) {
 	if c == nil || c.report == nil {
 		return nil
 	}
+	c.mutex.Lock()
+	c.latest = 0
+	c.mutex.Unlock()
 	return func(doneBytes, totalBytes int64) {
 		c.mutex.Lock()
 		c.latest = doneBytes
@@ -245,6 +293,18 @@ func (c *cumulativeProgress) done() {
 	}
 	c.mutex.Lock()
 	c.base += c.latest
+	c.latest = 0
+	c.mutex.Unlock()
+}
+
+// abandon forgets a download that failed. Its bytes bought nothing, and
+// folding them in would leave the line counting past a total no repository
+// is going to deliver.
+func (c *cumulativeProgress) abandon() {
+	if c == nil || c.report == nil {
+		return
+	}
+	c.mutex.Lock()
 	c.latest = 0
 	c.mutex.Unlock()
 }
@@ -274,6 +334,10 @@ func (x packageIndex) Lookup(name string) (form.Match, bool) {
 	entry, isThere := x.index.Lookup(name)
 	return form.Match(entry), isThere
 }
+
+// Sources implements form.PackageRepositories: which repositories the index
+// holds, and which it could not read.
+func (x packageIndex) Sources() ([]string, []string) { return x.index.Sources() }
 
 func (x packageIndex) Has(name string) bool                    { return x.index.Has(name) }
 func (x packageIndex) Nearest(name string, limit int) []string { return x.index.Nearest(name, limit) }

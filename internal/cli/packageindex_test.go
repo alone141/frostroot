@@ -106,11 +106,13 @@ func TestPlainInitWarnsFromACachedIndexAndNeverFetches(t *testing.T) {
 		t.Errorf("packages = %v", got)
 	}
 
-	// With a source chosen the warning allows for it.
+	// With a source chosen the warning allows for it, and says why: --plain
+	// fetches nothing, so Docker's repository was never read and may well
+	// hold the name the archive lacks.
 	withSource := answersWith(map[int]string{answerRelease: "24.04", answerOtherPackages: "docker-ce", answerSources: "docker"})
 	_, stdout, _, _ = runPlainInit(t, cacheHome, withSource, "--mirror", archive.URL)
-	if !strings.Contains(stdout, "other sources may provide them") {
-		t.Errorf("stdout should allow for the docker source:\n%s", stdout)
+	if !strings.Contains(stdout, "docker could not be read, so it may provide them") {
+		t.Errorf("stdout should allow for the docker source, and name it:\n%s", stdout)
 	}
 }
 
@@ -366,6 +368,45 @@ func TestPackageIndexesSearchTheSourcesTheRecipeAdds(t *testing.T) {
 	}
 	if archive.Requests() != requests {
 		t.Errorf("the archive was fetched again: %d requests, want %d", archive.Requests(), requests)
+	}
+}
+
+func TestPackageIndexesSearchTheSourcesWhenTheArchiveCannotBeRead(t *testing.T) {
+	// The rule runs both ways: a repository that cannot be read is left out
+	// and named, and that includes Ubuntu's own archive. A recipe that adds
+	// Docker can still be told what Docker has.
+	docker := indextest.Serve(t, "noble", []indextest.Package{
+		{Name: "docker-ce", Version: "5:27.3.1-1~ubuntu.24.04~noble", Section: "admin", Description: "Docker: the open-source application container engine"},
+	})
+	app := (&App{Getenv: environmentWith(map[string]string{"XDG_CACHE_HOME": t.TempDir()})}).withDefaults()
+	indexes, ok := app.packageIndexes(&indexFlags{mirror: "http://127.0.0.1:1/ubuntu"})
+	if !ok {
+		t.Fatal("packageIndexes refused plain flags")
+	}
+	request := form.IndexRequest{Release: "24.04", Sources: []recipe.Source{dockerSource(docker.URL)}}
+	opened, err := indexes.Open(context.Background(), request, nil)
+	if err != nil {
+		t.Fatalf("an unreadable archive must not take the sources with it: %v", err)
+	}
+	if !opened.Has("docker-ce") {
+		t.Error("the source that could be read must still be searchable")
+	}
+	if !strings.Contains(opened.Describe(), "archive not reachable") {
+		t.Errorf("Describe = %q, want the archive named as missing", opened.Describe())
+	}
+	repositories, isMerged := opened.(form.PackageRepositories)
+	if !isMerged {
+		t.Fatalf("the index cannot say what it searched: %T", opened)
+	}
+	searched, missing := repositories.Sources()
+	if !slices.Contains(missing, "archive") || !slices.Contains(searched, "docker") {
+		t.Errorf("Sources = %v, %v; want the archive missing and the source searched", searched, missing)
+	}
+
+	// With nothing at all to read there is no index, as before.
+	bare, err := indexes.Open(context.Background(), form.IndexRequest{Release: "24.04"}, nil)
+	if bare != nil || err == nil {
+		t.Errorf("with no repository at all: %v, %v; want no index and the archive's error", bare, err)
 	}
 }
 

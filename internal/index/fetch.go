@@ -295,11 +295,15 @@ func reduce(stanza deb.Stanza, component string) (Entry, bool) {
 		section = withoutComponent
 	}
 	description, _, _ := strings.Cut(stanza["Description"], "\n")
+	// Every field goes through oneLine, not the description alone: the
+	// cache is tab-separated, and a tab anywhere in a vendor's stanza would
+	// write a line the next run cannot parse, which deletes the cache and
+	// fetches that repository again for ever.
 	return Entry{
-		Name:        name,
-		Version:     stanza["Version"],
+		Name:        oneLine(name),
+		Version:     oneLine(stanza["Version"]),
 		Component:   component,
-		Section:     section,
+		Section:     oneLine(section),
 		Description: oneLine(description),
 	}, true
 }

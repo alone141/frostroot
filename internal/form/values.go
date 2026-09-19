@@ -215,8 +215,10 @@ func Summary(values Values) string {
 		fmt.Sprintf("Image     %s, Ubuntu %s %s", values.String(KeyImageName), values.String(KeyRelease), distro.SupportedArch),
 		fmt.Sprintf("User      %s, %s", values.String(KeyUserName), sudo),
 		fmt.Sprintf("System    %s, %s, %s", values.String(KeyTimezone), values.String(KeyLocale), systemd),
-		fmt.Sprintf("Packages  %s", packagesText),
+		// In the order the questions were asked, so the recap can be read
+		// against the answers just given.
 		fmt.Sprintf("Sources   %s", sourcesText),
+		fmt.Sprintf("Packages  %s", packagesText),
 	}
 	if pythonPackages := splitPackageList(values.String(KeyPythonPackages)); len(pythonPackages) > 0 {
 		lines = append(lines, fmt.Sprintf("Python    %s", strings.Join(pythonPackages, " ")))

@@ -245,6 +245,13 @@ Without a terminal (a pipe, CI, a redirected log) or with `--plain`, `init`
 and `edit` ask the same questions one line at a time, and `build` and
 `vendor` print one line per phase and one at every tenth of a measured phase.
 
+**The order of those questions changed in v0.12**, because the sources are
+now asked before the packages. A script that answers them by position — a
+here-document piped into `frostroot init` — answers two different questions
+than it did, and nothing will complain: a number that used to pick a package
+picks a source instead. Such a script needs two more blank lines before its
+package answer, or, better, a recipe written once and committed.
+
 Then, in PowerShell:
 
 ```powershell

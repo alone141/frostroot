@@ -61,6 +61,11 @@ type Field struct {
 	// discovered so that the field is the same height before the index has
 	// loaded as after.
 	Summaries bool
+	// Sourced says this field's index covers the apt sources the recipe
+	// adds, so that it is opened again when they change. PyPI is one index
+	// whatever the recipe adds, and a field that said otherwise would throw
+	// away a download of it every time a source was ticked.
+	Sourced bool
 }
 
 // DisplayLabel returns the option's display text: Label, or Value when there
@@ -218,6 +223,7 @@ func Fields(host Host) []Field {
 			Placeholder: "none",
 			Validate:    checkPackageList,
 			OpenIndex:   host.OpenIndex,
+			Sourced:     true,
 		},
 		{
 			Key: KeyPythonPackages, Page: PagePackages, Kind: KindSearch,

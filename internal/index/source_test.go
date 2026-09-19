@@ -174,3 +174,71 @@ func TestUnionOfOneIsThatOne(t *testing.T) {
 		t.Errorf("Union of nothing = %v, want nil", merged)
 	}
 }
+
+func TestUnionNamesTheRepositoryItCouldNotRead(t *testing.T) {
+	release := newIndex("noble", testNow, []Entry{{Name: "git", Section: "vcs"}}, func() time.Time { return testNow })
+	// A source served from a cache because the repository would not answer
+	// is missing in the way that matters: what it holds may be out of date,
+	// and what it has gained is not there at all.
+	docker := newIndex("docker", testNow.Add(-9*24*time.Hour), []Entry{{Name: "docker-ce", Origin: "docker"}}, func() time.Time { return testNow })
+	docker.missing = []string{"docker"}
+
+	merged := Union([]*Index{release, docker}, nil)
+	if got := merged.Describe(); !strings.Contains(got, "docker not reachable") || strings.Contains(got, "archive not reachable") {
+		t.Errorf("Describe = %q, want the source named and the archive left alone", got)
+	}
+	searched, missing := merged.Sources()
+	if !slices.Equal(searched, []string{"noble", "docker"}) || !slices.Equal(missing, []string{"docker"}) {
+		t.Errorf("Sources = %v, %v; want both searched and the source missing", searched, missing)
+	}
+}
+
+func TestSectionsLeaveOutTheOneAStanzaDidNotName(t *testing.T) {
+	// A vendor's Packages stanza often has no Section. An empty one is not
+	// a section to narrow to: the chooser offers "all sections" already, and
+	// a second row of that name would filter by nothing at all.
+	vendor := newIndex("docker", testNow, []Entry{
+		{Name: "containerd.io", Origin: "docker"},
+		{Name: "docker-ce", Section: "admin", Origin: "docker"},
+	}, func() time.Time { return testNow })
+	for _, section := range vendor.SectionsMatching("") {
+		if section.Name == "" {
+			t.Errorf("sections = %+v, want no row for a package with no section", vendor.SectionsMatching(""))
+		}
+	}
+	// The package is still there; it is only the section that is not.
+	if !vendor.Has("containerd.io") {
+		t.Error("a package with no section must still be findable")
+	}
+}
+
+func TestSourceCacheIsTriedAgainSoonerThanTheArchives(t *testing.T) {
+	served := indextest.Serve(t, "noble", dockerPackages)
+	now := testNow
+	options := Options{CacheDir: t.TempDir(), Now: func() time.Time { return now }}
+	docker := Source{Name: "docker", URL: served.URL, Suite: "noble", Components: []string{"main"}}
+	if _, err := OpenSource(context.Background(), options, docker); err != nil {
+		t.Fatal(err)
+	}
+	fetches := served.Requests()
+
+	// Later the same day the cache answers: a form opened twice in an
+	// afternoon stays off the network.
+	now = testNow.Add(6 * time.Hour)
+	if _, err := OpenSource(context.Background(), options, docker); err != nil {
+		t.Fatal(err)
+	}
+	if served.Requests() != fetches {
+		t.Errorf("%d requests after six hours, want the cache to answer", served.Requests()-fetches)
+	}
+
+	// Two days on it is fetched again, where the archive would be kept for
+	// a week: a vendor publishes when it likes, and its index is kilobytes.
+	now = testNow.Add(2 * 24 * time.Hour)
+	if _, err := OpenSource(context.Background(), options, docker); err != nil {
+		t.Fatal(err)
+	}
+	if served.Requests() == fetches {
+		t.Error("a two-day-old source index was not fetched again")
+	}
+}

@@ -65,26 +65,73 @@ func TestUnknownPackages(t *testing.T) {
 	}
 }
 
+// searchedIndex is a fakeIndex that can also say which repositories it
+// searched, as the apt index can.
+type searchedIndex struct {
+	fakeIndex
+	searched, missing []string
+}
+
+func (s searchedIndex) Sources() ([]string, []string) { return s.searched, s.missing }
+
 func TestUnknownPackagesWarning(t *testing.T) {
 	unknown := []UnknownPackage{{Name: "ninja-buld", Nearest: []string{"ninja-build"}}, {Name: "docker-ce"}}
 	values := Defaults(Host{})
 	values[KeyRelease] = "24.04"
+	archiveAlone := searchedIndex{searched: []string{"noble"}}
 
-	alone := UnknownPackagesWarning(unknown, values)
+	alone := UnknownPackagesWarning(unknown, values, archiveAlone)
 	for _, wantText := range []string{"Not in Ubuntu's noble archive:", "  ninja-buld  nearest: ninja-build\n", "  docker-ce\n", "no other source", "Unable to locate package"} {
 		if !strings.Contains(alone, wantText) {
 			t.Errorf("warning lacks %q:\n%s", wantText, alone)
 		}
 	}
 
+	// The picker searched the sources too, so a name none of them has is
+	// missing for good: saying one of them may provide it would send
+	// someone to write a recipe that cannot build.
 	values[KeySources] = []string{"docker"}
-	withSource := UnknownPackagesWarning(unknown, values)
-	if !strings.Contains(withSource, "other sources may provide them") || strings.Contains(withSource, "no other source") {
-		t.Errorf("with a source chosen the warning should allow for it:\n%s", withSource)
+	searched := UnknownPackagesWarning(unknown, values, searchedIndex{searched: []string{"noble", "docker"}})
+	if !strings.Contains(searched, "In neither Ubuntu's noble archive nor docker:") || strings.Contains(searched, "may provide them") {
+		t.Errorf("with the source searched the warning must not hold out hope:\n%s", searched)
 	}
 
-	if got := UnknownPackagesWarning(nil, values); got != "" {
+	// A repository that could not be read is the one case where hope is
+	// warranted, and it says which one. A source read only from a cache is
+	// in both lists, and must not be recited as searched while being named
+	// as unread in the next breath.
+	unread := UnknownPackagesWarning(unknown, values, searchedIndex{searched: []string{"noble", "docker"}, missing: []string{"docker"}})
+	if !strings.Contains(unread, "docker could not be read, so it may provide them") {
+		t.Errorf("a repository that was not read must be named:\n%s", unread)
+	}
+	if strings.Contains(unread, "nor docker:") {
+		t.Errorf("a repository that could not be read was also called searched:\n%s", unread)
+	}
+
+	// An index that cannot say what it searched leaves the old answer.
+	old := UnknownPackagesWarning(unknown, values, fakeIndex{})
+	if !strings.Contains(old, "other sources may provide them") {
+		t.Errorf("without a list of repositories the warning should allow for them:\n%s", old)
+	}
+
+	if got := UnknownPackagesWarning(nil, values, archiveAlone); got != "" {
 		t.Errorf("nothing unknown, nothing said; got %q", got)
+	}
+}
+
+func TestAndList(t *testing.T) {
+	for _, want := range []struct {
+		names []string
+		text  string
+	}{
+		{nil, ""},
+		{[]string{"docker"}, "docker"},
+		{[]string{"docker", "kitware"}, "docker and kitware"},
+		{[]string{"docker", "kitware", "llvm"}, "docker, kitware and llvm"},
+	} {
+		if got := andList(want.names); got != want.text {
+			t.Errorf("andList(%q) = %q, want %q", want.names, got, want.text)
+		}
 	}
 }
 

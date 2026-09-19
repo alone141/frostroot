@@ -3,6 +3,7 @@ package form
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"frostroot/internal/recipe"
@@ -46,6 +47,15 @@ type PackageIndex interface {
 	Describe() string
 }
 
+// PackageRepositories is an index that can also say which repositories it
+// searched and which of them it could not read. The apt index implements
+// it; PyPI, which is one index and no repositories, does not.
+type PackageRepositories interface {
+	// Sources returns the repositories the index holds and those it could
+	// not read, the release's archive first.
+	Sources() (searched, missing []string)
+}
+
 // PackageSummaries is an index that can also say what a package is, one
 // name at a time, because it publishes no descriptions in bulk. The apt
 // index carries its descriptions already and implements none of this; the
@@ -82,9 +92,21 @@ func (r IndexRequest) Key() string {
 }
 
 // IndexRequestFor is what the answers so far ask of an index: the release
-// chosen on the Image page, and the sources chosen on the Sources page.
+// chosen on the Image page, and the sources chosen on the Sources page,
+// resolved as the repositories they point at. Resolving here rather than in
+// the caller keeps one answer to "which repository is this": the key below,
+// the fetch and the cache all read the same suite and components.
 func IndexRequestFor(values Values) IndexRequest {
-	return IndexRequest{Release: values.String(KeyRelease), Sources: ToRecipe(values).Sources}
+	release := values.String(KeyRelease)
+	suite := releaseSuite(release)
+	sources := mergeAnswerSources(values)
+	resolved := make([]recipe.Source, 0, len(sources))
+	for _, source := range sources {
+		source.Suite, source.Components = source.SuiteFor(suite), source.ComponentsOrDefault()
+		source.URL = strings.TrimRight(source.URL, "/")
+		resolved = append(resolved, source)
+	}
+	return IndexRequest{Release: release, Sources: resolved}
 }
 
 // IndexOpener opens an index for a request the form has been told about.
@@ -142,7 +164,7 @@ func UnknownPythonPackages(values Values, index PackageIndex) []UnknownPackage {
 // — so the write question below is unchanged either way.
 func Warnings(values Values, apt, python PackageIndex) string {
 	var blocks []string
-	if warning := UnknownPackagesWarning(UnknownPackages(values, apt), values); warning != "" {
+	if warning := UnknownPackagesWarning(UnknownPackages(values, apt), values, apt); warning != "" {
 		blocks = append(blocks, warning)
 	}
 	if warning := unknownPythonWarning(UnknownPythonPackages(values, python)); warning != "" {
@@ -151,20 +173,72 @@ func Warnings(values Values, apt, python PackageIndex) string {
 	return strings.Join(blocks, "\n\n")
 }
 
-// UnknownPackagesWarning renders apt names unknown to the archive, or "".
-func UnknownPackagesWarning(unknown []UnknownPackage, values Values) string {
+// UnknownPackagesWarning renders the apt names index does not have, or "".
+// What it says of them depends on what was searched: the picker covers the
+// sources the recipe adds, so a name missing from all of them is missing for
+// good, and only a repository that could not be read leaves room for doubt.
+func UnknownPackagesWarning(unknown []UnknownPackage, values Values, index PackageIndex) string {
 	if len(unknown) == 0 {
 		return ""
 	}
+	suite := releaseSuite(values.String(KeyRelease))
+	searched, missing := repositoriesOf(index)
+	// A repository that was only read from a cache is in both lists. It is
+	// named as one that could not be read, below, so reciting it here as
+	// one that was searched would have the warning contradict itself. The
+	// archive may itself be the one that is missing, so which repositories
+	// were read is decided by name and never by position.
+	read := slices.DeleteFunc(slices.Clone(searched), func(name string) bool { return slices.Contains(missing, name) })
+	archiveRead := slices.Contains(read, suite)
+	sourcesRead := slices.DeleteFunc(slices.Clone(read), func(name string) bool { return name == suite })
 	var warning strings.Builder
-	fmt.Fprintf(&warning, "Not in Ubuntu's %s archive:\n", releaseSuite(values.String(KeyRelease)))
+	switch {
+	case archiveRead && len(sourcesRead) > 0:
+		fmt.Fprintf(&warning, "In neither Ubuntu's %s archive nor %s:\n", suite, andList(sourcesRead))
+	case len(sourcesRead) > 0:
+		fmt.Fprintf(&warning, "Not in %s:\n", andList(sourcesRead))
+	default:
+		fmt.Fprintf(&warning, "Not in Ubuntu's %s archive:\n", suite)
+	}
 	writeUnknownNames(&warning, unknown)
-	if hasThirdPartySources(values) {
+	switch {
+	case len(missing) > 0:
+		fmt.Fprintf(&warning, "%s could not be read, so it may provide them; otherwise build\nwill stop at \"Unable to locate package\".", andList(missing))
+	case len(sourcesRead) > 0:
+		// Every repository the recipe has was searched, and none of them
+		// has these names: there is nothing left for one to provide.
+		warning.WriteString("build will stop at \"Unable to locate package\".")
+	case hasThirdPartySources(values):
+		// The index could not say what it searched, so the old answer
+		// stands: a source the recipe has may still provide them.
 		warning.WriteString("One of the recipe's other sources may provide them; otherwise build will\nstop at \"Unable to locate package\".")
-	} else {
+	default:
 		warning.WriteString("The recipe has no other source that could provide them, so build will\nstop at \"Unable to locate package\" unless one is added.")
 	}
 	return warning.String()
+}
+
+// repositoriesOf asks an index what it searched. An index that cannot say —
+// a test double, or one built before the sources were searched too — is
+// treated as having said nothing, and the warning falls back to what the
+// answers themselves show.
+func repositoriesOf(index PackageIndex) (searched, missing []string) {
+	if repositories, canSay := index.(PackageRepositories); canSay {
+		return repositories.Sources()
+	}
+	return nil, nil
+}
+
+// andList renders names the way a sentence takes them: "docker", "docker and
+// kitware", "docker, kitware and llvm".
+func andList(names []string) string {
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return names[0]
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
 }
 
 // unknownPythonWarning renders PyPI names no index has, or "".

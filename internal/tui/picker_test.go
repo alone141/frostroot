@@ -918,3 +918,72 @@ func TestFormOpensTheIndexWithTheSourcesAnswered(t *testing.T) {
 		t.Errorf("the picker does not name the source a row comes from:\n%s", view)
 	}
 }
+
+// degradedIndex is an index that came back without one of its repositories.
+type degradedIndex struct{ sampleIndex }
+
+func (degradedIndex) Sources() ([]string, []string) {
+	return []string{"noble", "docker"}, []string{"docker"}
+}
+
+func TestPickerTriesARepositoryItCouldNotReadAgain(t *testing.T) {
+	var opens int
+	opener := func(context.Context, form.IndexRequest, func(int64, int64)) (form.PackageIndex, error) {
+		opens++
+		if opens == 1 {
+			return degradedIndex{}, nil // the vendor was down
+		}
+		return sampleIndex{}, nil // and is back
+	}
+	answer := ""
+	request := form.IndexRequest{Release: "24.04", Sources: []recipe.Source{{Name: "docker", URL: "https://download.docker.com/linux/ubuntu"}}}
+	picker := newPickerField(context.Background(), form.Field{Key: form.KeyOtherPackages, OpenIndex: opener}, &answer, func() form.IndexRequest { return request }, func() []string { return nil }, unicodeGlyphs)
+	d := newDriver(t, picker)
+	d.settle(picker.Focus())
+	// Coming back to the field with the same answers opens it again,
+	// because last time a repository was left out of it.
+	picker.Blur()
+	d.settle(picker.Focus())
+	if opens != 2 {
+		t.Errorf("opened %d times, want the missing repository tried again", opens)
+	}
+	// Now that nothing is missing, coming back changes nothing.
+	picker.Blur()
+	d.settle(picker.Focus())
+	if opens != 2 {
+		t.Errorf("opened %d times, want a whole index left alone", opens)
+	}
+}
+
+func TestPythonFieldIsNotReopenedWhenASourceChanges(t *testing.T) {
+	// PyPI is one index whatever apt sources the recipe adds. A field that
+	// reopened on them would throw away a 9.7 MB download every time one
+	// was ticked.
+	var opened []form.IndexRequest
+	host := noHost
+	host.OpenIndex = func(_ context.Context, request form.IndexRequest, _ func(int64, int64)) (form.PackageIndex, error) {
+		opened = append(opened, request)
+		return sampleIndex{}, nil
+	}
+	host.OpenPythonIndex = func(_ context.Context, request form.IndexRequest, _ func(int64, int64)) (form.PackageIndex, error) {
+		if len(request.Sources) != 0 {
+			t.Errorf("the PyPI index was asked for apt sources: %+v", request.Sources)
+		}
+		return sampleIndex{}, nil
+	}
+	initial := form.Defaults(noHost)
+	initial[form.KeySources] = []string{"docker"}
+	model := newFormModel(context.Background(), form.Fields(host), initial, nil)
+	d := &formDriver{driver: newDriver(t, model), model: model}
+	d.press(tea.WindowSizeMsg{Width: 80, Height: 24})
+	for presses := 0; presses < maxKeyPresses && d.model.pages.GetFocusedField().GetKey() != form.KeyPythonPackages; presses++ {
+		d.press(pressEnter)
+	}
+	if got := d.model.pages.GetFocusedField().GetKey(); got != form.KeyPythonPackages {
+		t.Fatalf("never reached the Python field; at %q", got)
+	}
+	// And the apt field, which does search them, was told about the source.
+	if len(opened) != 1 || len(opened[0].Sources) != 1 {
+		t.Errorf("the apt index was opened with %+v, want the recipe's one source", opened)
+	}
+}

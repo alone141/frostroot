@@ -29,6 +29,14 @@ import (
 // keeps a lab that runs init every day off the network.
 const DefaultMaxAge = 7 * 24 * time.Hour
 
+// sourceMaxAge is the same for a third-party repository, which a week does
+// not suit: a vendor publishes when it likes, a PPA gains a Python version
+// the week it is released, and the reason a week is cheap for the archive —
+// 21 MB — does not apply to an index of tens of kilobytes. A day keeps a
+// form that is opened twice in an afternoon off the network and still finds
+// what was published yesterday.
+const sourceMaxAge = 24 * time.Hour
+
 // ErrUnavailable means there is no index to be had: nothing cached, and the
 // archive was not asked (Offline) or could not be read. It is not a failure
 // of the form, which goes on without suggestions.
@@ -81,9 +89,23 @@ type Index struct {
 	entries  []Entry
 	lowered  []loweredEntry
 	sections []SectionCount
+	// searched names the repositories the index holds, the release's archive
+	// first, and missing those it could not read: a source that answered
+	// nothing, and one served from a cache because it could not be reached.
+	// The warning on the last page says which of the two a name is absent
+	// from, and the picker opens the index again rather than leaving a
+	// repository out for the rest of the form.
+	searched []string
+	missing  []string
 	// staleBecause is why a cache older than MaxAge is being used anyway.
 	staleBecause error
 	now          func() time.Time
+}
+
+// Sources returns the repositories the index holds and those it could not
+// read, the release's archive first.
+func (x *Index) Sources() (searched, missing []string) {
+	return x.searched, x.missing
 }
 
 // loweredEntry is what Search matches against.
@@ -113,7 +135,7 @@ func Open(ctx context.Context, options Options) (*Index, error) {
 // recipe adds beside it.
 func openTarget(ctx context.Context, options Options, what target) (*Index, error) {
 	if options.MaxAge == 0 {
-		options.MaxAge = DefaultMaxAge
+		options.MaxAge = what.maxAge
 	}
 	if options.Now == nil {
 		options.Now = time.Now
@@ -135,6 +157,9 @@ func openTarget(ctx context.Context, options Options, what target) (*Index, erro
 		}
 		if cached != nil {
 			cached.staleBecause = err
+			// Served from a cache because the repository could not be
+			// reached: the same thing, to a reader, as one left out.
+			cached.missing = []string{what.missingName()}
 			return cached, nil
 		}
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
@@ -160,12 +185,18 @@ func stampOrigin(entries []Entry, origin string) {
 
 // newIndex prepares entries, which must be sorted by name, for searching.
 func newIndex(label string, fetched time.Time, entries []Entry, now func() time.Time) *Index {
-	built := &Index{label: label, fetched: fetched, entries: entries, now: now}
+	built := &Index{label: label, searched: []string{label}, fetched: fetched, entries: entries, now: now}
 	built.lowered = make([]loweredEntry, len(entries))
 	counts := map[string]int{}
 	for position, entry := range entries {
 		built.lowered[position] = loweredEntry{name: strings.ToLower(entry.Name), description: strings.ToLower(entry.Description)}
-		counts[entry.Section]++
+		// A stanza without a Section leaves one empty, which a vendor's
+		// repository does where Ubuntu's archive does not. It is not a
+		// section to narrow to: the chooser already offers "all sections",
+		// and a second row of that name would filter by nothing.
+		if entry.Section != "" {
+			counts[entry.Section]++
+		}
 	}
 	built.sections = sortedSections(counts)
 	return built
@@ -178,8 +209,8 @@ func (x *Index) Len() int { return len(x.entries) }
 // results: "noble · 85,855 packages · fetched 2 days ago".
 func (x *Index) Describe() string {
 	description := fmt.Sprintf("%s · %s packages · fetched %s", x.label, groupThousands(len(x.entries)), ago(x.now().Sub(x.fetched)))
-	if x.staleBecause != nil {
-		description += " · archive not reachable"
+	if len(x.missing) > 0 {
+		description += " · " + strings.Join(x.missing, ", ") + " not reachable"
 	}
 	return description
 }

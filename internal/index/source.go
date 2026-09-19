@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Source is a third-party apt repository to index beside the release's own
@@ -30,6 +31,17 @@ type target struct {
 	suite      string   //
 	components []string //
 	pockets    []string // the suites under dists/ to read, in order
+	maxAge     time.Duration
+}
+
+// missingName is what a line above the results calls this repository when it
+// could not be read: a source by its name, and the release's archive as the
+// archive, which is what a person calls it.
+func (t target) missingName() string {
+	if t.origin == "" {
+		return "archive"
+	}
+	return t.origin
 }
 
 // archiveTarget is the release's own archive, or the mirror standing in for
@@ -48,6 +60,7 @@ func archiveTarget(options Options) target {
 		components: options.Release.Components,
 		// -security is left out: everything in it is copied to -updates.
 		pockets: []string{suite, suite + "-updates"},
+		maxAge:  DefaultMaxAge,
 	}
 }
 
@@ -65,6 +78,7 @@ func sourceTarget(source Source) target {
 		suite:      source.Suite,
 		components: source.Components,
 		pockets:    []string{source.Suite},
+		maxAge:     sourceMaxAge,
 	}
 }
 
@@ -106,8 +120,9 @@ func OpenSource(ctx context.Context, options Options, source Source) (*Index, er
 // them have is shown as the later one's, which is the repository a person
 // added deliberately; apt itself chooses by version, so the version shown is
 // not a promise of the version installed. unreachable names the sources
-// whose index could not be opened, so that a search says what it is missing
-// rather than quietly lacking it.
+// whose index could not be opened; they join the ones that were only read
+// from a cache, so that a search says what it is missing rather than quietly
+// lacking it, and Sources tells a caller the same thing.
 func Union(parts []*Index, unreachable []string) *Index {
 	present := make([]*Index, 0, len(parts))
 	for _, part := range parts {
@@ -123,10 +138,14 @@ func Union(parts []*Index, unreachable []string) *Index {
 	}
 	byName := map[string]Entry{}
 	labels := make([]string, 0, len(present))
+	searched := make([]string, 0, len(present))
+	missing := append([]string(nil), unreachable...)
 	oldest := present[0].fetched
 	var stale error
 	for _, part := range present {
 		labels = append(labels, part.label)
+		searched = append(searched, part.searched...)
+		missing = append(missing, part.missing...)
 		if part.fetched.Before(oldest) {
 			oldest = part.fetched
 		}
@@ -142,20 +161,19 @@ func Union(parts []*Index, unreachable []string) *Index {
 		entries = append(entries, entry)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
-	merged := newIndex(unionLabel(labels, unreachable), oldest, entries, present[0].now)
+	merged := newIndex(unionLabel(labels), oldest, entries, present[0].now)
+	merged.searched, merged.missing = searched, missing
 	merged.staleBecause = stale
 	return merged
 }
 
 // unionLabel is what the line above the results calls a merged index:
-// "noble + docker, kitware", and the sources it could not reach after it.
-func unionLabel(labels, unreachable []string) string {
+// "noble + docker, kitware". What it could not reach is said after the count
+// by Describe, as it is for a single repository.
+func unionLabel(labels []string) string {
 	label := labels[0]
 	if len(labels) > 1 {
 		label += " + " + strings.Join(labels[1:], ", ")
-	}
-	if len(unreachable) > 0 {
-		label += " (" + strings.Join(unreachable, ", ") + " not reachable)"
 	}
 	return label
 }

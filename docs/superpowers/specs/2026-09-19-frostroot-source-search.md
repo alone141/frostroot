@@ -90,11 +90,72 @@ is named in the line rather than failing the open. Two requests per source
 and no more — the `-updates` pocket is Ubuntu's scheme, and asking a vendor
 for one costs every open a 404.
 
+## What a review of the built change found, and what was done
+
+- The summary's warning still framed the index as the archive alone, so it
+  reassured someone about sources the picker had already searched. An index
+  now says which repositories it holds and which it could not read
+  (`Sources`), and the warning has three shapes: not in the archive, in
+  neither the archive nor the sources, or not in what could be read and
+  named accordingly.
+- `Union` blamed a stale source on the archive: `Describe` appended a
+  hard-coded "archive not reachable" whatever the part was. Each part now
+  names itself.
+- A load that came back missing a repository was pinned for the rest of the
+  form, because the picker reopens only when the answers change. It now
+  reopens a load that left a repository out, which is what the deliberate
+  "do not remember an incomplete answer" in `internal/cli` was for.
+- The PyPI field shared the apt field's request, so ticking an apt source
+  cancelled a 9.7 MB download and started it again. A field now declares
+  whether its index covers the sources (`Field.Sourced`).
+- The progress line could count backwards: a source that failed left its
+  bytes in the running total. A failed download is abandoned, and each one
+  starts from nought.
+- An offline answer (the summary's warning) shared a memo with a fetched
+  one, so a stale cache read could displace what `--refresh-index` had just
+  fetched. Offline answers are kept apart and never replace a fetch.
+- A source with no `Section` — common for a vendor's repository, unknown in
+  Ubuntu's archive — added an empty section, which the chooser drew as a
+  second "all sections" row that filtered by nothing. Empty sections are
+  left out.
+- Every cached field goes through `oneLine`, not the description alone: a
+  tab in a vendor's `Package:` or `Version:` would write a cache line the
+  next run cannot parse, deleting the cache and refetching for ever.
+- One source cannot hold up the rest: each has a 20-second deadline, where
+  before a host that swallowed packets cost two header timeouts.
+- The archive failing took every source with it, the inverse of the rule
+  this change is built on. A repository that cannot be read is left out and
+  named, the archive included; only when nothing at all can be read is there
+  no index.
+- A source's cache expired with the archive's, after a week. A vendor
+  publishes when it likes and its index is kilobytes, so a source is tried
+  again after a day.
+- `Summary` still recapped the packages before the sources, in the order the
+  questions used to be asked.
+
 ## Not in v0.12
 
 - **Offering the repository a name comes from.** Typing `docker-ce` with no
   source chosen still finds nothing; the catalog's repositories are not
   indexed until the recipe names them.
-- **A flat or unsigned repository.** Out of scope for `build`, and so for
-  the index: such a source contributes nothing and is reported unreachable.
+- **A flat repository.** It has no `dists/`, so the fetch 404s and the
+  source is reported unreachable, which is what `build` does with one too.
+- **Refusing an unsigned repository.** A review caught this sentence
+  claiming the opposite of what the code does, so it is worth stating
+  plainly: `plan` reads `InRelease` or, failing that, a plain `Release`,
+  and verifies neither — as it never has for the archive. A repository that
+  publishes an unsigned `Release` is therefore indexed and its packages
+  suggested, although `build` writes `signed-by` and apt will refuse it.
+  Telling the two apart means another request for `Release.gpg`, and a
+  repository signed that way is legitimate, so the check is worth doing
+  deliberately rather than as part of this change.
+- **Sources fetched one at a time.** Three cost 1.8 s against the archive's
+  5.5 s. An errgroup would overlap them; the progress line would have to
+  stop being a sum of one download at a time first.
+- **A superseded load is cancelled outright**, archive included, so going
+  back a page mid-fetch to add a source restarts the 21 MB download. Sharing
+  an in-flight fetch between loads is the fix, and is more machinery than
+  the saving is worth while the sources are asked first.
+- **Superseded cache files are never deleted.** A source whose URL, suite or
+  components change leaves its old `source-<name>-<digest>` file behind.
 - **`capture` filling `[python]`**, which remains the last hole in capture.

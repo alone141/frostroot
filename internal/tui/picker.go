@@ -165,6 +165,27 @@ type indexLoad struct {
 	cancel      context.CancelFunc
 }
 
+// incomplete reports whether a finished load left a repository out: one
+// that could not be read. Coming back to the field tries it again, because
+// a vendor that was down for a moment should not be missing from the search
+// for the rest of the form. A load still running is not incomplete.
+func (l *indexLoad) incomplete() bool {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+	if !l.finished {
+		return false
+	}
+	if l.err != nil {
+		return true
+	}
+	repositories, canSay := l.index.(form.PackageRepositories)
+	if !canSay {
+		return false
+	}
+	_, missing := repositories.Sources()
+	return len(missing) > 0
+}
+
 // pickerLoadedMsg says an index load ended. pickerTickMsg redraws the
 // progress of one that has not.
 type (
@@ -220,7 +241,7 @@ func (p *pickerField) Focus() tea.Cmd {
 	cmds := []tea.Cmd{p.input.Focus()}
 	if p.openIndex != nil {
 		request := p.request()
-		if asked := request.Key(); p.load == nil || p.load.key != asked {
+		if asked := request.Key(); p.load == nil || p.load.key != asked || p.load.incomplete() {
 			if p.load != nil && p.load.cancel != nil {
 				p.load.cancel()
 			}

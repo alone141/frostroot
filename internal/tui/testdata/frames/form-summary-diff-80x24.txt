@@ -2,8 +2,8 @@ Summary
 Image     lab, Ubuntu 24.04 amd64
 User      student, passwordless sudo
 System    UTC, en_US.UTF-8, systemd on
-Packages  none
 Sources   Ubuntu's archive only
+Packages  none
 
 4 lines change; your own comments in the file are replaced by the template's:
 ╭──────────────────────────────────────────────────────────────────────────────╮
