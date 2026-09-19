@@ -59,9 +59,15 @@ jobs:
         # Go, and the unit job already runs the race detector over the same
         # packages. The default 10m timeout is not enough for four real
         # bootstraps.
+        #
+        # ./... and not one package: naming ./internal/builder/ here meant the
+        # integration tests of internal/form (every catalog package exists in
+        # all three releases) and internal/index (the real index of all three)
+        # had never run, though the README says they do. A package that gains
+        # an integration test later is now covered by having one.
         run: |
           set -o pipefail
-          go test -tags=integration -timeout 40m -v ./internal/builder/ 2>&1 | tee integration.log
+          go test -tags=integration -timeout 40m -v ./... 2>&1 | tee integration.log
       - name: A bootstrap that never ran proves nothing
         # Only the three reasons skipUnlessMmdebstrapAvailable gives, not any
         # skip: TestIntegrationUnreachableWorkRootFailsFast skips as root on
@@ -75,6 +81,28 @@ jobs:
             grep -E -- "needs Linux|mmdebstrap not installed|ubuntu-keyring not installed" integration.log
             exit 1
           fi
+      - name: Every integration test named here actually passed
+        # The defect this job was widened to fix was a test nobody ran, which
+        # is indistinguishable from a test that passed unless something
+        # insists on seeing it. Each name below must appear as a pass; a test
+        # renamed or moved fails this step and is meant to, because the list
+        # is how the job knows what it is for.
+        run: |
+          missing=0
+          for name in \
+            TestIntegrationNobleTiny \
+            TestIntegrationOfflineRebuild \
+            TestIntegrationPython \
+            TestIntegrationCatalogExistsInEveryRelease \
+            TestIntegrationOpenEveryRelease; do
+            if grep -qE -- "^--- PASS: $name " integration.log; then
+              echo "ok   $name"
+            else
+              echo "MISSING   $name did not run to a pass"
+              missing=1
+            fi
+          done
+          exit $missing
 
   lint:
     name: golangci-lint
@@ -87,3 +115,36 @@ jobs:
       - uses: golangci/golangci-lint-action@v9.3.0
         with:
           version: v2.13.2
+
+  vulncheck:
+    # The toolchain go.mod pins is the one setup-go installs here and in the
+    # release workflow, so the binary people download is built with it. When
+    # go.mod said 1.24.2, govulncheck reported 32 reachable vulnerabilities
+    # in crypto/x509, crypto/tls, net/http, net/url, archive/tar,
+    # encoding/asn1 and encoding/pem — the packages this project's security
+    # rests on — and nothing in CI was looking.
+    #
+    # This job fails on a vulnerability the code can reach. A disclosure can
+    # therefore turn an unrelated pull request red; that is the point, and
+    # the fix is a toolchain bump rather than a wait.
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install govulncheck
+        # Pinned, like every other tool version here: @latest would make the
+        # meaning of a red build depend on the day.
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+      - name: Check the toolchain really is the one go.mod pins
+        # setup-go reads go.mod, but a job that silently used another
+        # toolchain would clear a check it never performed.
+        run: |
+          pinned=$(sed -n 's/^go \([0-9.]*\)$/\1/p' go.mod)
+          running=$(go env GOVERSION)
+          echo "go.mod pins go$pinned; this job runs $running"
+          test "go$pinned" = "$running" || { echo "the toolchain is not the pinned one"; exit 1; }
+      - name: govulncheck
+        run: govulncheck ./...
