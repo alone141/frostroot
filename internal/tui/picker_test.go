@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"frostroot/internal/form"
+	"frostroot/internal/recipe"
 )
 
 // samplePackages are real entries of noble's archive, enough of them for a
@@ -31,6 +32,9 @@ var samplePackages = []form.Match{
 	{Name: "ninja-build", Version: "1.11.1-2", Component: "universe", Section: "devel", Description: "small build system closest in spirit to Make"},
 	{Name: "unrar", Version: "1:7.0.7-1build1", Component: "multiverse", Section: "utils", Description: "Unarchiver for .rar files (non-free version)"},
 	{Name: "valgrind", Version: "1:3.22.0-0ubuntu3", Component: "main", Section: "devel", Description: "instrumentation framework for building dynamic analysis tools"},
+	// A package no Ubuntu archive has: it comes from the source the recipe
+	// added, and the row says so.
+	{Name: "docker-ce", Version: "5:27.3.1-1~ubuntu.24.04~noble", Component: "stable", Section: "admin", Description: "Docker: the open-source application container engine", Origin: "docker"},
 }
 
 // sampleIndex is a form.PackageIndex over samplePackages that ranks the way
@@ -114,8 +118,22 @@ func (sampleIndex) Nearest(name string, _ int) []string {
 func (sampleIndex) Describe() string { return "noble · 85,574 packages · fetched 2 days ago" }
 
 // openSampleIndex is a form.IndexOpener that has the index at once.
-func openSampleIndex(context.Context, string, func(int64, int64)) (form.PackageIndex, error) {
+func openSampleIndex(context.Context, form.IndexRequest, func(int64, int64)) (form.PackageIndex, error) {
 	return sampleIndex{}, nil
+}
+
+// sampleUnionIndex is the same index as the picker sees it once a source has
+// been chosen on the page before: the same packages, and a line naming both
+// repositories they were searched in.
+type sampleUnionIndex struct{ sampleIndex }
+
+func (sampleUnionIndex) Describe() string {
+	return "noble + docker · 85,726 packages · fetched 2 days ago"
+}
+
+// openSampleUnionIndex is a form.IndexOpener for a recipe that adds a source.
+func openSampleUnionIndex(context.Context, form.IndexRequest, func(int64, int64)) (form.PackageIndex, error) {
+	return sampleUnionIndex{}, nil
 }
 
 // pickerDriver drives a pickerField on its own, outside a form.
@@ -136,7 +154,7 @@ func newPickerDriver(t *testing.T, opener form.IndexOpener, initial string, cata
 		}
 		return nil
 	}}
-	picker := newPickerField(context.Background(), field, &answer, func() string { return "24.04" }, func() []string { return catalogChosen }, unicodeGlyphs)
+	picker := newPickerField(context.Background(), field, &answer, func() form.IndexRequest { return form.IndexRequest{Release: "24.04"} }, func() []string { return catalogChosen }, unicodeGlyphs)
 	picker.WithWidth(80)
 	d := &pickerDriver{driver: newDriver(t, picker), picker: picker, answer: &answer}
 	d.settle(picker.Focus())
@@ -340,13 +358,13 @@ func TestPickerNarrowsBySection(t *testing.T) {
 func TestPickerWorksWhileTheIndexLoadsAndAfter(t *testing.T) {
 	release := make(chan struct{})
 	reportProgress := make(chan func(int64, int64), 1)
-	opener := func(_ context.Context, _ string, progress func(int64, int64)) (form.PackageIndex, error) {
+	opener := func(_ context.Context, _ form.IndexRequest, progress func(int64, int64)) (form.PackageIndex, error) {
 		reportProgress <- progress
 		<-release
 		return sampleIndex{}, nil
 	}
 	answer := ""
-	picker := newPickerField(context.Background(), form.Field{Key: form.KeyOtherPackages, Title: "Other packages", OpenIndex: opener}, &answer, func() string { return "24.04" }, func() []string { return nil }, unicodeGlyphs)
+	picker := newPickerField(context.Background(), form.Field{Key: form.KeyOtherPackages, Title: "Other packages", OpenIndex: opener}, &answer, func() form.IndexRequest { return form.IndexRequest{Release: "24.04"} }, func() []string { return nil }, unicodeGlyphs)
 	picker.WithWidth(80)
 	messages := make(chan tea.Msg, 16)
 	runCommands(picker.Focus(), messages)
@@ -414,7 +432,7 @@ func awaitLoaded(t *testing.T, messages <-chan tea.Msg) tea.Msg {
 }
 
 func TestPickerWithoutAnIndexIsAListEditor(t *testing.T) {
-	failing := func(context.Context, string, func(int64, int64)) (form.PackageIndex, error) {
+	failing := func(context.Context, form.IndexRequest, func(int64, int64)) (form.PackageIndex, error) {
 		return nil, errors.New("package index not available: dial tcp: no route to host")
 	}
 	for name, opener := range map[string]form.IndexOpener{"none given": nil, "cannot be had": failing} {
@@ -443,24 +461,33 @@ func TestPickerWithoutAnIndexIsAListEditor(t *testing.T) {
 	}
 }
 
-func TestPickerOpensTheIndexOfTheReleaseAnswered(t *testing.T) {
+func TestPickerOpensTheIndexTheAnswersAskFor(t *testing.T) {
 	var opened []string
-	opener := func(_ context.Context, release string, _ func(int64, int64)) (form.PackageIndex, error) {
-		opened = append(opened, release)
+	opener := func(_ context.Context, request form.IndexRequest, _ func(int64, int64)) (form.PackageIndex, error) {
+		names := []string{request.Release}
+		for _, source := range request.Sources {
+			names = append(names, source.Name)
+		}
+		opened = append(opened, strings.Join(names, "+"))
 		return sampleIndex{}, nil
 	}
-	release := "24.04"
+	request := form.IndexRequest{Release: "24.04"}
 	answer := ""
-	picker := newPickerField(context.Background(), form.Field{Key: form.KeyOtherPackages, OpenIndex: opener}, &answer, func() string { return release }, func() []string { return nil }, unicodeGlyphs)
+	picker := newPickerField(context.Background(), form.Field{Key: form.KeyOtherPackages, OpenIndex: opener}, &answer, func() form.IndexRequest { return request }, func() []string { return nil }, unicodeGlyphs)
 	d := newDriver(t, picker)
 	d.settle(picker.Focus())
 	picker.Blur()
-	d.settle(picker.Focus())
-	release = "22.04"
+	d.settle(picker.Focus()) // the same answers: nothing to open again
+	request.Release = "22.04"
 	picker.Blur()
 	d.settle(picker.Focus())
-	if !slices.Equal(opened, []string{"24.04", "22.04"}) {
-		t.Errorf("opened %v; want once a release, and again when it changes", opened)
+	// A source added on the page before this one is a repository the index
+	// does not yet cover, so it is opened again.
+	request.Sources = []recipe.Source{{Name: "docker", URL: "https://download.docker.com/linux/ubuntu"}}
+	picker.Blur()
+	d.settle(picker.Focus())
+	if !slices.Equal(opened, []string{"24.04", "22.04", "22.04+docker"}) {
+		t.Errorf("opened %v; want once, again when the release changes, and again when a source is added", opened)
 	}
 }
 
@@ -482,12 +509,12 @@ func TestPickerValidatesOnLeaving(t *testing.T) {
 func TestPickerAnswersATickOnce(t *testing.T) {
 	blocked := make(chan struct{})
 	t.Cleanup(func() { close(blocked) })
-	opener := func(context.Context, string, func(int64, int64)) (form.PackageIndex, error) {
+	opener := func(context.Context, form.IndexRequest, func(int64, int64)) (form.PackageIndex, error) {
 		<-blocked
 		return nil, errors.New("never")
 	}
 	answer := ""
-	picker := newPickerField(context.Background(), form.Field{Key: form.KeyOtherPackages, OpenIndex: opener}, &answer, func() string { return "24.04" }, func() []string { return nil }, unicodeGlyphs)
+	picker := newPickerField(context.Background(), form.Field{Key: form.KeyOtherPackages, OpenIndex: opener}, &answer, func() form.IndexRequest { return form.IndexRequest{Release: "24.04"} }, func() []string { return nil }, unicodeGlyphs)
 	picker.Focus()
 	tick := pickerTickMsg{tick: picker.tick}
 	// A huh group hands its focused field every message twice.
@@ -574,9 +601,12 @@ var pickerScenarios = []struct {
 	{name: "picker-sections", opener: openSampleIndex, act: func(d *formDriver) { d.typeText("cmake"); d.press(pressSlash); d.press(pressDown) }},
 	{name: "picker-chosen", opener: openSampleIndex, packages: "valgrind ninja-buld meson", act: func(*formDriver) {}, allSizes: true},
 	{name: "picker-held-back", opener: openSampleIndex, act: func(d *formDriver) { d.typeText("valgrind"); d.press(pressEnter) }},
+	// What a source adds: the row names the repository it comes from, and
+	// the line above the results names every repository searched.
+	{name: "picker-source", opener: openSampleUnionIndex, act: func(d *formDriver) { d.typeText("docker") }, allSizes: true},
 	{
 		name: "picker-unavailable", packages: "tree",
-		opener: func(context.Context, string, func(int64, int64)) (form.PackageIndex, error) {
+		opener: func(context.Context, form.IndexRequest, func(int64, int64)) (form.PackageIndex, error) {
 			return nil, errors.New("package index not available")
 		},
 		act: func(d *formDriver) { d.typeText("htop") },
@@ -679,11 +709,13 @@ func newSummaryDriver(t *testing.T, source *summarySource) *pickerDriver {
 	answer := ""
 	field := form.Field{
 		Key: form.KeyPythonPackages, Title: "Python packages", Description: "type to search PyPI",
-		OpenIndex: func(context.Context, string, func(int64, int64)) (form.PackageIndex, error) { return source, nil },
+		OpenIndex: func(context.Context, form.IndexRequest, func(int64, int64)) (form.PackageIndex, error) {
+			return source, nil
+		},
 		Summaries: true,
 		Validate:  func(string) error { return nil },
 	}
-	picker := newPickerField(context.Background(), field, &answer, func() string { return "24.04" }, func() []string { return nil }, unicodeGlyphs)
+	picker := newPickerField(context.Background(), field, &answer, func() form.IndexRequest { return form.IndexRequest{Release: "24.04"} }, func() []string { return nil }, unicodeGlyphs)
 	picker.WithWidth(80)
 	d := &pickerDriver{driver: newDriver(t, picker), picker: picker, answer: &answer}
 	d.settle(picker.Focus())
@@ -796,7 +828,7 @@ func TestPickerKeepsItsHeightWhileASummaryArrives(t *testing.T) {
 func TestPickerToggleOffLeavesTheChosenList(t *testing.T) {
 	answer := "alpha beta gamma"
 	picker := newPickerField(context.Background(), form.Field{Key: form.KeyOtherPackages, Title: "Other packages"},
-		&answer, func() string { return "24.04" }, func() []string { return nil }, unicodeGlyphs)
+		&answer, func() form.IndexRequest { return form.IndexRequest{Release: "24.04"} }, func() []string { return nil }, unicodeGlyphs)
 	picker.Focus()
 	picker.refresh()
 	if len(picker.rows) != 3 {
@@ -829,4 +861,60 @@ func rowNames(p *pickerField) []string {
 		names = append(names, row.name)
 	}
 	return names
+}
+
+func TestFormOpensTheIndexWithTheSourcesAnswered(t *testing.T) {
+	var asked []form.IndexRequest
+	host := noHost
+	host.OpenIndex = func(_ context.Context, request form.IndexRequest, _ func(int64, int64)) (form.PackageIndex, error) {
+		asked = append(asked, request)
+		return sampleUnionIndex{}, nil
+	}
+	// One source is preselected, as edit does with a recipe that already
+	// names it; the other is chosen here, on the page before the picker's,
+	// which is the whole point of the order: a source answered a moment ago
+	// must be a source the picker searches.
+	initial := form.Defaults(noHost)
+	initial[form.KeyPPAs] = "deadsnakes/ppa"
+	model := newFormModel(context.Background(), form.Fields(host), initial, nil)
+	d := &formDriver{driver: newDriver(t, model), model: model}
+	d.press(tea.WindowSizeMsg{Width: 80, Height: 24})
+	for presses := 0; presses < maxKeyPresses && d.model.pages.GetFocusedField().GetKey() != form.KeySources; presses++ {
+		d.press(pressEnter)
+	}
+	if got := d.model.pages.GetFocusedField().GetKey(); got != form.KeySources {
+		t.Fatalf("the sources are not asked before the packages; reached %q", got)
+	}
+	var catalog form.Field
+	for _, field := range form.Fields(noHost) {
+		if field.Key == form.KeySources {
+			catalog = field
+		}
+	}
+	d.press(pressSpace) // the first of the catalog, whichever it is
+	for presses := 0; presses < maxKeyPresses && d.model.pages.GetFocusedField().GetKey() != form.KeyOtherPackages; presses++ {
+		d.press(pressEnter)
+	}
+	if got := d.model.pages.GetFocusedField().GetKey(); got != form.KeyOtherPackages {
+		t.Fatalf("never reached the picker; at %q", got)
+	}
+	if len(asked) != 1 {
+		t.Fatalf("the index was opened %d times, want once", len(asked))
+	}
+	var named []string
+	for _, source := range asked[0].Sources {
+		if source.URL == "" {
+			t.Errorf("%s reached the index with no URL to fetch from", source.Name)
+		}
+		named = append(named, source.Name)
+	}
+	if !slices.Contains(named, catalog.Options[0].Value) || !slices.Contains(named, "ppa-deadsnakes-ppa") {
+		t.Errorf("the picker asked for %q, want %q and the PPA answered before it", named, catalog.Options[0].Value)
+	}
+	// And what it searches shows them: the row says which repository the
+	// package comes from.
+	d.typeText("docker")
+	if view := d.model.View(); !strings.Contains(view, "docker · Docker") {
+		t.Errorf("the picker does not name the source a row comes from:\n%s", view)
+	}
 }

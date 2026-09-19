@@ -14,6 +14,7 @@ import (
 	"frostroot/internal/form"
 	"frostroot/internal/index"
 	"frostroot/internal/index/indextest"
+	"frostroot/internal/recipe"
 )
 
 // TestMain keeps every test of the package away from the cache of whoever
@@ -158,10 +159,10 @@ func TestPackageIndexesOpenEachReleaseOnce(t *testing.T) {
 		return realOpen(ctx, options)
 	}
 
-	if known := indexes.Known("24.04"); known != nil {
+	if known := indexes.Known(form.IndexRequest{Release: "24.04"}); known != nil {
 		t.Errorf("Known before anything is fetched or cached = %v, want nil", known)
 	}
-	opened, err := indexes.Open(context.Background(), "24.04", nil)
+	opened, err := indexes.Open(context.Background(), form.IndexRequest{Release: "24.04"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,21 +180,21 @@ func TestPackageIndexesOpenEachReleaseOnce(t *testing.T) {
 		t.Errorf("Describe = %q", opened.Describe())
 	}
 	// The summary asks again, and so may the picker: no second opening.
-	if indexes.Known("24.04") == nil {
+	if indexes.Known(form.IndexRequest{Release: "24.04"}) == nil {
 		t.Error("Known after Open should be the opened index")
 	}
-	if _, err := indexes.Open(context.Background(), "24.04", nil); err != nil {
+	if _, err := indexes.Open(context.Background(), form.IndexRequest{Release: "24.04"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(offlineCalls, []bool{true, false}) {
 		t.Errorf("opens (offline?) = %v, want the first Known and the one Open", offlineCalls)
 	}
 
-	if _, err := indexes.Open(context.Background(), "99.04", nil); !errors.Is(err, distro.ErrUnknownRelease) {
+	if _, err := indexes.Open(context.Background(), form.IndexRequest{Release: "99.04"}, nil); !errors.Is(err, distro.ErrUnknownRelease) {
 		t.Errorf("an unknown release: err = %v", err)
 	}
 	var none *packageIndexes
-	if none.Known("24.04") != nil {
+	if none.Known(form.IndexRequest{Release: "24.04"}) != nil {
 		t.Error("no indexes, nothing known")
 	}
 }
@@ -269,7 +270,7 @@ func TestPackageIndexesOpenPyPIOnceAndSummarizeOnDemand(t *testing.T) {
 	if known := indexes.KnownPython(); known != nil {
 		t.Errorf("KnownPython before anything is fetched = %v, want nil", known)
 	}
-	opened, err := indexes.OpenPython(context.Background(), "24.04", nil)
+	opened, err := indexes.OpenPython(context.Background(), form.IndexRequest{Release: "24.04"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,5 +310,106 @@ func TestPackageIndexesOpenPyPIOnceAndSummarizeOnDemand(t *testing.T) {
 	summaries.FetchSummary(context.Background(), "numpy")
 	if summary, known := summaries.Summary("numpy"); !known || summary != "" {
 		t.Errorf("Summary(numpy) = %q, %v; want a known-empty summary", summary, known)
+	}
+}
+
+// dockerSource is what a recipe's [[sources]] entry for Docker resolves to.
+func dockerSource(url string) recipe.Source {
+	return recipe.Source{Name: "docker", URL: url, Components: []string{"main"}, Key: "keys/docker.asc"}
+}
+
+func TestPackageIndexesSearchTheSourcesTheRecipeAdds(t *testing.T) {
+	archive := indextest.Serve(t, "noble", noblePackages)
+	docker := indextest.Serve(t, "noble", []indextest.Package{
+		{Name: "docker-ce", Version: "5:27.3.1-1~ubuntu.24.04~noble", Section: "admin", Description: "Docker: the open-source application container engine"},
+	})
+	app := (&App{Getenv: environmentWith(map[string]string{"XDG_CACHE_HOME": t.TempDir()})}).withDefaults()
+	indexes, ok := app.packageIndexes(&indexFlags{mirror: archive.URL})
+	if !ok {
+		t.Fatal("packageIndexes refused plain flags")
+	}
+	request := form.IndexRequest{Release: "24.04", Sources: []recipe.Source{dockerSource(docker.URL)}}
+
+	opened, err := indexes.Open(context.Background(), request, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The name that sent someone to a third-party source in the first place
+	// is now a name the picker finds, with the repository it comes from.
+	match, isThere := opened.Lookup("docker-ce")
+	if !isThere || match.Origin != "docker" || match.Version != "5:27.3.1-1~ubuntu.24.04~noble" {
+		t.Errorf("docker-ce = %+v, %v; want the source's package", match, isThere)
+	}
+	if !opened.Has("ninja-build") {
+		t.Error("the release's own packages must still be there")
+	}
+	if matches, total := opened.Search("docker", "", 10); total != 1 || matches[0].Name != "docker-ce" {
+		t.Errorf("Search = %+v of %d", matches, total)
+	}
+	if !strings.Contains(opened.Describe(), "noble + docker") {
+		t.Errorf("Describe = %q, want both repositories named", opened.Describe())
+	}
+
+	// The same request again is the same index, and the archive is not
+	// fetched a second time when only the sources change.
+	requests := archive.Requests()
+	if _, err := indexes.Open(context.Background(), request, nil); err != nil {
+		t.Fatal(err)
+	}
+	withoutDocker := form.IndexRequest{Release: "24.04"}
+	plain, err := indexes.Open(context.Background(), withoutDocker, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Has("docker-ce") {
+		t.Error("a request naming no source must not answer with one")
+	}
+	if archive.Requests() != requests {
+		t.Errorf("the archive was fetched again: %d requests, want %d", archive.Requests(), requests)
+	}
+}
+
+func TestPackageIndexesSurviveASourceThatCannotBeRead(t *testing.T) {
+	archive := indextest.Serve(t, "noble", noblePackages)
+	app := (&App{Getenv: environmentWith(map[string]string{"XDG_CACHE_HOME": t.TempDir()})}).withDefaults()
+	indexes, ok := app.packageIndexes(&indexFlags{mirror: archive.URL})
+	if !ok {
+		t.Fatal("packageIndexes refused plain flags")
+	}
+	// A vendor being down is no reason for the picker to stop working: the
+	// archive is searched, and the line above the results says what is
+	// missing so a name absent for that reason does not read as a name that
+	// does not exist.
+	unreachable := recipe.Source{Name: "docker", URL: "http://127.0.0.1:1/linux/ubuntu", Key: "keys/docker.asc"}
+	opened, err := indexes.Open(context.Background(), form.IndexRequest{Release: "24.04", Sources: []recipe.Source{unreachable}}, nil)
+	if err != nil {
+		t.Fatalf("a source that cannot be read must not fail the index: %v", err)
+	}
+	if !opened.Has("ninja-build") {
+		t.Error("the archive must still be searchable")
+	}
+	if !strings.Contains(opened.Describe(), "docker not reachable") {
+		t.Errorf("Describe = %q, want the source named as missing", opened.Describe())
+	}
+
+	// An answer missing a repository is not remembered as the answer: the
+	// same question asked again tries the repository again, so a vendor that
+	// was down for a moment is searched once it is back.
+	docker := indextest.Serve(t, "noble", []indextest.Package{
+		{Name: "docker-ce", Version: "5:27.3.1-1~ubuntu.24.04~noble", Section: "admin", Description: "Docker: the open-source application container engine"},
+	})
+	attempts := 0
+	realOpenSource := indexes.openSource
+	indexes.openSource = func(ctx context.Context, options index.Options, source index.Source) (*index.Index, error) {
+		attempts++
+		source.URL = docker.URL
+		return realOpenSource(ctx, options, source)
+	}
+	recovered, err := indexes.Open(context.Background(), form.IndexRequest{Release: "24.04", Sources: []recipe.Source{unreachable}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 1 || !recovered.Has("docker-ce") {
+		t.Errorf("attempts = %d, docker-ce found = %v; want the source tried again and searched", attempts, recovered.Has("docker-ce"))
 	}
 }

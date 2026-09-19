@@ -168,7 +168,7 @@ func recipePreview(recipePath string, indexes *packageIndexes) tui.PreviewFunc {
 	// worth a word before it is written.
 	return func(values form.Values) tui.Preview {
 		preview := describe(values)
-		preview.Warning = form.Warnings(values, indexes.Known(values.String(form.KeyRelease)), indexes.KnownPython())
+		preview.Warning = form.Warnings(values, indexes.Known(form.IndexRequestFor(values)), indexes.KnownPython())
 		return preview
 	}
 }

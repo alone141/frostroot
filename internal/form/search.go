@@ -16,6 +16,7 @@ type Match struct {
 	Component   string // main, restricted, universe or multiverse
 	Section     string // devel, python, libs
 	Description string // one line
+	Origin      string // the recipe source it comes from, or "" for the archive
 }
 
 // SectionCount is an archive section and how many matches it holds.
@@ -59,11 +60,38 @@ type PackageSummaries interface {
 	FetchSummary(ctx context.Context, name string)
 }
 
-// IndexOpener opens an index for the Ubuntu release such as "24.04" that
-// the form has been told about. progress is told how the download goes,
-// from another goroutine. An error means there is no index to be had, which
-// is never the form's failure: the field goes on as a list of typed names.
-type IndexOpener func(ctx context.Context, releaseVersion string, progress func(doneBytes, totalBytes int64)) (PackageIndex, error)
+// IndexRequest says which packages an opener should offer: those of one
+// Ubuntu release, and those of the apt sources the answers so far add to it.
+// Sources come from the Sources page, which is asked before the packages are,
+// so that a name only Docker's repository has is a name the picker can find.
+type IndexRequest struct {
+	Release string          // such as "24.04"
+	Sources []recipe.Source // resolved against Release; empty for PyPI
+}
+
+// Key identifies a request, so that a field that has already opened this
+// index does not open it again. Two requests with the same key ask for the
+// same packages.
+func (r IndexRequest) Key() string {
+	var key strings.Builder
+	key.WriteString(r.Release)
+	for _, source := range r.Sources {
+		fmt.Fprintf(&key, "\n%s\t%s\t%s\t%s", source.Name, source.URL, source.Suite, strings.Join(source.Components, ","))
+	}
+	return key.String()
+}
+
+// IndexRequestFor is what the answers so far ask of an index: the release
+// chosen on the Image page, and the sources chosen on the Sources page.
+func IndexRequestFor(values Values) IndexRequest {
+	return IndexRequest{Release: values.String(KeyRelease), Sources: ToRecipe(values).Sources}
+}
+
+// IndexOpener opens an index for a request the form has been told about.
+// progress is told how the download goes, from another goroutine. An error
+// means there is no index to be had, which is never the form's failure: the
+// field goes on as a list of typed names.
+type IndexOpener func(ctx context.Context, request IndexRequest, progress func(doneBytes, totalBytes int64)) (PackageIndex, error)
 
 // nearestCount is how many "did you mean" names a warning offers.
 const nearestCount = 3

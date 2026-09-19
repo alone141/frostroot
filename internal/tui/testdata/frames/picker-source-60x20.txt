@@ -1,0 +1,21 @@
+Packages
+┃ Other packages
+┃ type to search the archive and the sources above, or a na…
+┃ > docker
+┃ 1 found · all sections · noble + docker · 85,726 packages…
+┃ > [ ] add "docker" as typed · not in the index
+┃   [ ] docker-ce  docker · Docker: the open-source applica…
+┃
+┃
+┃
+┃
+┃
+┃
+┃ chosen: none
+┃
+
+  Python packages
+  type to search PyPI, or a name; installed into the image'…
+  > type to search, or a name
+
+↑/↓ move • space add/remove • / section • shift+tab back …

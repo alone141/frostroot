@@ -114,14 +114,19 @@ const (
 	PageImage    = "Image"
 	PageUser     = "User"
 	PageSystem   = "System"
-	PagePackages = "Packages"
+	// PageSources comes before PagePackages so that the packages of the
+	// sources it adds are packages the picker can find: the index is opened
+	// when the picker is reached, and it can only cover repositories the
+	// answers already name. A recipe that adds none passes the page with
+	// two keystrokes.
 	PageSources  = "Sources"
+	PagePackages = "Packages"
 	PageTrust    = "Trust"
 )
 
 // Pages returns the page titles in order.
 func Pages() []string {
-	return []string{PageCaptured, PageImage, PageUser, PageSystem, PagePackages, PageSources, PageTrust}
+	return []string{PageCaptured, PageImage, PageUser, PageSystem, PageSources, PagePackages, PageTrust}
 }
 
 // Host is what the form reads from the machine it runs on.
@@ -188,6 +193,19 @@ func Fields(host Host) []Field {
 			Description: "Needed for services, snapd and most tutorials",
 		},
 		{
+			Key: KeySources, Page: PageSources, Kind: KindMultiSelect,
+			Title:       "Third-party apt sources",
+			Description: "Repositories besides Ubuntu's archive; their signing keys are fetched and checked when the recipe is written",
+			Options:     sourceOptions(),
+		},
+		{
+			Key: KeyPPAs, Page: PageSources, Kind: KindInput,
+			Title:       "Other PPAs",
+			Description: "Launchpad PPAs as owner/name, separated by spaces or commas",
+			Placeholder: "none",
+			Validate:    checkPPAList,
+		},
+		{
 			Key: KeyPackages, Page: PagePackages, Kind: KindMultiSelect, Filterable: true,
 			Title:       "Packages",
 			Description: "Space selects, Enter continues, / filters",
@@ -196,7 +214,7 @@ func Fields(host Host) []Field {
 		{
 			Key: KeyOtherPackages, Page: PagePackages, Kind: KindSearch,
 			Title:       "Other packages",
-			Description: "type to search the release's archive, or a name; Space adds the row",
+			Description: "type to search the archive and the sources above, or a name; Space adds",
 			Placeholder: "none",
 			Validate:    checkPackageList,
 			OpenIndex:   host.OpenIndex,
@@ -209,19 +227,6 @@ func Fields(host Host) []Field {
 			Validate:    checkPythonPackageList,
 			OpenIndex:   host.OpenPythonIndex,
 			Summaries:   true,
-		},
-		{
-			Key: KeySources, Page: PageSources, Kind: KindMultiSelect,
-			Title:       "Third-party apt sources",
-			Description: "Repositories besides Ubuntu's archive; their signing keys are fetched and checked when the recipe is written",
-			Options:     sourceOptions(),
-		},
-		{
-			Key: KeyPPAs, Page: PageSources, Kind: KindInput,
-			Title:       "Other PPAs",
-			Description: "Launchpad PPAs as owner/name, separated by spaces or commas",
-			Placeholder: "none",
-			Validate:    checkPPAList,
 		},
 		{
 			Key: KeyCertificates, Page: PageTrust, Kind: KindInput,

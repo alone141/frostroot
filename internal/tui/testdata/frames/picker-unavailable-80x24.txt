@@ -1,6 +1,6 @@
 Packages
 ┃ Other packages
-┃ type to search the release's archive, or a name; Space adds the row
+┃ type to search the archive and the sources above, or a name; Space adds
 ┃ > htop
 ┃ package index not available: names are added as typed and checked by build
 ┃ > [ ] add "htop" as typed

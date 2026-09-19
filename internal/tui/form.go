@@ -462,7 +462,7 @@ func (b *formBinding) huhField(field form.Field) huh.Field {
 		return huh.NewConfirm().Key(field.Key).Title(field.Title).Description(field.Description).
 			Affirmative("Yes").Negative("No").Value(b.flags[field.Key])
 	case form.KindSearch:
-		return newPickerField(b.ctx, field, b.texts[field.Key], b.answeredRelease, b.chosenInCatalog, b.glyphs)
+		return newPickerField(b.ctx, field, b.texts[field.Key], b.answeredIndexRequest, b.chosenInCatalog, b.glyphs)
 	case form.KindNote:
 		// The text is escaped: a note renders its own markup, and what
 		// capture found is full of underscores. A button to move on makes
@@ -473,13 +473,11 @@ func (b *formBinding) huhField(field form.Field) huh.Field {
 	return huh.NewNote().Title(field.Title).Description("unsupported field kind")
 }
 
-// answeredRelease is the Ubuntu release as answered so far: what the
-// package picker opens the index of.
-func (b *formBinding) answeredRelease() string {
-	if release, isAsked := b.texts[form.KeyRelease]; isAsked {
-		return *release
-	}
-	return b.initial.String(form.KeyRelease)
+// answeredIndexRequest is what the package picker opens the index of: the
+// release and the sources as answered so far. Both pages come before the
+// picker's, so a source chosen a moment ago is a source it searches.
+func (b *formBinding) answeredIndexRequest() form.IndexRequest {
+	return form.IndexRequestFor(b.values())
 }
 
 // chosenInCatalog is the catalog's answer so far. huh writes it on every
