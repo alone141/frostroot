@@ -285,3 +285,80 @@ func TestBuildOfflineComparesSources(t *testing.T) {
 		t.Errorf("offline build error = %v", err)
 	}
 }
+
+// otherFakeKeyPacket is as valid a key as fakeKeyPacket, and a different one.
+var otherFakeKeyPacket = []byte{0x99, 0x00, 0x03, 0x04, 0x00, 0x01}
+
+// TestBuildOfflineComparesSourceKeys is the case the comparison above never
+// made: a key file rewritten between the online build and the offline one —
+// a pull request touching one file, a rotation, any local write. The file is
+// installed as the source's signed-by keyring, so the rebuilt image would
+// trust another key, and the lock's key_sha256 is what says so.
+func TestBuildOfflineComparesSourceKeys(t *testing.T) {
+	options, _ := newTestOptions(t)
+	writeSampleKeys(t, options.RecipeDir)
+	imageRecipe := sampleRecipe()
+	imageRecipe.Sources = sampleSources()
+	imageRecipe.Packages.Include = []string{"git", "docker-ce"}
+	bootstrapper := &fakeBootstrapper{dpkgStatus: sampleDpkgStatusWithSources, aptLists: sampleAptListsWithSources()}
+	if _, err := (&Builder{Bootstrapper: bootstrapper}).Build(context.Background(), imageRecipe, options); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := recipe.LoadLock(filepath.Join(options.RecipeDir, LockFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	readKeys := func() map[string]sourceKey {
+		t.Helper()
+		keys, err := readSourceKeys(options.RecipeDir, imageRecipe.Sources)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return keys
+	}
+	if differences := sourceKeyDifferences(lock, readKeys()); len(differences) != 0 {
+		t.Errorf("untouched keys differ: %q", differences)
+	}
+	// Another valid key where Docker's was. It parses, so readSourceKeys has
+	// nothing to say; only the digest in the lock knows it is not the same.
+	if err := os.WriteFile(recipe.KeyPath(options.RecipeDir, imageRecipe.Sources[0]), otherFakeKeyPacket, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	differences := sourceKeyDifferences(lock, readKeys())
+	if len(differences) != 1 || !strings.Contains(differences[0], "the key of source docker changed since the lock was written") {
+		t.Errorf("a rewritten key: differences = %q", differences)
+	}
+	// A source the recipe no longer names is repositoryDifferences' to
+	// report, once, and not this function's to report again.
+	withoutDocker := readKeys()
+	delete(withoutDocker, "docker")
+	if differences := sourceKeyDifferences(lock, withoutDocker); len(differences) != 0 {
+		t.Errorf("a removed source was reported here too: %q", differences)
+	}
+	// A lock that lost a digest cannot vouch for that key.
+	edited := lock
+	edited.Repositories = slices.Clone(lock.Repositories)
+	edited.Repositories[1].KeySHA256 = ""
+	differences = sourceKeyDifferences(edited, readKeys())
+	if len(differences) != 2 || !strings.Contains(differences[1], "no key_sha256 for source ppa-git-core-ppa") {
+		t.Errorf("a lock without a digest: differences = %q", differences)
+	}
+	// And the offline build itself refuses, before any work is done.
+	options.Offline = true
+	_, err = (&Builder{Bootstrapper: &offlineFakeBootstrapper{}}).Build(context.Background(), imageRecipe, options)
+	if !errors.Is(err, ErrLockMismatch) || !strings.Contains(err.Error(), "the key of source docker changed since the lock was written") {
+		t.Errorf("offline build error = %v", err)
+	}
+	// With the key it was locked with, the same recipe rebuilds: the check
+	// objects to the change and to nothing else.
+	if err := os.WriteFile(recipe.KeyPath(options.RecipeDir, imageRecipe.Sources[0]), fakeKeyPacket, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	release, err := distro.Lookup(imageRecipe.Image.Release, imageRecipe.Image.Arch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := planOffline(options.RecipeDir, imageRecipe, release); err != nil {
+		t.Errorf("planOffline with the locked key = %v", err)
+	}
+}

@@ -172,14 +172,38 @@ func CheckSource(source Source) []error {
 const sourceURLMetacharacters = " \t\r\n\v\f[]#"
 
 // CheckSourceURL reports why url cannot be an apt source URL, or nil: it
-// must be http or https with a host and none of the characters that would
-// break the "deb" line it lands in.
+// must be http or https with a host, none of the characters that would
+// break the "deb" line it lands in, and no credentials.
 func CheckSourceURL(sourceURL string) error {
 	parsed, err := url.Parse(sourceURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || strings.ContainsAny(sourceURL, sourceURLMetacharacters) {
 		return fmt.Errorf("invalid source url %q (expected http or https with no space, bracket or #, such as https://download.docker.com/linux/ubuntu)", sourceURL)
 	}
+	// The same rule as [python] index_url, for a stronger reason: a source
+	// URL is written into the recipe, twice into the lock, and into
+	// /etc/apt/sources.list inside the tarball everyone the image is handed
+	// can read. Apt also clears the userinfo before it names its list
+	// files, while AptListPrefix does not, so a URL carrying credentials
+	// matches no index and the build fails after mmdebstrap has run.
+	if parsed.User != nil {
+		return fmt.Errorf("invalid source url %q (it carries credentials, which must not be committed in a recipe or shipped in the image)", RedactURLCredentials(sourceURL))
+	}
 	return nil
+}
+
+// RedactURLCredentials returns rawURL with any userinfo replaced by
+// "REDACTED", for messages and reports: a refusal that quoted the password
+// would put it in a terminal, a CI log, or capture's report, which sits
+// beside a recipe people commit. The whole userinfo goes, not only the
+// password, because a token is as often the user name. A URL that does not
+// parse, or carries no userinfo, is returned as it is.
+func RedactURLCredentials(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.User == nil {
+		return rawURL
+	}
+	parsed.User = url.User("REDACTED")
+	return parsed.String()
 }
 
 // CheckComponent reports why component cannot be an apt component, or nil.
@@ -205,7 +229,7 @@ func CheckPythonIndexURL(indexURL string) error {
 		return fmt.Errorf("invalid python index_url %q (expected https with no space or #, such as https://nexus.example.com/repository/pypi/simple)", indexURL)
 	}
 	if parsed.User != nil {
-		return fmt.Errorf("invalid python index_url %q (it carries credentials, which must not be committed in a recipe)", indexURL)
+		return fmt.Errorf("invalid python index_url %q (it carries credentials, which must not be committed in a recipe)", RedactURLCredentials(indexURL))
 	}
 	return nil
 }

@@ -116,8 +116,16 @@ func planOffline(recipeDir string, imageRecipe recipe.Recipe, release distro.Rel
 		}
 	}
 	differences = append(differences, repositoryDifferences(lock, imageRecipe.Sources, release)...)
-	// The certificate files are read from beside the recipe, so an offline
-	// rebuild would quietly install whatever they hold now.
+	// The key files are read from beside the recipe and installed as the
+	// sources' signed-by keyrings, so an offline rebuild would quietly trust
+	// whatever they hold now. An online build has no such check to make: it
+	// writes the lock, and a changed key_sha256 is then a line in its diff.
+	sourceKeys, err := readSourceKeys(recipeDir, imageRecipe.Sources)
+	if err != nil {
+		return nil, err
+	}
+	differences = append(differences, sourceKeyDifferences(lock, sourceKeys)...)
+	// So are the certificate files, and for the same reason.
 	certificates, err := ReadCertificates(recipeDir, imageRecipe.CertificatePaths())
 	if err != nil {
 		return nil, err
@@ -182,8 +190,8 @@ func normalizedPythonNames(names []string) []string {
 
 // repositoryDifferences says how the recipe's sources differ from the lock's
 // repositories: a source added, removed, or with another URL, suite or
-// components changes which packages a build installs. The key file may
-// change (it is only trust) and is not compared.
+// components changes which packages a build installs. The key file is
+// sourceKeyDifferences' to compare: it needs the file read, not the recipe.
 func repositoryDifferences(lock recipe.Lockfile, sources []recipe.Source, release distro.Release) []string {
 	var differences []string
 	inRecipe := map[string]bool{}
@@ -200,6 +208,32 @@ func repositoryDifferences(lock recipe.Lockfile, sources []recipe.Source, releas
 	for _, locked := range lock.Repositories {
 		if !inRecipe[locked.Name] {
 			differences = append(differences, "source removed from the recipe: "+locked.Name)
+		}
+	}
+	return differences
+}
+
+// sourceKeyDifferences says which sources' key files are no longer the bytes
+// the lock recorded, one message per source, in the lock's order. A key is
+// not only trust: the file is installed into the image as that source's
+// signed-by keyring, so an offline rebuild with another key beside the
+// recipe would quietly ship an image that trusts someone else — the same
+// reason CheckCertificatesAgainstLock exists. A source the lock or the
+// recipe lacks is repositoryDifferences' to report and is skipped here, so
+// nothing is said twice.
+func sourceKeyDifferences(lock recipe.Lockfile, keys map[string]sourceKey) []string {
+	var differences []string
+	for _, locked := range lock.Repositories {
+		key, inRecipe := keys[locked.Name]
+		switch {
+		case !inRecipe:
+		case locked.KeySHA256 == "":
+			// Every frostroot that wrote [[repositories]] wrote the digest
+			// with it, so a lock without one was edited, and cannot vouch
+			// for the key.
+			differences = append(differences, fmt.Sprintf("the lock records no key_sha256 for source %s", locked.Name))
+		case locked.KeySHA256 != key.sha256:
+			differences = append(differences, fmt.Sprintf("the key of source %s changed since the lock was written (lock %s, file %s)", locked.Name, shortDigest(locked.KeySHA256), shortDigest(key.sha256)))
 		}
 	}
 	return differences

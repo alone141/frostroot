@@ -158,15 +158,17 @@ func (m *Mmdebstrap) commandLine(spec BootstrapSpec) (args, environment []string
 		args = append(args, `--aptopt=Apt::Install-Recommends "true"`)
 	}
 	if spec.CaInfoPath != "" {
-		// CaInfo replaces apt's certificate store rather than adding to it,
-		// so the file frostroot writes holds the host's certificates as well.
-		args = append(args, `--aptopt=Acquire::https::CaInfo "`+spec.CaInfoPath+`"`)
+		args = append(args, "--setup-hook="+aptCaInfoSetupHook(spec.CaInfoPath))
 	}
 	if len(spec.Include) > 0 {
 		args = append(args, "--include="+strings.Join(spec.Include, ","))
 	}
 	for _, hook := range spec.CustomizeHooks {
 		args = append(args, "--customize-hook="+hook)
+	}
+	if spec.CaInfoPath != "" {
+		// After every other hook: whatever needs the network has run by now.
+		args = append(args, "--customize-hook="+aptCaInfoCleanupHook)
 	}
 	// The source lines carry the components, so --components is not needed.
 	args = append(args, spec.Suite, spec.TarballPath)
@@ -182,6 +184,35 @@ func (m *Mmdebstrap) commandLine(spec BootstrapSpec) (args, environment []string
 		environment = append(environment, "SOURCE_DATE_EPOCH="+strconv.FormatInt(spec.SourceDateEpoch, 10))
 	}
 	return args, environment
+}
+
+// aptBuildCaInfoConfPath is where, inside the chroot, the build keeps apt's
+// CaInfo setting for as long as mmdebstrap runs and no longer.
+const aptBuildCaInfoConfPath = "/etc/apt/apt.conf.d/99frostroot-build-ca"
+
+// aptCaInfoCleanupHook removes what aptCaInfoSetupHook wrote.
+const aptCaInfoCleanupHook = `rm -f "$1` + aptBuildCaInfoConfPath + `"`
+
+// aptCaInfoSetupHook returns the --setup-hook that points the build's apt at
+// caInfoPath. CaInfo replaces apt's certificate store rather than adding to
+// it, which is why the file frostroot writes there holds the host's
+// certificates as well.
+//
+// --aptopt would be the obvious way to say this, and it is the wrong one:
+// mmdebstrap writes every --aptopt into /etc/apt/apt.conf.d/99mmdebstrap
+// inside the chroot and ships it; its manual says so, and says to "use hooks
+// for temporary configuration options". caInfoPath is a file in this
+// build's work directory, so the image then carried the build host's scratch
+// path and uid, apt in the imported image failed every https source for want
+// of a bundle that was never there, and, the work directory's name being
+// random, two online builds of one recipe differed in bytes. A setup hook
+// runs after mmdebstrap has configured apt and before anything is fetched,
+// apt reads the chroot's apt.conf.d from the first download on, and
+// aptCaInfoCleanupHook takes the file out again before the tarball is
+// packed.
+func aptCaInfoSetupHook(caInfoPath string) string {
+	setting := `Acquire::https::CaInfo "` + caInfoPath + `";`
+	return `mkdir -p "$1/etc/apt/apt.conf.d" && printf '%s\n' ` + shellQuote(setting) + ` > "$1` + aptBuildCaInfoConfPath + `"`
 }
 
 // temporaryDirFor returns the TMPDIR mmdebstrap uses for spec.
