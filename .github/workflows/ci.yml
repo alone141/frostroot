@@ -32,6 +32,47 @@ jobs:
       - name: Build for Windows
         run: GOOS=windows go build ./...
 
+  integration:
+    # The tests behind the integration tag bootstrap real images and compare
+    # two builds of one lock byte for byte. Until this job existed CI only
+    # vetted them, so the claim this project is built on — that an offline
+    # rebuild is byte-identical — was checked by code nothing ran.
+    name: Integration (real bootstrap)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install mmdebstrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mmdebstrap ubuntu-keyring
+      - name: Check the prerequisites are really here
+        # skipUnlessMmdebstrapAvailable skips when either is missing, so a
+        # job that installed neither would pass having run nothing at all.
+        run: |
+          command -v mmdebstrap >/dev/null || { echo "mmdebstrap is not installed"; exit 1; }
+          test -e /usr/share/keyrings/ubuntu-archive-keyring.gpg || { echo "the Ubuntu archive keyring is not installed"; exit 1; }
+      - name: go test -tags=integration
+        # No -race: these tests spend their time in mmdebstrap and apt, not in
+        # Go, and the unit job already runs the race detector over the same
+        # packages. The default 10m timeout is not enough for four real
+        # bootstraps.
+        run: |
+          set -o pipefail
+          go test -tags=integration -timeout 40m -v ./internal/builder/ 2>&1 | tee integration.log
+      - name: A skipped test proves nothing
+        # The prerequisite check above should make this unreachable. It is
+        # here because a skip reads exactly like a pass in the summary, and
+        # this job exists to stop that kind of silence.
+        run: |
+          if grep -q -- "--- SKIP" integration.log; then
+            echo "Integration tests skipped rather than ran:"
+            grep -- "--- SKIP" integration.log
+            exit 1
+          fi
+
   lint:
     name: golangci-lint
     runs-on: ubuntu-latest
