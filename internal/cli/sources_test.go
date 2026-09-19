@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -33,6 +34,17 @@ func (c *fakeKeyClient) Get(_ context.Context, url string) ([]byte, error) {
 func dockerKeyFixture(t *testing.T) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "pgp", "testdata", "docker.asc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+// githubCLIKeyFixture is GitHub's real keyring, the one catalog file that
+// holds two primary keys.
+func githubCLIKeyFixture(t *testing.T) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "pgp", "testdata", "github-cli.gpg"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,6 +106,41 @@ func TestInitWithSourcesFetchesTheirKeys(t *testing.T) {
 	exitCode, validateOut, validateErr := runValidateIn(recipeDir)
 	if exitCode != exitSuccess || !strings.Contains(validateOut, "2 extra sources") {
 		t.Errorf("validate: exit %d, stdout %q, stderr %q", exitCode, validateOut, validateErr)
+	}
+}
+
+func TestInitNamesEveryKeyOfAMultiKeySource(t *testing.T) {
+	// GitHub serves two primary keys in one file, and that file is installed
+	// whole as the source's signed-by keyring, where apt accepts a Release
+	// signed by either. The saved-key line has to name both, or it tells the
+	// user to trust less than they are trusting.
+	githubCLI, _ := sources.Lookup("github-cli")
+	if len(githubCLI.Fingerprints) != 2 {
+		t.Fatalf("github-cli pins %d keys, want the two its keyring holds", len(githubCLI.Fingerprints))
+	}
+	recipeDir := t.TempDir()
+	client := &fakeKeyClient{answers: map[string][]byte{githubCLI.KeyURL: githubCLIKeyFixture(t)}}
+	exitCode, stdout, stderr := runInitWithKeyClient(recipeDir, answersWith(map[int]string{answerSources: "github-cli"}), client)
+	if exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr)
+	}
+	wantLine := fmt.Sprintf("Saved the signing key of github-cli from %s into keys/github-cli.asc (fingerprints %s and %s)",
+		githubCLI.KeyURL, pgp.FormatFingerprint(githubCLI.Fingerprints[0]), pgp.FormatFingerprint(githubCLI.Fingerprints[1]))
+	if !strings.Contains(stdout, wantLine) {
+		t.Errorf("stdout lacks %q:\n%s", wantLine, stdout)
+	}
+	// What the line claims is what was written: the keyring on disk holds
+	// both of those keys and nothing else.
+	written, err := os.ReadFile(filepath.Join(recipeDir, "keys", "github-cli.asc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := pgp.ParsePublicKey(written)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(key.Fingerprints, githubCLI.Fingerprints) {
+		t.Errorf("the written keyring holds %v, want the pinned set %v", key.Fingerprints, githubCLI.Fingerprints)
 	}
 }
 

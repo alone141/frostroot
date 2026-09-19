@@ -214,6 +214,11 @@ func TestFetchKeyAcceptsAFileWhoseKeysAreAllPinned(t *testing.T) {
 	if fetched.Fingerprint != githubCLI.Fingerprints[0] {
 		t.Errorf("fetched = %+v, want the first pinned key", fetched)
 	}
+	// Whoever shows the user what was fetched needs the whole set, not only
+	// the key the file happens to lead with.
+	if !reflect.DeepEqual(fetched.Fingerprints, githubCLI.Fingerprints) {
+		t.Errorf("fetched.Fingerprints = %v, want both keys of the file %v", fetched.Fingerprints, githubCLI.Fingerprints)
+	}
 	// What was accepted is what gets written: the armored file that becomes
 	// the signed-by keyring still holds both pinned keys and nothing else.
 	written, err := pgp.ParsePublicKey(fetched.Armored)

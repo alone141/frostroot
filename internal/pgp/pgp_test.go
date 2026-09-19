@@ -221,6 +221,29 @@ func TestFormatFingerprint(t *testing.T) {
 	}
 }
 
+func TestFormatFingerprints(t *testing.T) {
+	testCases := []struct {
+		name         string
+		fingerprints []string
+		want         string
+	}{
+		{"one key", []string{dockerFingerprint}, FormatFingerprint(dockerFingerprint)},
+		{
+			"the two keys of one file",
+			[]string{githubCLIFingerprint, githubCLISecondFingerprint},
+			FormatFingerprint(githubCLIFingerprint) + " and " + FormatFingerprint(githubCLISecondFingerprint),
+		},
+		{"none", nil, ""},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := FormatFingerprints(testCase.fingerprints); got != testCase.want {
+				t.Errorf("FormatFingerprints(%v) = %q, want %q", testCase.fingerprints, got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestCRC24MatchesTheArmorChecksum(t *testing.T) {
 	// The Docker key's armor carries a checksum line; dearmor verified it in
 	// TestParseArmoredKey. Here the same body with one flipped byte must fail.
