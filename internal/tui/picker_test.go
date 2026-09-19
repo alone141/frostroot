@@ -35,6 +35,8 @@ var samplePackages = []form.Match{
 	// A package no Ubuntu archive has: it comes from the source the recipe
 	// added, and the row says so.
 	{Name: "docker-ce", Version: "5:27.3.1-1~ubuntu.24.04~noble", Component: "stable", Section: "admin", Description: "Docker: the open-source application container engine", Origin: "docker"},
+	// A PPA, whose source name is the long kind: the row shortens it.
+	{Name: "python3.13", Version: "3.13.15-1+noble1", Component: "main", Section: "python", Description: "Interactive high-level object-oriented language (version 3.13)", Origin: "ppa-deadsnakes-ppa"},
 }
 
 // sampleIndex is a form.PackageIndex over samplePackages that ranks the way
@@ -128,7 +130,9 @@ func openSampleIndex(context.Context, form.IndexRequest, func(int64, int64)) (fo
 type sampleUnionIndex struct{ sampleIndex }
 
 func (sampleUnionIndex) Describe() string {
-	return "noble + docker · 85,726 packages · fetched 2 days ago"
+	// The line above the results names every repository in full, where a
+	// row shortens a PPA to fit.
+	return "noble + docker, ppa-deadsnakes-ppa · 85,738 packages · fetched 2 days ago"
 }
 
 // openSampleUnionIndex is a form.IndexOpener for a recipe that adds a source.
@@ -604,6 +608,9 @@ var pickerScenarios = []struct {
 	// What a source adds: the row names the repository it comes from, and
 	// the line above the results names every repository searched.
 	{name: "picker-source", opener: openSampleUnionIndex, act: func(d *formDriver) { d.typeText("docker") }, allSizes: true},
+	// A PPA in a row: "ppa-deadsnakes-ppa" in the recipe, "deadsnakes" here,
+	// where the name shares the line with a version and a description.
+	{name: "picker-ppa", opener: openSampleUnionIndex, act: func(d *formDriver) { d.typeText("python3.13") }},
 	{
 		name: "picker-unavailable", packages: "tree",
 		opener: func(context.Context, form.IndexRequest, func(int64, int64)) (form.PackageIndex, error) {

@@ -19,6 +19,7 @@ import (
 	"frostroot/internal/builder"
 	"frostroot/internal/form"
 	"frostroot/internal/recipe"
+	"frostroot/internal/sources"
 )
 
 // Sizes of the picker.
@@ -609,16 +610,20 @@ func rowOf(match form.Match) pickerRow {
 // describe is what a row says of the package after its name and version:
 // the source it comes from, when it is not the release's own archive, and
 // then the one-line description. The source goes first because a line too
-// long to fit loses its end, and which repository a package comes from
-// is what a person is deciding about.
+// long to fit loses its end, and which repository a package comes from is
+// what a person is deciding about. It is shortened, because a row is the
+// one place the name competes for width: the recipe's "ppa-deadsnakes-ppa"
+// is "deadsnakes" here, and the line above the results still names every
+// repository in full.
 func (r pickerRow) describe() string {
-	if r.origin == "" {
+	origin := sources.ShortName(r.origin)
+	if origin == "" {
 		return r.description
 	}
 	if r.description == "" {
-		return r.origin
+		return origin
 	}
-	return r.origin + " · " + r.description
+	return origin + " · " + r.description
 }
 
 func (p *pickerField) moveCursor(delta int) {

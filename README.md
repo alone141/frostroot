@@ -357,6 +357,11 @@ and the line above the results names every repository searched:
 ┃   [ ] docker-ce  5:29.8.1-1~ubun…  docker · Docker: the open-source applicati…
 ```
 
+A PPA is shortened to the part that says which one it is —
+`ppa-deadsnakes-ppa` in the recipe is `deadsnakes` in a row, where the name
+shares the line with a version and a description — and the line above the
+results names every repository in full.
+
 A name two repositories offer is shown as the source's, which is the one
 added on purpose — apt itself chooses by version, so the version shown is not
 a promise of the version installed. A source whose repository cannot be read

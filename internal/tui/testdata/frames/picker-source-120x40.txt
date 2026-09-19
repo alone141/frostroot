@@ -11,7 +11,7 @@ Packages
 ┃ Other packages
 ┃ type to search the archive and the sources above, or a name; Space adds
 ┃ > docker
-┃ 1 found · all sections · noble + docker · 85,726 packages · fetched 2 days ago
+┃ 1 found · all sections · noble + docker, ppa-deadsnakes-ppa · 85,738 packages · fetched 2 days ago
 ┃ > [ ] add "docker" as typed · not in the index
 ┃   [ ] docker-ce  5:27.3.1-1~ubun…  docker · Docker: the open-source application container engine
 ┃
