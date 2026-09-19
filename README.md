@@ -1138,7 +1138,7 @@ internal/capture/   reading an installed system: packages asked for, user, local
 internal/form/      the questions as data: fields, package catalog, timezones, locales, recipe mapping, what a package search needs of an index
 internal/index/     what the form searches: the archive's Packages files and PyPI's simple index, fetched, checked, reduced, cached and searched, and PyPI summaries one at a time
 internal/sources/   the catalog of third-party repositories, PPAs, and fetching and checking their keys
-internal/pgp/       OpenPGP public keys: armor, the primary key's fingerprint; nothing else
+internal/pgp/       OpenPGP public keys: armor, the fingerprint of every primary key; nothing else
 internal/tui/       the full-screen form with its package picker, and the progress screen (the only package using the Charm libraries)
 internal/recipe/    frostroot.toml and frostroot.lock: types, strict parsing, validation
 internal/distro/    Ubuntu releases, archive URL, components, the three pocket lines

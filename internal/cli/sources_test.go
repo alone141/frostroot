@@ -55,8 +55,8 @@ func TestInitWithSourcesFetchesTheirKeys(t *testing.T) {
 	// fake keyserver then serves: consistency is what is checked.
 	client := &fakeKeyClient{answers: map[string][]byte{
 		docker.KeyURL: dockerKey,
-		"https://api.launchpad.net/1.0/~deadsnakes/+archive/ubuntu/ppa":                            []byte(`{"signing_key_fingerprint": "` + docker.Fingerprint + `"}`),
-		"https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x" + docker.Fingerprint: dockerKey,
+		"https://api.launchpad.net/1.0/~deadsnakes/+archive/ubuntu/ppa":                                []byte(`{"signing_key_fingerprint": "` + docker.Fingerprints[0] + `"}`),
+		"https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x" + docker.Fingerprints[0]: dockerKey,
 	}}
 	answers := answersWith(map[int]string{answerRelease: "22.04", answerSources: "docker", answerPPAs: "deadsnakes/ppa"})
 	exitCode, stdout, stderr := runInitWithKeyClient(recipeDir, answers, client)
@@ -73,7 +73,7 @@ func TestInitWithSourcesFetchesTheirKeys(t *testing.T) {
 			t.Fatal(err)
 		}
 		key, err := pgp.ParsePublicKey(data)
-		if err != nil || !key.Armored || key.Fingerprint != docker.Fingerprint {
+		if err != nil || !key.Armored || key.Fingerprint != docker.Fingerprints[0] {
 			t.Errorf("%s: %v, %+v", source.Key, err, key)
 		}
 	}
@@ -123,7 +123,7 @@ func TestInitWithSourcesFingerprintMismatch(t *testing.T) {
 	if exitCode != exitUserError {
 		t.Fatalf("exit code = %d, want %d", exitCode, exitUserError)
 	}
-	for _, wantText := range []string{"fingerprint is not the expected one", "9DC8 5822", "4DBE BE3E", "frostroot.toml is written", "frostroot edit fetches them again"} {
+	for _, wantText := range []string{"holds a key that is not pinned", "9DC8 5822", "4DBE BE3E", "frostroot.toml is written", "frostroot edit fetches them again"} {
 		if !strings.Contains(stderr, wantText) {
 			t.Errorf("stderr lacks %q:\n%s", wantText, stderr)
 		}
@@ -158,8 +158,8 @@ func TestEditFetchesMissingSourceKeys(t *testing.T) {
 	dockerKey := dockerKeyFixture(t)
 	client := &fakeKeyClient{answers: map[string][]byte{
 		docker.KeyURL: dockerKey,
-		"https://api.launchpad.net/1.0/~deadsnakes/+archive/ubuntu/ppa":                            []byte(`{"signing_key_fingerprint": "` + docker.Fingerprint + `"}`),
-		"https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x" + docker.Fingerprint: dockerKey,
+		"https://api.launchpad.net/1.0/~deadsnakes/+archive/ubuntu/ppa":                                []byte(`{"signing_key_fingerprint": "` + docker.Fingerprints[0] + `"}`),
+		"https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x" + docker.Fingerprints[0]: dockerKey,
 	}}
 	exitCode, stdout, stderr := runEditWithKeyClient(recipeDir, answersWith(map[int]string{answerWrite: "y"}), client)
 	if exitCode != exitSuccess {
