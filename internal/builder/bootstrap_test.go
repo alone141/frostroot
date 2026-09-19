@@ -165,6 +165,91 @@ func TestMmdebstrapPassesHooksInOrder(t *testing.T) {
 	}
 }
 
+// TestMmdebstrapKeepsTheBuildsCaInfoOutOfTheImage: mmdebstrap writes every
+// --aptopt into the chroot's /etc/apt/apt.conf.d/99mmdebstrap and ships it,
+// and CaInfo is a path in this build's work directory. As an --aptopt it put
+// the host's scratch path and uid in the image, broke apt there for every
+// https source, and made two online builds differ. It goes in by a setup
+// hook and comes out again in the last customize hook.
+func TestMmdebstrapKeepsTheBuildsCaInfoOutOfTheImage(t *testing.T) {
+	spec := BootstrapSpec{
+		Suite: "noble", TarballPath: "/t", WorkDir: "/w", Arch: "amd64", InstallRecommends: true,
+		CaInfoPath:     "/var/tmp/frostroot-1000/build-3f9a2b/apt-ca-bundle.pem",
+		CustomizeHooks: []string{"first", "second"},
+	}
+	args, _ := (&Mmdebstrap{CurrentUID: uidFunc(1000)}).commandLine(spec)
+	var setupHooks, customizeHooks []string
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--aptopt=") && strings.Contains(arg, spec.CaInfoPath) {
+			t.Errorf("%q is an --aptopt, which mmdebstrap ships in the image", arg)
+		}
+		if hook, isHook := strings.CutPrefix(arg, "--setup-hook="); isHook {
+			setupHooks = append(setupHooks, hook)
+		}
+		if hook, isHook := strings.CutPrefix(arg, "--customize-hook="); isHook {
+			customizeHooks = append(customizeHooks, hook)
+		}
+	}
+	wantSetupHook := `mkdir -p "$1/etc/apt/apt.conf.d" && printf '%s\n' 'Acquire::https::CaInfo "/var/tmp/frostroot-1000/build-3f9a2b/apt-ca-bundle.pem";' > "$1/etc/apt/apt.conf.d/99frostroot-build-ca"`
+	if !slices.Equal(setupHooks, []string{wantSetupHook}) {
+		t.Errorf("setup hooks =\n%q\nwant\n%q", setupHooks, wantSetupHook)
+	}
+	// Last, so that whatever a hook does over the network is done by then.
+	if wantHooks := []string{"first", "second", `rm -f "$1/etc/apt/apt.conf.d/99frostroot-build-ca"`}; !slices.Equal(customizeHooks, wantHooks) {
+		t.Errorf("customize hooks = %q, want %q", customizeHooks, wantHooks)
+	}
+
+	// A build that trusts nothing beyond the host's store gets neither hook:
+	// its command line is what it was before certificates existed.
+	spec.CaInfoPath = ""
+	args, _ = (&Mmdebstrap{CurrentUID: uidFunc(1000)}).commandLine(spec)
+	if joined := strings.Join(args, "\n"); strings.Contains(joined, "--setup-hook") || strings.Contains(joined, "frostroot-build-ca") {
+		t.Errorf("args without a CA bundle =\n%s", joined)
+	}
+}
+
+// TestAptCaInfoHooksWriteAndRemoveOneFile runs the two hooks the way
+// mmdebstrap does, sh -c HOOK exec ROOTDIR, against a directory standing in
+// for the chroot. The work directory is not frostroot's to choose, so the
+// path is as hostile as a shell allows; Build refuses the characters an apt
+// source line cannot carry, and an apostrophe is not one of them.
+func TestAptCaInfoHooksWriteAndRemoveOneFile(t *testing.T) {
+	for _, caInfoPath := range []string{
+		"/var/tmp/frostroot-1000/build-3f9a2b/apt-ca-bundle.pem",
+		"/var/tmp/o'brien/$(touch pwned)/`touch pwned`/apt-ca-bundle.pem",
+	} {
+		root := t.TempDir()
+		runHook := func(hook string) {
+			t.Helper()
+			command := exec.Command("sh", "-c", hook, "exec", root)
+			command.Dir = root
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("running %q: %v: %s", hook, err, output)
+			}
+		}
+		// A setup hook runs before anything is installed; the directory is
+		// mmdebstrap's to have made, and the hook does not depend on that.
+		runHook(aptCaInfoSetupHook(caInfoPath))
+		confPath := filepath.Join(root, filepath.FromSlash(aptBuildCaInfoConfPath))
+		written, err := os.ReadFile(confPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := `Acquire::https::CaInfo "` + caInfoPath + `";` + "\n"; string(written) != want {
+			t.Errorf("the setup hook wrote %q, want %q", written, want)
+		}
+		runHook(aptCaInfoCleanupHook)
+		if _, err := os.Stat(confPath); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("after the cleanup hook, Stat(%s) = %v, want it gone", confPath, err)
+		}
+		// Twice is not an error: a hook that fails fails the build.
+		runHook(aptCaInfoCleanupHook)
+		if _, err := os.Stat(filepath.Join(root, "pwned")); err == nil {
+			t.Error("part of the path was executed as shell")
+		}
+	}
+}
+
 func TestMmdebstrapMode(t *testing.T) {
 	testCases := []struct {
 		configuredMode string

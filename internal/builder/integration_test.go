@@ -79,6 +79,10 @@ func TestIntegrationNobleTiny(t *testing.T) {
 		GOOS:      "linux",
 		Getenv:    fakeEnvironment(map[string]string{"XDG_CACHE_HOME": cacheHome}),
 		Progress:  progress,
+		// What --ca-bundle passes: an authority to trust while building and
+		// never to ship. It makes this build point apt at a bundle in the
+		// work directory, which "no host files" below looks for in the image.
+		ExtraTrustPEM: certificatePEM(t, "Build-only Proxy CA"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -218,6 +222,22 @@ func TestIntegrationNobleTiny(t *testing.T) {
 		}
 		if machineID := image.entries["etc/machine-id"]; machineID == nil || machineID.Size != 0 {
 			t.Errorf("etc/machine-id must exist and be empty: %+v", machineID)
+		}
+		// apt is pointed at the build's CA bundle by a file the last hook
+		// removes. As an --aptopt the setting stayed: mmdebstrap writes those
+		// into 99mmdebstrap and ships it, so the image named a bundle under
+		// this build's work directory, which no machine importing it has.
+		if entry := image.entries[strings.TrimPrefix(aptBuildCaInfoConfPath, "/")]; entry != nil {
+			t.Errorf("%s must not be in the image: %+v", aptBuildCaInfoConfPath, entry)
+		}
+		for name, text := range image.smallFileText {
+			if strings.HasPrefix(name, "etc/apt/") && strings.Contains(text, "CaInfo") {
+				t.Errorf("%s still points apt at the build's CA bundle:\n%s", name, text)
+			}
+			// Wherever it is: the work root is the build host's business.
+			if strings.Contains(text, cacheHome) {
+				t.Errorf("%s names the build's work root %s", name, cacheHome)
+			}
 		}
 	})
 }
