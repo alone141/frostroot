@@ -460,10 +460,27 @@ func TestRenderPythonScriptIgnoresThePipEnvironmentOfTheBuildHost(t *testing.T) 
 	// would resolve the recipe against another index and write its URLs into
 	// the lock.
 	script := renderPythonScript(t, pythonRecipe(), PythonOptions{})
-	for _, want := range []string{"unset \"$pipVariable\"", "PIP_CONFIG_FILE=/dev/null", "HOME=/root"} {
+	for _, want := range []string{
+		"unset \"$pipVariable\"", "PIP_CONFIG_FILE=/dev/null", "HOME=/root",
+		// PIP_ does not cover what pip trusts: its vendored requests reads
+		// REQUESTS_CA_BUNDLE and CURL_CA_BUNDLE, and Python's ssl reads
+		// SSL_CERT_FILE and SSL_CERT_DIR. All four name build-host paths.
+		"unset REQUESTS_CA_BUNDLE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR",
+	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("script lacks %q:\n%s", want, script)
 		}
+	}
+	// Whatever the recipe trusts reaches pip as a flag on the install and
+	// never as one of those variables, so nothing sets them back.
+	withTrust := renderPythonScript(t, pythonRecipe(), PythonOptions{TrustImageCertificates: true, ExtraTrust: true})
+	for _, unwanted := range []string{"REQUESTS_CA_BUNDLE=", "CURL_CA_BUNDLE=", "SSL_CERT_FILE=", "SSL_CERT_DIR="} {
+		if strings.Contains(withTrust, unwanted) {
+			t.Errorf("the script sets %q, where trust belongs to --cert:\n%s", unwanted, withTrust)
+		}
+	}
+	if !strings.Contains(withTrust, `--cert "$pipCert"`) {
+		t.Errorf("the recipe's authorities do not reach pip:\n%s", withTrust)
 	}
 }
 
@@ -485,12 +502,17 @@ func TestPythonEnvironmentIsNeutralInARealShell(t *testing.T) {
 	if !found {
 		t.Fatalf("the script has no venv assignment:\n%s", script)
 	}
-	check := sweep + "\nenv | grep '^PIP_' || echo 'no PIP_ variables'\n"
+	check := sweep + "\nenv | grep -E '^(PIP_|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|SSL_CERT_)' || echo 'nothing of the host left'\n"
 	command := exec.Command("sh", "-c", check)
 	command.Env = append(os.Environ(),
 		"PIP_INDEX_URL=https://nexus.invalid/simple",
 		"PIP_EXTRA_INDEX_URL=https://other.invalid/simple",
 		"PIP_TRUSTED_HOST=nexus.invalid",
+		// The build host's own trust, which pip reads by four other names.
+		"REQUESTS_CA_BUNDLE=/etc/ssl/certs/host.pem",
+		"CURL_CA_BUNDLE=/etc/ssl/certs/host.pem",
+		"SSL_CERT_FILE=/etc/ssl/certs/host.pem",
+		"SSL_CERT_DIR=/etc/ssl/certs",
 	)
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -498,6 +520,9 @@ func TestPythonEnvironmentIsNeutralInARealShell(t *testing.T) {
 	}
 	if strings.Contains(string(output), "nexus.invalid") {
 		t.Errorf("the build host's pip settings survived the script:\n%s", output)
+	}
+	if strings.Contains(string(output), "host.pem") || strings.Contains(string(output), "SSL_CERT_DIR") {
+		t.Errorf("the build host's certificate paths survived the script:\n%s", output)
 	}
 	if !strings.Contains(string(output), "PIP_CONFIG_FILE=/dev/null") {
 		t.Errorf("the script did not disable pip's configuration files:\n%s", output)

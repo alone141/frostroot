@@ -129,6 +129,20 @@ for pipVariable in $(env | sed -n 's/^\(PIP_[A-Za-z0-9_]*\)=.*/\1/p'); do
 done
 PIP_CONFIG_FILE=/dev/null
 export PIP_CONFIG_FILE
+# The same goes for what pip trusts, which the PIP_ sweep does not cover.
+# Each of these names a certificate path on the build host, and this is not
+# the build host's filesystem. Measured against pip 24.0 on 2026-09-19:
+# REQUESTS_CA_BUNDLE is read by pip's vendored requests and fails the
+# resolve outright with "Could not find a suitable TLS CA certificate
+# bundle, invalid path: ...", naming a file that means nothing here;
+# CURL_CA_BUNDLE, which requests takes as a fallback, and SSL_CERT_FILE and
+# SSL_CERT_DIR, which Python's own ssl reads, did not reach that pip's
+# downloads. They go too: which of them a given pip honors is that pip's
+# business and changes between versions, and the recipe is what decides
+# what a resolve trusts. What it trusts is given to the install below as a
+# flag, where an offline step — which reaches no network and verifies
+# nothing — has none.
+unset REQUESTS_CA_BUNDLE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR
 {{if .CertPath}}
 # pip verifies against the certificates vendored inside it rather than the
 # image's, so an image that trusts the network's certificate authority is not
