@@ -249,3 +249,31 @@ func TestPPASourceNameFitsAndSeparates(t *testing.T) {
 		seen[got] = ppa
 	}
 }
+
+func TestShortName(t *testing.T) {
+	for name, want := range map[string]string{
+		// The usual PPA: owner/ppa, eighteen characters down to ten.
+		"ppa-deadsnakes-ppa": "deadsnakes",
+		// An archive of its own name keeps it.
+		"ppa-ondrej-php": "ondrej-php",
+		// A catalog or hand-written source is called what it is called.
+		"docker":  "docker",
+		"kitware": "kitware",
+		"corp":    "corp",
+		// Nothing is left of a name that is only its prefix and suffix.
+		"ppa-ppa": "ppa",
+		"ppa-":    "",
+		"":        "",
+	} {
+		if got := ShortName(name); got != want {
+			t.Errorf("ShortName(%q) = %q, want %q", name, got, want)
+		}
+	}
+	// Every PPA the form can produce still says which PPA it is.
+	for _, owner := range []string{"deadsnakes", "git-core", "a"} {
+		short := ShortName(PPA(owner, "ppa").Name)
+		if short != owner {
+			t.Errorf("ShortName of %s/ppa = %q, want %q", owner, short, owner)
+		}
+	}
+}

@@ -1,6 +1,6 @@
 Packages
 ┃ Other packages
-┃ type to search the release's archive, or a name; Space adds the row
+┃ type to search the archive and the sources above, or a name; Space adds
 ┃ > cmak
 ┃ 5 found · all sections · noble · 85,574 packages · fetched 2 days ago
 ┃   [ ] add "cmak" as typed · not in the index

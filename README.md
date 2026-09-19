@@ -2,15 +2,16 @@
 
 **Freeze an Ubuntu root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
 
-> **Status: v0.11.0.** `init`, `edit`, `capture`, `validate`, `build`,
+> **Status: v0.12.0.** `init`, `edit`, `capture`, `validate`, `build`,
 > `vendor` and `build --offline` work, a recipe can add third-party apt
 > sources (PPAs, Docker, Node.js, VS Code...), Python packages from PyPI and
 > certificate authorities for a network that inspects TLS, and two offline
 > rebuilds of one lock produce the same bytes. In a terminal,
 > `init`, `edit` and `capture` are a full-screen form driven with the arrow
-> keys in which any package of the release, and any project on PyPI, is
-> found by typing (see [Finding packages](#finding-packages)) and which
-> shows the recipe, or the diff, before writing it; `build` and
+> keys in which any package of the release, of the third-party sources the
+> recipe adds, and any project on PyPI, is found by typing (see
+> [Finding packages](#finding-packages)) and which shows the recipe, or the
+> diff, before writing it; `build` and
 > `vendor` are a progress screen with bars, and a failed build says which
 > line of the log explains it. Every path in
 > this README was run for real: images for Ubuntu 20.04, 22.04 and 24.04 were
@@ -171,15 +172,20 @@ frostroot init
 `init` opens a form. Six pages, each a few questions: the image name and
 release; the user name and whether it gets passwordless sudo; the timezone
 (type `ist` to filter the list down to `Europe/Istanbul`), locale and whether
-the image boots with systemd; the packages, picked with Space from a catalog
-grouped by category (C/C++, Python, editors, tools...), and any other package
-of the release, found by typing into a search over the whole archive, and
-Python packages found the same way in PyPI (see
-[Finding packages](#finding-packages)); then third-party apt sources, picked from a catalog
+the image boots with systemd; third-party apt sources, picked from a catalog
 (deadsnakes, git-core, Docker, NodeSource, GitHub CLI, Kitware, LLVM, VS
-Code), plus a line for other PPAs as `owner/name`; and last the certificate
-files the image should trust, for a network that inspects TLS, each checked
-to be there and to be a certificate as you type. Enter moves on, Shift-Tab
+Code), plus a line for other PPAs as `owner/name`; then the packages, picked
+with Space from a catalog grouped by category (C/C++, Python, editors,
+tools...), and any other package of **the archive and the sources just
+chosen**, found by typing into a search over both, and Python packages found
+the same way in PyPI (see [Finding packages](#finding-packages)); and last
+the certificate files the image should trust, for a network that inspects
+TLS, each checked to be there and to be a certificate as you type.
+
+The sources come before the packages because that is the order the answers
+depend on: the picker searches the repositories the recipe has, so it can
+only find `docker-ce` once Docker's repository is one of them. A recipe that
+adds none passes the page with two keystrokes. Enter moves on, Shift-Tab
 goes back, Ctrl-C leaves without writing. The last page shows the recipe
 exactly as it will be written — or, for `edit`, a diff of the file against
 it, with a count and a warning when comments of your own are about to be
@@ -238,6 +244,13 @@ while the archive still has every file the lock names; see
 Without a terminal (a pipe, CI, a redirected log) or with `--plain`, `init`
 and `edit` ask the same questions one line at a time, and `build` and
 `vendor` print one line per phase and one at every tenth of a measured phase.
+
+**The order of those questions changed in v0.12**, because the sources are
+now asked before the packages. A script that answers them by position — a
+here-document piped into `frostroot init` — answers two different questions
+than it did, and nothing will complain: a number that used to pick a package
+picks a source instead. Such a script needs two more blank lines before its
+package answer, or, better, a recipe written once and committed.
 
 Then, in PowerShell:
 
@@ -330,18 +343,46 @@ list, adds names the way the old free-text line took them.
 ┃ chosen (1): ninja-build
 ```
 
-**A name the archive does not have is a warning, never a refusal.** What you
-typed is offered as the first row whenever it is not an exact match, so Space
-after a whole name adds that name and never a neighbor; `docker-ce`, `code`
-and `gh` come from third-party sources, which the index knows nothing about.
-The last page lists such names with the nearest ones the archive does have
-(`ninja-buld  nearest: ninja-build`) and says whether the recipe has a source
-that could provide them. The question below it still defaults to Write.
+**The sources the recipe adds are searched too.** Choosing Docker on the
+page before puts `docker-ce` in the list, Kitware puts its own `cmake` there,
+and deadsnakes puts `python3.13`; a row says which repository it comes from,
+and the line above the results names every repository searched:
+
+```
+┃ Other packages
+┃ type to search the archive and the sources above, or a name; Space adds
+┃ > docker
+┃ 1 found · all sections · noble + docker · 85,589 packages · fetched just now
+┃ > [ ] add "docker" as typed · not in the index
+┃   [ ] docker-ce  5:29.8.1-1~ubun…  docker · Docker: the open-source applicati…
+```
+
+A PPA is shortened to the part that says which one it is —
+`ppa-deadsnakes-ppa` in the recipe is `deadsnakes` in a row, where the name
+shares the line with a version and a description — and the line above the
+results names every repository in full.
+
+A name two repositories offer is shown as the source's, which is the one
+added on purpose — apt itself chooses by version, so the version shown is not
+a promise of the version installed. A source whose repository cannot be read
+is named in that line (`docker not reachable`) rather than silently missing,
+and the archive is searched regardless.
+
+**A name no repository has is a warning, never a refusal.** What you typed is
+offered as the first row whenever it is not an exact match, so Space after a
+whole name adds that name and never a neighbor. The last page lists such
+names with the nearest ones that do exist (`ninja-buld  nearest:
+ninja-build`) and says whether the recipe has a source that could provide
+them. The question below it still defaults to Write.
 
 **Where the index comes from.** The archive's own `Packages` files, for the
 release pocket and `-updates`, in the four components a build enables: about
 21 MB for 24.04, fetched the first time the field is reached, with a progress
-line, in three to seven seconds here. It is reduced to names, versions,
+line, in three to seven seconds here. Each source the recipe adds is fetched
+the same way and cached under its own name — one suite, no `-updates`, and
+tens to hundreds of kilobytes rather than megabytes: deadsnakes, Docker and
+Kitware together took under two seconds and added 15 packages to the 85,574
+of `noble`. `--mirror` is an Ubuntu mirror and is never applied to a source. It is reduced to names, versions,
 sections and one-line descriptions and kept as one 1.7 MB file a release under
 `$XDG_CACHE_HOME/frostroot/index/` (or `~/.cache/frostroot/index/`) for a
 week; `--refresh-index` fetches it sooner. The recipe directory is never
@@ -883,7 +924,9 @@ networks that inspect TLS (v0.8), a form that shows the recipe or the diff
 before writing, capture's findings first, a Trust page, a failed build that
 explains itself, and screens for narrow and non-UTF-8 terminals (v0.9), a
 package picker that searches the whole Ubuntu archive from inside the form
-(v0.10), and the same search for PyPI names (v0.11).
+(v0.10), the same search for PyPI names (v0.11), and a search that covers
+the third-party sources the recipe adds, which are now chosen before the
+packages that come from them (v0.12).
 
 **Deliberately not yet:** Fedora or any non-Ubuntu family · flat or unsigned
 apt repositories · npm and cargo lockfiles · Python source distributions ·

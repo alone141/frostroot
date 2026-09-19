@@ -263,12 +263,12 @@ func TestOpenOfflineNeverFetches(t *testing.T) {
 func TestOpenDeletesACorruptCache(t *testing.T) {
 	served := newArchive(t, ".gz")
 	options := optionsFor(t, served)
-	path := cachePath(options)
+	path := cachePath(options, archiveTarget(options))
 	for name, content := range map[string][]byte{
 		"not gzip":       []byte("Package: git\n"),
 		"another format": compress(t, ".gz", []byte("frostroot-index 0\tnoble\n")),
-		"unsorted":       compress(t, ".gz", []byte(headerFor(options, testNow).line()+"\nzip\t1\tmain\tutils\tArchiver\ngit\t1\tmain\tvcs\tfast\n")),
-		"short entry":    compress(t, ".gz", []byte(headerFor(options, testNow).line()+"\ngit\t1\tmain\n")),
+		"unsorted":       compress(t, ".gz", []byte(headerFor(archiveTarget(options), testNow).line()+"\nzip\t1\tmain\tutils\tArchiver\ngit\t1\tmain\tvcs\tfast\n")),
+		"short entry":    compress(t, ".gz", []byte(headerFor(archiveTarget(options), testNow).line()+"\ngit\t1\tmain\n")),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -361,7 +361,7 @@ func TestOpenTriesAChangedPocketOnceMore(t *testing.T) {
 	if _, err := Open(context.Background(), options); !errors.Is(err, ErrUnavailable) || !errors.Is(err, errChanged) {
 		t.Errorf("err = %v, want ErrUnavailable wrapping the mismatch", err)
 	}
-	if _, err := os.Stat(cachePath(options)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(cachePath(options, archiveTarget(options))); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("an index that failed its check was cached: %v", err)
 	}
 }

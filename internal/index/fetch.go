@@ -43,25 +43,21 @@ type pocketPlan struct {
 	files  []listedFile // one per component that the pocket has
 }
 
-// fetch downloads and reduces the release pocket and -updates. -security is
-// left out: everything in it is copied to -updates, and what it has first
-// are kernels (the spike, 2026-09-18).
-func fetch(ctx context.Context, options Options) ([]Entry, error) {
+// fetch downloads and reduces the pockets the target names: for a release,
+// its own pocket and -updates, with -security left out because everything in
+// it is copied to -updates and what it has first are kernels (the spike,
+// 2026-09-18); for a source, the one suite it publishes.
+func fetch(ctx context.Context, options Options, what target) ([]Entry, error) {
 	client := options.Client
 	if client == nil {
 		transport := pki.Transport(options.RootCAs)
 		transport.ResponseHeaderTimeout = responseHeaderTimeout
 		client = &http.Client{Transport: transport}
 	}
-	baseURL := options.Release.ArchiveURL
-	if options.Mirror != "" {
-		baseURL = options.Mirror
-	}
-	fetcher := &fetcher{ctx: ctx, client: client, baseURL: strings.TrimRight(baseURL, "/"), components: options.Release.Components, progress: options.Progress}
+	fetcher := &fetcher{ctx: ctx, client: client, baseURL: what.baseURL, components: what.components, progress: options.Progress}
 
-	pockets := []string{options.Release.Suite, options.Release.Suite + "-updates"}
 	var plans []pocketPlan
-	for position, pocket := range pockets {
+	for position, pocket := range what.pockets {
 		plan, err := fetcher.plan(pocket)
 		if err != nil {
 			// A frozen mirror has no -updates; an archive without the
@@ -96,7 +92,7 @@ func fetch(ctx context.Context, options Options) ([]Entry, error) {
 		}
 	}
 	if len(byName) == 0 {
-		return nil, fmt.Errorf("%s lists no packages for %s", fetcher.baseURL, options.Release.Suite)
+		return nil, fmt.Errorf("%s lists no packages for %s", fetcher.baseURL, what.suite)
 	}
 	entries := make([]Entry, 0, len(byName))
 	for _, entry := range byName {
@@ -299,11 +295,15 @@ func reduce(stanza deb.Stanza, component string) (Entry, bool) {
 		section = withoutComponent
 	}
 	description, _, _ := strings.Cut(stanza["Description"], "\n")
+	// Every field goes through oneLine, not the description alone: the
+	// cache is tab-separated, and a tab anywhere in a vendor's stanza would
+	// write a line the next run cannot parse, which deletes the cache and
+	// fetches that repository again for ever.
 	return Entry{
-		Name:        name,
-		Version:     stanza["Version"],
+		Name:        oneLine(name),
+		Version:     oneLine(stanza["Version"]),
 		Component:   component,
-		Section:     section,
+		Section:     oneLine(section),
 		Description: oneLine(description),
 	}, true
 }

@@ -29,6 +29,14 @@ import (
 // keeps a lab that runs init every day off the network.
 const DefaultMaxAge = 7 * 24 * time.Hour
 
+// sourceMaxAge is the same for a third-party repository, which a week does
+// not suit: a vendor publishes when it likes, a PPA gains a Python version
+// the week it is released, and the reason a week is cheap for the archive —
+// 21 MB — does not apply to an index of tens of kilobytes. A day keeps a
+// form that is opened twice in an afternoon off the network and still finds
+// what was published yesterday.
+const sourceMaxAge = 24 * time.Hour
+
 // ErrUnavailable means there is no index to be had: nothing cached, and the
 // archive was not asked (Offline) or could not be read. It is not a failure
 // of the form, which goes on without suggestions.
@@ -41,6 +49,10 @@ type Entry struct {
 	Component   string // main, restricted, universe or multiverse
 	Section     string // the archive section without its component: devel, python, libs
 	Description string // the one-line description
+	// Origin is the recipe source this package came from, or "" for the
+	// release's own archive. It is not cached: which repository served a
+	// file is a property of the index that was opened, not of the file.
+	Origin string
 }
 
 // SectionCount is an archive section and how many packages it holds.
@@ -67,16 +79,33 @@ type Options struct {
 	Now      func() time.Time // nil means time.Now
 }
 
-// Index is the packages of one release, sorted by name.
+// Index is the packages of one release, sorted by name, and of any sources
+// merged into it.
 type Index struct {
-	suite    string
+	// label is what Describe calls this index: the suite for a release's
+	// archive, the recipe name for a source, and both for a union of them.
+	label    string
 	fetched  time.Time
 	entries  []Entry
 	lowered  []loweredEntry
 	sections []SectionCount
+	// searched names the repositories the index holds, the release's archive
+	// first, and missing those it could not read: a source that answered
+	// nothing, and one served from a cache because it could not be reached.
+	// The warning on the last page says which of the two a name is absent
+	// from, and the picker opens the index again rather than leaving a
+	// repository out for the rest of the form.
+	searched []string
+	missing  []string
 	// staleBecause is why a cache older than MaxAge is being used anyway.
 	staleBecause error
 	now          func() time.Time
+}
+
+// Sources returns the repositories the index holds and those it could not
+// read, the release's archive first.
+func (x *Index) Sources() (searched, missing []string) {
+	return x.searched, x.missing
 }
 
 // loweredEntry is what Search matches against.
@@ -99,13 +128,19 @@ func CacheDir(getenv func(string) string) string {
 // from the archive otherwise, and from a stale cache when the archive cannot
 // be reached. An error wraps ErrUnavailable unless ctx ended.
 func Open(ctx context.Context, options Options) (*Index, error) {
+	return openTarget(ctx, options, archiveTarget(options))
+}
+
+// openTarget opens one repository: the release's archive, or a source the
+// recipe adds beside it.
+func openTarget(ctx context.Context, options Options, what target) (*Index, error) {
 	if options.MaxAge == 0 {
-		options.MaxAge = DefaultMaxAge
+		options.MaxAge = what.maxAge
 	}
 	if options.Now == nil {
 		options.Now = time.Now
 	}
-	cached := readCache(options)
+	cached := readCache(options, what)
 	if cached != nil {
 		fresh := options.Now().Sub(cached.fetched) < options.MaxAge
 		if options.Offline || (fresh && !options.Refresh) {
@@ -113,34 +148,55 @@ func Open(ctx context.Context, options Options) (*Index, error) {
 		}
 	}
 	if options.Offline {
-		return nil, fmt.Errorf("%w: nothing cached for %s, and this command does not fetch", ErrUnavailable, options.Release.Suite)
+		return nil, fmt.Errorf("%w: nothing cached for %s, and this command does not fetch", ErrUnavailable, what.label)
 	}
-	entries, err := fetch(ctx, options)
+	entries, err := fetch(ctx, options, what)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		if cached != nil {
 			cached.staleBecause = err
+			// Served from a cache because the repository could not be
+			// reached: the same thing, to a reader, as one left out.
+			cached.missing = []string{what.missingName()}
 			return cached, nil
 		}
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	fetched := newIndex(options.Release.Suite, options.Now(), entries, options.Now)
+	stampOrigin(entries, what.origin)
+	fetched := newIndex(what.label, options.Now(), entries, options.Now)
 	// A cache that cannot be written costs the next run a fetch and this
 	// one nothing.
-	_ = writeCache(options, fetched)
+	_ = writeCache(options, what, fetched)
 	return fetched, nil
 }
 
+// stampOrigin marks entries as the source's. The archive's origin is "", so
+// a release's own packages carry no source name and nothing shows one.
+func stampOrigin(entries []Entry, origin string) {
+	if origin == "" {
+		return
+	}
+	for position := range entries {
+		entries[position].Origin = origin
+	}
+}
+
 // newIndex prepares entries, which must be sorted by name, for searching.
-func newIndex(suite string, fetched time.Time, entries []Entry, now func() time.Time) *Index {
-	built := &Index{suite: suite, fetched: fetched, entries: entries, now: now}
+func newIndex(label string, fetched time.Time, entries []Entry, now func() time.Time) *Index {
+	built := &Index{label: label, searched: []string{label}, fetched: fetched, entries: entries, now: now}
 	built.lowered = make([]loweredEntry, len(entries))
 	counts := map[string]int{}
 	for position, entry := range entries {
 		built.lowered[position] = loweredEntry{name: strings.ToLower(entry.Name), description: strings.ToLower(entry.Description)}
-		counts[entry.Section]++
+		// A stanza without a Section leaves one empty, which a vendor's
+		// repository does where Ubuntu's archive does not. It is not a
+		// section to narrow to: the chooser already offers "all sections",
+		// and a second row of that name would filter by nothing.
+		if entry.Section != "" {
+			counts[entry.Section]++
+		}
 	}
 	built.sections = sortedSections(counts)
 	return built
@@ -152,9 +208,9 @@ func (x *Index) Len() int { return len(x.entries) }
 // Describe says what the index is in a few words, for the line above the
 // results: "noble · 85,855 packages · fetched 2 days ago".
 func (x *Index) Describe() string {
-	description := fmt.Sprintf("%s · %s packages · fetched %s", x.suite, groupThousands(len(x.entries)), ago(x.now().Sub(x.fetched)))
-	if x.staleBecause != nil {
-		description += " · archive not reachable"
+	description := fmt.Sprintf("%s · %s packages · fetched %s", x.label, groupThousands(len(x.entries)), ago(x.now().Sub(x.fetched)))
+	if len(x.missing) > 0 {
+		description += " · " + strings.Join(x.missing, ", ") + " not reachable"
 	}
 	return description
 }
@@ -186,11 +242,11 @@ func groupThousands(number int) string {
 
 // cachePath is the file an index is kept in. The architecture is in the
 // name so that a second one costs nothing the day there is one.
-func cachePath(options Options) string {
+func cachePath(options Options, what target) string {
 	if options.CacheDir == "" {
 		return ""
 	}
-	return filepath.Join(options.CacheDir, options.Release.Suite+"-"+distro.SupportedArch+".tsv.gz")
+	return filepath.Join(options.CacheDir, what.cacheName+"-"+distro.SupportedArch+".tsv.gz")
 }
 
 // removeQuietly deletes a file that is known to be useless. That it may

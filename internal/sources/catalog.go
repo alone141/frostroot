@@ -159,6 +159,28 @@ func ppaSourceName(owner, name string) string {
 	return strings.TrimRight(full[:recipe.MaxSourceNameLength-len(suffix)], "-") + suffix
 }
 
+// ShortName is what to call a source where there is not room for its whole
+// name: a package picker's row, where the name shares a line with a version
+// and a description. A PPA's source name carries a "ppa-" prefix and, for
+// the usual archive called "ppa", a "-ppa" ending too, so "ppa-deadsnakes-ppa"
+// is eighteen characters to say "deadsnakes". Anything else is returned as
+// it is — a catalog source is already short, and a hand-written one is
+// called what its author called it.
+//
+// It is for display and nothing else. The recipe, the lock and the key file
+// beside them all keep the whole name, and a shortened one is not unique:
+// "ppa-x-ppa" and a source someone named "x" both show as "x".
+func ShortName(sourceName string) string {
+	short, isPPA := strings.CutPrefix(sourceName, "ppa-")
+	if !isPPA {
+		return sourceName
+	}
+	if trimmed, isUsualArchive := strings.CutSuffix(short, "-ppa"); isUsualArchive && trimmed != "" {
+		return trimmed
+	}
+	return short
+}
+
 // ppaNameDigest is a short, stable tag for one PPA, for the names too long
 // to carry in full. Four hex characters: this only has to separate the
 // handful of PPAs one recipe names, not to resist anyone.

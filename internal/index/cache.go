@@ -28,17 +28,15 @@ type cacheHeader struct {
 	fetched                             time.Time
 }
 
-// headerFor is the header a cache file must have to serve options.
-func headerFor(options Options, fetched time.Time) cacheHeader {
-	archiveURL := options.Release.ArchiveURL
-	if options.Mirror != "" {
-		archiveURL = options.Mirror
-	}
+// headerFor is the header a cache file must have to serve this target. A
+// file whose header says anything else describes another repository, or the
+// same one asked for differently, and is replaced rather than read.
+func headerFor(what target, fetched time.Time) cacheHeader {
 	return cacheHeader{
-		suite:      options.Release.Suite,
+		suite:      what.suite,
 		arch:       distro.SupportedArch,
-		archiveURL: strings.TrimRight(archiveURL, "/"),
-		components: strings.Join(options.Release.Components, ","),
+		archiveURL: what.baseURL,
+		components: strings.Join(what.components, ","),
 		fetched:    fetched,
 	}
 }
@@ -67,12 +65,12 @@ func parseHeader(line string) (cacheHeader, error) {
 	return cacheHeader{suite: fields[1], arch: fields[2], archiveURL: fields[3], components: fields[4], fetched: fetched}, nil
 }
 
-// readCache returns the cached index for options, or nil: no cache
+// readCache returns the cached index for this target, or nil: no cache
 // directory, no file, a file for another mirror or other components, or a
 // file that does not parse. The last is deleted, never trusted; a file for
 // another source is left for the fetch to replace.
-func readCache(options Options) *Index {
-	path := cachePath(options)
+func readCache(options Options, what target) *Index {
+	path := cachePath(options, what)
 	if path == "" {
 		return nil
 	}
@@ -87,10 +85,11 @@ func readCache(options Options) *Index {
 		removeQuietly(path)
 		return nil
 	}
-	if !header.sameSource(headerFor(options, time.Time{})) {
+	if !header.sameSource(headerFor(what, time.Time{})) {
 		return nil
 	}
-	return newIndex(header.suite, header.fetched, entries, options.Now)
+	stampOrigin(entries, what.origin)
+	return newIndex(what.label, header.fetched, entries, options.Now)
 }
 
 // parseCache reads a whole cache file.
@@ -130,8 +129,8 @@ func parseCache(file *os.File) (cacheHeader, []Entry, error) {
 // writeCache stores built for the next run: to a temporary file beside the
 // final one, then renamed, so that a reader never sees half a file and an
 // interrupted write leaves the old one.
-func writeCache(options Options, built *Index) (err error) {
-	path := cachePath(options)
+func writeCache(options Options, what target, built *Index) (err error) {
+	path := cachePath(options, what)
 	if path == "" {
 		return errors.New("no cache directory")
 	}
@@ -150,7 +149,7 @@ func writeCache(options Options, built *Index) (err error) {
 	}()
 	compressed := gzip.NewWriter(temporary)
 	buffered := bufio.NewWriterSize(compressed, 256<<10)
-	if _, err = buffered.WriteString(headerFor(options, built.fetched).line() + "\n"); err != nil {
+	if _, err = buffered.WriteString(headerFor(what, built.fetched).line() + "\n"); err != nil {
 		return err
 	}
 	for _, entry := range built.entries {

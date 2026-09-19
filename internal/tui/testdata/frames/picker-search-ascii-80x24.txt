@@ -1,6 +1,6 @@
 Packages
 | Other packages
-| type to search the release's archive, or a name; Space adds the row
+| type to search the archive and the sources above, or a name; Space adds
 | > cmake
 | 5 found · all sections · noble · 85,574 packages · fetched 2 days ago
 | > [ ] cmake                3.28.3-1build7    cross-platform, open-source ma...

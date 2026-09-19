@@ -41,11 +41,11 @@ const (
 	answerTimezone
 	answerLocale
 	answerSystemd
+	answerSources
+	answerPPAs
 	answerPackages
 	answerOtherPackages
 	answerPythonPackages
-	answerSources
-	answerPPAs
 	answerCertificates
 	answerWrite
 	answerCount
@@ -136,7 +136,7 @@ func TestInitAsksInOrder(t *testing.T) {
 	if exitCode := app.Run([]string{"init"}); exitCode != exitSuccess {
 		t.Fatalf("exit code = %d", exitCode)
 	}
-	wantTopics := []string{"image name", "release", "user name", "sudo", "timezone", "locale", "systemd", "packages", "other packages", "python packages", "apt sources", "other ppas", "certificate authorities", "write frostroot.toml"}
+	wantTopics := []string{"image name", "release", "user name", "sudo", "timezone", "locale", "systemd", "apt sources", "other ppas", "packages", "other packages", "python packages", "certificate authorities", "write frostroot.toml"}
 	if len(prompt.questionsAsked) != len(wantTopics) {
 		t.Fatalf("questions asked = %q, want one about each of %q", prompt.questionsAsked, wantTopics)
 	}
@@ -287,9 +287,10 @@ func TestInitWithLinePrompt(t *testing.T) {
 	recipeDir := t.TempDir()
 	var stdout bytes.Buffer
 	app := App{
-		// image name, release, then defaults up to packages, one package by
-		// number, then end of input: accept the rest.
-		Stdin:     strings.NewReader("cpp-lab\n22.04\n\n\n\n\n\n1\n"),
+		// image name, release, then defaults up to packages — the two
+		// source questions among them — one package by number, then end of
+		// input: accept the rest.
+		Stdin:     strings.NewReader("cpp-lab\n22.04\n\n\n\n\n\n\n\n1\n"),
 		Stdout:    &stdout,
 		Stderr:    io.Discard,
 		RecipeDir: recipeDir,

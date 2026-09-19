@@ -1,17 +1,17 @@
 Packages
 ┃ Other packages
 ┃ type to search the archive and the sources above, or a name; Space adds
-┃ > cmake
-┃ 5 found · all sections · noble · 85,574 packages · fetched 2 days ago
-┃   all sections
-┃ > devel            3
-┃   libs             2
+┃ > python3.13
+┃ 1 found · all sections · noble + docker, ppa-deadsnakes-ppa · 85,738 packages…
+┃ > [ ] python3.13  3.13.15-1+noble1  deadsnakes · Interactive high-level objec…
 ┃
 ┃
 ┃
 ┃
 ┃
-┃ enter picks the section · esc keeps all sections
+┃
+┃
+┃ chosen: none
 ┃
 
   Python packages
@@ -22,4 +22,4 @@ Packages
 
 
 
-↑/↓ move • enter pick • esc close
+↑/↓ move • space add/remove • / section • shift+tab back • enter next

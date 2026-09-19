@@ -1,6 +1,6 @@
 Packages
 ┃ Other packages
-┃ type to search the release's archive, or a name; Space adds the row
+┃ type to search the archive and the sources above, or a name; Space adds
 ┃ > valgrind
 ┃ 1 found · all sections · noble · 85,574 packages · fetched 2 days ago
 ┃ > [ ] valgrind  1:3.22.0-0ubunt…  instrumentation framework for building dyna…

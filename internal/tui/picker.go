@@ -19,6 +19,7 @@ import (
 	"frostroot/internal/builder"
 	"frostroot/internal/form"
 	"frostroot/internal/recipe"
+	"frostroot/internal/sources"
 )
 
 // Sizes of the picker.
@@ -63,13 +64,13 @@ var pickerSummaryDelay = 250 * time.Millisecond
 // name, Space adds it.
 type pickerField struct {
 	key, title, description string
-	value                   *string            // the answer: names separated by spaces
-	validate                func(string) error // nil accepts anything
-	openIndex               form.IndexOpener   // nil means there is no index
-	hasSummaries            bool               // the index looks summaries up one at a time
-	release                 func() string      // the release answered by now, such as "24.04"
-	inCatalog               func() []string    // the names chosen in the catalog above
-	ctx                     context.Context    // ends with the form; stops a fetch
+	value                   *string                  // the answer: names separated by spaces
+	validate                func(string) error       // nil accepts anything
+	openIndex               form.IndexOpener         // nil means there is no index
+	hasSummaries            bool                     // the index looks summaries up one at a time
+	request                 func() form.IndexRequest // the release and sources answered by now
+	inCatalog               func() []string          // the names chosen in the catalog above
+	ctx                     context.Context          // ends with the form; stops a fetch
 
 	glyphs  glyphSet
 	theme   *huh.Theme
@@ -113,6 +114,7 @@ type pickerField struct {
 type pickerRow struct {
 	name        string
 	version     string
+	origin      string // the source it comes from, or "" for the release's archive
 	description string
 	asTyped     bool // the query itself, offered because the index lacks it
 	unknown     bool // a chosen name the index lacks
@@ -152,13 +154,37 @@ func newPickerKeyMap(glyphs glyphSet) pickerKeyMap {
 // screen, where its message reaches other fields and not this one, so the
 // result lives here and the message only asks for a redraw.
 type indexLoad struct {
-	mutex       sync.Mutex
-	release     string
+	mutex sync.Mutex
+	// key identifies the request this load answered, so that a field
+	// returned to opens the index again only when the answers it is made of
+	// have changed.
+	key         string
 	index       form.PackageIndex
 	err         error
 	finished    bool
 	done, total int64
 	cancel      context.CancelFunc
+}
+
+// incomplete reports whether a finished load left a repository out: one
+// that could not be read. Coming back to the field tries it again, because
+// a vendor that was down for a moment should not be missing from the search
+// for the rest of the form. A load still running is not incomplete.
+func (l *indexLoad) incomplete() bool {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+	if !l.finished {
+		return false
+	}
+	if l.err != nil {
+		return true
+	}
+	repositories, canSay := l.index.(form.PackageRepositories)
+	if !canSay {
+		return false
+	}
+	_, missing := repositories.Sources()
+	return len(missing) > 0
 }
 
 // pickerLoadedMsg says an index load ended. pickerTickMsg redraws the
@@ -176,7 +202,7 @@ type (
 	pickerSummaryMsg struct{}
 )
 
-func newPickerField(ctx context.Context, field form.Field, value *string, release func() string, inCatalog func() []string, glyphs glyphSet) *pickerField {
+func newPickerField(ctx context.Context, field form.Field, value *string, request func() form.IndexRequest, inCatalog func() []string, glyphs glyphSet) *pickerField {
 	input := textinput.New()
 	input.Prompt = "> "
 	input.Placeholder = "type to search, or a name"
@@ -184,7 +210,7 @@ func newPickerField(ctx context.Context, field form.Field, value *string, releas
 		key: field.Key, title: field.Title, description: field.Description,
 		value: value, validate: field.Validate, openIndex: field.OpenIndex,
 		hasSummaries: field.Summaries,
-		release:      release, inCatalog: inCatalog, ctx: ctx,
+		request:      request, inCatalog: inCatalog, ctx: ctx,
 		glyphs: glyphs, keymap: newPickerKeyMap(glyphs), input: input,
 		chosen: splitNames(*value),
 	}
@@ -207,19 +233,20 @@ func isNameList(text string) bool { return strings.ContainsAny(text, ", \t\n\r")
 func (p *pickerField) Init() tea.Cmd { return nil }
 
 // Focus implements huh.Field. The index is opened the first time the field
-// is reached, and again when the release was changed since: the form asks
-// for the release three pages earlier.
+// is reached, and again when the answers it is made of have changed since:
+// the release, asked pages earlier, and the sources, asked on the page
+// before this one.
 func (p *pickerField) Focus() tea.Cmd {
 	p.focused = true
 	p.nudged = false
 	cmds := []tea.Cmd{p.input.Focus()}
 	if p.openIndex != nil {
-		release := p.release()
-		if p.load == nil || p.load.release != release {
+		request := p.request()
+		if asked := request.Key(); p.load == nil || p.load.key != asked || p.load.incomplete() {
 			if p.load != nil && p.load.cancel != nil {
 				p.load.cancel()
 			}
-			cmds = append(cmds, p.startLoad(release))
+			cmds = append(cmds, p.startLoad(request))
 		}
 		if _, loading := p.loading(); loading {
 			cmds = append(cmds, p.nextTick())
@@ -230,14 +257,14 @@ func (p *pickerField) Focus() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// startLoad opens the index of release in a command.
-func (p *pickerField) startLoad(release string) tea.Cmd {
+// startLoad opens the index a request asks for in a command.
+func (p *pickerField) startLoad(request form.IndexRequest) tea.Cmd {
 	ctx, cancel := context.WithCancel(p.ctx)
-	load := &indexLoad{release: release, cancel: cancel}
+	load := &indexLoad{key: request.Key(), cancel: cancel}
 	p.load = load
 	openIndex := p.openIndex
 	return func() tea.Msg {
-		index, err := openIndex(ctx, release, func(done, total int64) {
+		index, err := openIndex(ctx, request, func(done, total int64) {
 			load.mutex.Lock()
 			load.done, load.total = done, total
 			load.mutex.Unlock()
@@ -536,7 +563,7 @@ func (p *pickerField) refresh() {
 		matches, total := index.Search(query, p.section, pickerMatchLimit)
 		p.total = total
 		for _, match := range matches {
-			p.rows = append(p.rows, pickerRow{name: match.Name, version: match.Version, description: match.Description})
+			p.rows = append(p.rows, rowOf(match))
 		}
 	}
 	exact := len(p.rows) > 0 && p.rows[0].name == query
@@ -550,7 +577,7 @@ func (p *pickerField) refresh() {
 	first := pickerRow{name: query, asTyped: true}
 	if index != nil {
 		if match, isThere := index.Lookup(query); isThere {
-			first = pickerRow{name: match.Name, version: match.Version, description: match.Description}
+			first = rowOf(match)
 		}
 	}
 	p.rows = append([]pickerRow{first}, p.rows...)
@@ -564,9 +591,39 @@ func (p *pickerField) chosenRow(name string, index form.PackageIndex) pickerRow 
 	// Lookup, not Search: capture's recipe has hundreds of names, and a scan
 	// of the index for each would be seconds of a frozen screen.
 	if match, isThere := index.Lookup(name); isThere {
-		return pickerRow{name: name, version: match.Version, description: match.Description}
+		// The name stays as it was chosen, never as the index spells it:
+		// PyPI compares Flask_SQLAlchemy and flask-sqlalchemy as one name,
+		// and a row whose name is not the chosen one is a row that does not
+		// know it is chosen.
+		row := rowOf(match)
+		row.name = name
+		return row
 	}
 	return pickerRow{name: name, unknown: true}
+}
+
+// rowOf is the line a match is shown as.
+func rowOf(match form.Match) pickerRow {
+	return pickerRow{name: match.Name, version: match.Version, origin: match.Origin, description: match.Description}
+}
+
+// describe is what a row says of the package after its name and version:
+// the source it comes from, when it is not the release's own archive, and
+// then the one-line description. The source goes first because a line too
+// long to fit loses its end, and which repository a package comes from is
+// what a person is deciding about. It is shortened, because a row is the
+// one place the name competes for width: the recipe's "ppa-deadsnakes-ppa"
+// is "deadsnakes" here, and the line above the results still names every
+// repository in full.
+func (r pickerRow) describe() string {
+	origin := sources.ShortName(r.origin)
+	if origin == "" {
+		return r.description
+	}
+	if r.description == "" {
+		return origin
+	}
+	return origin + " · " + r.description
 }
 
 func (p *pickerField) moveCursor(delta int) {
@@ -850,9 +907,9 @@ func (p *pickerField) rowLine(styles *huh.FieldStyles, row pickerRow, highlighte
 	case row.unknown:
 		text = padCells(row.name, nameWidth) + "  ? not in the index"
 	case width < pickerNarrowWidth || row.version == "":
-		text = padCells(row.name, nameWidth) + "  " + row.description
+		text = padCells(row.name, nameWidth) + "  " + row.describe()
 	default:
-		text = padCells(row.name, nameWidth) + "  " + padCells(truncateWith(row.version, pickerVersionWidth, p.glyphs.ellipsis), pickerVersionWidth) + "  " + row.description
+		text = padCells(row.name, nameWidth) + "  " + padCells(truncateWith(row.version, pickerVersionWidth, p.glyphs.ellipsis), pickerVersionWidth) + "  " + row.describe()
 	}
 	return selector + prefix + textStyle.Render(truncateWith(strings.TrimRight(text, " "), remaining, p.glyphs.ellipsis))
 }

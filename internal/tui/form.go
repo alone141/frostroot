@@ -462,7 +462,7 @@ func (b *formBinding) huhField(field form.Field) huh.Field {
 		return huh.NewConfirm().Key(field.Key).Title(field.Title).Description(field.Description).
 			Affirmative("Yes").Negative("No").Value(b.flags[field.Key])
 	case form.KindSearch:
-		return newPickerField(b.ctx, field, b.texts[field.Key], b.answeredRelease, b.chosenInCatalog, b.glyphs)
+		return newPickerField(b.ctx, field, b.texts[field.Key], b.requestFor(field), b.chosenInCatalog, b.glyphs)
 	case form.KindNote:
 		// The text is escaped: a note renders its own markup, and what
 		// capture found is full of underscores. A button to move on makes
@@ -473,8 +473,21 @@ func (b *formBinding) huhField(field form.Field) huh.Field {
 	return huh.NewNote().Title(field.Title).Description("unsupported field kind")
 }
 
-// answeredRelease is the Ubuntu release as answered so far: what the
-// package picker opens the index of.
+// requestFor is what a search field opens its index of: the release and,
+// for a field whose index covers them, the sources as answered so far. Both
+// pages come before the picker's, so a source chosen a moment ago is a
+// source it searches. A field whose index is PyPI is not told about them,
+// or ticking a source would abandon a download of it and start again.
+func (b *formBinding) requestFor(field form.Field) func() form.IndexRequest {
+	if !field.Sourced {
+		return func() form.IndexRequest {
+			return form.IndexRequest{Release: b.answeredRelease()}
+		}
+	}
+	return func() form.IndexRequest { return form.IndexRequestFor(b.values()) }
+}
+
+// answeredRelease is the Ubuntu release as answered so far.
 func (b *formBinding) answeredRelease() string {
 	if release, isAsked := b.texts[form.KeyRelease]; isAsked {
 		return *release

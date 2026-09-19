@@ -246,7 +246,10 @@ var summaryScenarios = []struct {
 	}},
 	{name: "form-summary-warning", preview: func(values form.Values) Preview {
 		unknown := []form.UnknownPackage{{Name: "ninja-buld", Nearest: []string{"ninja-build"}}, {Name: "docker-ce"}}
-		return Preview{Heading: "This is what frostroot.toml will say:", Text: sampleRecipeText, Warning: form.UnknownPackagesWarning(unknown, values)}
+		// nil: this frame pins the layout of a warning, and the index that
+		// says which repositories were searched is what the wording is
+		// tested against, in internal/form.
+		return Preview{Heading: "This is what frostroot.toml will say:", Text: sampleRecipeText, Warning: form.UnknownPackagesWarning(unknown, values, nil)}
 	}},
 }
 

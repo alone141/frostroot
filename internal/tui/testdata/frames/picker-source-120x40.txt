@@ -10,13 +10,13 @@ Packages
 
 ┃ Other packages
 ┃ type to search the archive and the sources above, or a name; Space adds
-┃ > cmake
-┃ 5 found · all sections · noble · 85,574 packages · fetched 2 days ago
-┃ > [ ] cmake                3.28.3-1build7    cross-platform, open-source make system
-┃   [ ] cmake-data           3.28.3-1build7    CMake data files (modules, templates and documentation)
-┃   [ ] cmake-extras         1.7-2             Extra CMake utility modules
-┃   [ ] cmake-format         0.6.13-5          source code formatter for cmake listfiles
-┃   [ ] extra-cmake-modules  5.115.0-0ubuntu5  Extra modules and scripts for CMake
+┃ > docker
+┃ 1 found · all sections · noble + docker, ppa-deadsnakes-ppa · 85,738 packages · fetched 2 days ago
+┃ > [ ] add "docker" as typed · not in the index
+┃   [ ] docker-ce  5:27.3.1-1~ubun…  docker · Docker: the open-source application container engine
+┃
+┃
+┃
 ┃
 ┃
 ┃
