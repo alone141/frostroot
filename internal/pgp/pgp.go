@@ -1,7 +1,11 @@
 // Package pgp reads OpenPGP public keys the way apt needs them: it turns an
-// ASCII-armored key into its binary form and computes the primary key's
-// fingerprint. It parses one packet header and one hash; it verifies no
-// signatures and knows no policy.
+// ASCII-armored key into its binary form and names every primary key the
+// file holds by its fingerprint. It walks the packet headers and hashes each
+// primary key; it verifies no signatures and knows no policy.
+//
+// Every key is named, not only the first, because a key file becomes an apt
+// signed-by keyring whole, and apt accepts a Release signed by any key in
+// one.
 package pgp
 
 import (
@@ -22,7 +26,13 @@ import (
 type Key struct {
 	Binary      []byte // the key material as apt's signed-by wants it
 	Fingerprint string // the first primary key's fingerprint, uppercase hex
-	Armored     bool   // the input was ASCII-armored
+	// Fingerprints is every primary key the file holds, in the order they
+	// appear; Fingerprint is the first of them. Whoever decides what to trust
+	// has to see all of them: apt accepts a Release signed by any key in a
+	// signed-by keyring, so a file is only as trustworthy as its least
+	// expected key.
+	Fingerprints []string
+	Armored      bool // the input was ASCII-armored
 }
 
 // ErrNotPublicKey means the data is not an OpenPGP public key: not armored
@@ -45,7 +55,8 @@ const (
 )
 
 // ParsePublicKey parses data, armored or binary. A file may hold several
-// keys, as some vendors' keyrings do; the fingerprint is the first one's.
+// keys, as some vendors' keyrings do: Fingerprints names every one of them,
+// and Fingerprint is the first.
 func ParsePublicKey(data []byte) (Key, error) {
 	key := Key{Binary: data}
 	if trimmed := bytes.TrimSpace(data); bytes.HasPrefix(trimmed, []byte(armorBegin)) {
@@ -55,11 +66,11 @@ func ParsePublicKey(data []byte) (Key, error) {
 		}
 		key.Binary, key.Armored = binaryKey, true
 	}
-	fingerprint, err := fingerprintOf(key.Binary)
+	fingerprints, err := primaryFingerprints(key.Binary)
 	if err != nil {
 		return Key{}, err
 	}
-	key.Fingerprint = fingerprint
+	key.Fingerprints, key.Fingerprint = fingerprints, fingerprints[0]
 	return key, nil
 }
 
@@ -135,16 +146,44 @@ func crc24(data []byte) uint32 {
 	return crc & 0xFFFFFF
 }
 
-// fingerprintOf reads the first packet of binary key material, which must
-// be a public-key packet, and returns its fingerprint.
-func fingerprintOf(data []byte) (string, error) {
-	tag, body, err := firstPacket(data)
-	if err != nil {
-		return "", err
+// primaryFingerprints walks every packet of binary key material and returns
+// the fingerprint of each primary key, in the order they appear. The first
+// packet must be a public key, which is how every keyring apt accepts
+// begins. Subkeys (tag 14) are not returned: a subkey is already covered by
+// the primary key that certifies it, and it is the primary keys that decide
+// what a signed-by keyring trusts.
+//
+// Reading only the first packet would be enough to name a file, and not
+// enough to trust one: whoever serves the key could append a second primary
+// key after the expected one and have it accepted with it.
+func primaryFingerprints(data []byte) ([]string, error) {
+	var fingerprints []string
+	for offset := 0; offset < len(data); {
+		tag, body, next, err := packetAt(data, offset)
+		if err != nil {
+			return nil, err
+		}
+		if offset == 0 && tag != packetTagPublicKey {
+			return nil, fmt.Errorf("%w: the first packet is tag %d, not a public key", ErrNotPublicKey, tag)
+		}
+		if tag == packetTagPublicKey {
+			fingerprint, err := fingerprintOfKeyPacket(body)
+			if err != nil {
+				return nil, err
+			}
+			fingerprints = append(fingerprints, fingerprint)
+		}
+		offset = next
 	}
-	if tag != packetTagPublicKey {
-		return "", fmt.Errorf("%w: the first packet is tag %d, not a public key", ErrNotPublicKey, tag)
+	if len(fingerprints) == 0 {
+		return nil, fmt.Errorf("%w: no public-key packet", ErrNotPublicKey)
 	}
+	return fingerprints, nil
+}
+
+// fingerprintOfKeyPacket returns the fingerprint of one public-key packet's
+// body.
+func fingerprintOfKeyPacket(body []byte) (string, error) {
 	if len(body) == 0 {
 		return "", fmt.Errorf("%w: empty key packet", ErrNotPublicKey)
 	}
@@ -167,59 +206,68 @@ func fingerprintOf(data []byte) (string, error) {
 	}
 }
 
-// firstPacket decodes the header of the first OpenPGP packet and returns its
-// tag and body. Both the old and the new header format are understood;
-// partial-length bodies are not, since key packets never use them.
-func firstPacket(data []byte) (tag int, body []byte, err error) {
-	if len(data) < 2 || data[0]&0x80 == 0 {
-		return 0, nil, fmt.Errorf("%w: not an OpenPGP packet", ErrNotPublicKey)
+// packetAt decodes the header of the OpenPGP packet starting at offset and
+// returns its tag, its body, and where the packet after it starts. Both the
+// old and the new header format are understood; partial-length bodies are
+// not, since key packets never use them.
+//
+// Every header format consumes at least two bytes, so next is always past
+// offset and a walk over a file always terminates.
+func packetAt(data []byte, offset int) (tag int, body []byte, next int, err error) {
+	packet := data[offset:]
+	if len(packet) < 2 || packet[0]&0x80 == 0 {
+		return 0, nil, 0, fmt.Errorf("%w: not an OpenPGP packet", ErrNotPublicKey)
 	}
-	header := data[0]
+	header := packet[0]
 	var headerLength, bodyLength int
 	if header&0x40 != 0 {
 		// New format: six tag bits, then a variable-length length.
 		tag = int(header & 0x3F)
-		first := int(data[1])
+		first := int(packet[1])
 		switch {
 		case first < 192:
 			headerLength, bodyLength = 2, first
 		case first < 224:
-			if len(data) < 3 {
-				return 0, nil, fmt.Errorf("%w: truncated packet header", ErrNotPublicKey)
+			if len(packet) < 3 {
+				return 0, nil, 0, fmt.Errorf("%w: truncated packet header", ErrNotPublicKey)
 			}
-			headerLength, bodyLength = 3, (first-192)<<8+int(data[2])+192
+			headerLength, bodyLength = 3, (first-192)<<8+int(packet[2])+192
 		case first == 255:
-			if len(data) < 6 {
-				return 0, nil, fmt.Errorf("%w: truncated packet header", ErrNotPublicKey)
+			if len(packet) < 6 {
+				return 0, nil, 0, fmt.Errorf("%w: truncated packet header", ErrNotPublicKey)
 			}
-			headerLength, bodyLength = 6, int(binary.BigEndian.Uint32(data[2:6]))
+			headerLength, bodyLength = 6, int(binary.BigEndian.Uint32(packet[2:6]))
 		default:
-			return 0, nil, fmt.Errorf("%w: partial-length packet", ErrNotPublicKey)
+			return 0, nil, 0, fmt.Errorf("%w: partial-length packet", ErrNotPublicKey)
 		}
 	} else {
 		// Old format: four tag bits and a two-bit length type.
 		tag = int(header>>2) & 0x0F
 		switch header & 0x03 {
 		case 0:
-			headerLength, bodyLength = 2, int(data[1])
+			headerLength, bodyLength = 2, int(packet[1])
 		case 1:
-			if len(data) < 3 {
-				return 0, nil, fmt.Errorf("%w: truncated packet header", ErrNotPublicKey)
+			if len(packet) < 3 {
+				return 0, nil, 0, fmt.Errorf("%w: truncated packet header", ErrNotPublicKey)
 			}
-			headerLength, bodyLength = 3, int(binary.BigEndian.Uint16(data[1:3]))
+			headerLength, bodyLength = 3, int(binary.BigEndian.Uint16(packet[1:3]))
 		case 2:
-			if len(data) < 5 {
-				return 0, nil, fmt.Errorf("%w: truncated packet header", ErrNotPublicKey)
+			if len(packet) < 5 {
+				return 0, nil, 0, fmt.Errorf("%w: truncated packet header", ErrNotPublicKey)
 			}
-			headerLength, bodyLength = 5, int(binary.BigEndian.Uint32(data[1:5]))
+			headerLength, bodyLength = 5, int(binary.BigEndian.Uint32(packet[1:5]))
 		default:
-			return 0, nil, fmt.Errorf("%w: indeterminate packet length", ErrNotPublicKey)
+			return 0, nil, 0, fmt.Errorf("%w: indeterminate packet length", ErrNotPublicKey)
 		}
 	}
-	if len(data) < headerLength+bodyLength {
-		return 0, nil, fmt.Errorf("%w: truncated packet", ErrNotPublicKey)
+	// A four-octet length that overflows int on a 32-bit build reads as
+	// negative. The remaining comparison is written as a subtraction rather
+	// than headerLength+bodyLength so that it cannot overflow in its turn;
+	// every branch above has already required len(packet) >= headerLength.
+	if bodyLength < 0 || bodyLength > len(packet)-headerLength {
+		return 0, nil, 0, fmt.Errorf("%w: truncated packet", ErrNotPublicKey)
 	}
-	return tag, data[headerLength : headerLength+bodyLength], nil
+	return tag, packet[headerLength : headerLength+bodyLength], offset + headerLength + bodyLength, nil
 }
 
 // armorLineLength is how many base64 characters an armor line holds.

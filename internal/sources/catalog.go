@@ -16,8 +16,9 @@ import (
 )
 
 // Entry is one repository the form offers. URL and Suite may contain
-// "{suite}", replaced by the release's code name. Fingerprint pins the
-// signing key: a fetched key that does not match is refused.
+// "{suite}", replaced by the release's code name. Fingerprints pins the
+// signing key file: a fetched file holding any key not named there is
+// refused.
 type Entry struct {
 	Name        string // the recipe source name; stable
 	Title       string
@@ -27,53 +28,69 @@ type Entry struct {
 	Suite       string // "" means the release's code name
 	Components  []string
 	KeyURL      string
-	Fingerprint string // uppercase hex, no spaces
+	// Fingerprints names every primary key the served file may hold,
+	// uppercase hex and no spaces. The whole set is pinned rather than one
+	// key, because the file is written whole into the source's signed-by
+	// keyring and apt accepts a Release signed by any key in it: pinning only
+	// the first would let whoever answers KeyURL append a key of their own
+	// and have it trusted alongside the expected one.
+	Fingerprints []string
 }
 
 // catalog lists the repositories init offers. Every entry was checked on
 // 2026-09-17 to publish an InRelease for 20.04, 22.04 and 24.04 (or for its
 // single suite), and every fingerprint was computed with gpg from the key
 // its KeyURL served that day.
+//
+// On 2026-09-19 every KeyURL was fetched again and its primary keys counted,
+// because the pin is now the whole set: seven serve exactly the one key
+// already named here, and github-cli serves two.
 var catalog = []Entry{
 	{
 		Name: "deadsnakes", Title: "deadsnakes PPA", Description: "newer and older Python versions (python3.12, python3.13...)", Category: "Languages",
 		URL: "https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu", KeyURL: keyserverURL("F23C5A6CF475977595C89F51BA6932366A755776"),
-		Fingerprint: "F23C5A6CF475977595C89F51BA6932366A755776",
+		Fingerprints: []string{"F23C5A6CF475977595C89F51BA6932366A755776"},
 	},
 	{
 		Name: "nodesource", Title: "NodeSource", Description: "Node.js 22", Category: "Languages",
 		URL: "https://deb.nodesource.com/node_22.x", Suite: "nodistro", KeyURL: "https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key",
-		Fingerprint: "6F71F525282841EEDAF851B42F59B5F99B1BE0B4",
+		Fingerprints: []string{"6F71F525282841EEDAF851B42F59B5F99B1BE0B4"},
 	},
 	{
 		Name: "llvm", Title: "LLVM", Description: "the current clang, lld and lldb from apt.llvm.org", Category: "Languages",
 		URL: "https://apt.llvm.org/{suite}", Suite: "llvm-toolchain-{suite}", KeyURL: "https://apt.llvm.org/llvm-snapshot.gpg.key",
-		Fingerprint: "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421",
+		Fingerprints: []string{"6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"},
 	},
 	{
 		Name: "git-core", Title: "git-core PPA", Description: "the current git", Category: "Tools",
 		URL: "https://ppa.launchpadcontent.net/git-core/ppa/ubuntu", KeyURL: keyserverURL("F911AB184317630C59970973E363C90F8F1B6217"),
-		Fingerprint: "F911AB184317630C59970973E363C90F8F1B6217",
+		Fingerprints: []string{"F911AB184317630C59970973E363C90F8F1B6217"},
 	},
 	{
 		Name: "github-cli", Title: "GitHub CLI", Description: "the gh command", Category: "Tools",
 		URL: "https://cli.github.com/packages", Suite: "stable", KeyURL: "https://cli.github.com/packages/githubcli-archive-keyring.gpg",
-		Fingerprint: "2C6106201985B60E6C7AC87323F3D4EA75716059",
+		// GitHub's keyring holds two primary keys: the one it has signed with
+		// since 2022 and a second added 2026-04-07. Both are named, because
+		// both are in the file that becomes the signed-by keyring.
+		Fingerprints: []string{
+			"2C6106201985B60E6C7AC87323F3D4EA75716059",
+			"7F38BBB59D064DBCB3D84D725612B36462313325",
+		},
 	},
 	{
 		Name: "kitware", Title: "Kitware", Description: "the current CMake", Category: "Tools",
 		URL: "https://apt.kitware.com/ubuntu", KeyURL: "https://apt.kitware.com/keys/kitware-archive-latest.asc",
-		Fingerprint: "4DBEBE3EEC96E7B8C6EC5BE99E92FDC6C5B9BA75",
+		Fingerprints: []string{"4DBEBE3EEC96E7B8C6EC5BE99E92FDC6C5B9BA75"},
 	},
 	{
 		Name: "docker", Title: "Docker", Description: "Docker Engine and Compose (docker-ce)", Category: "Tools",
 		URL: "https://download.docker.com/linux/ubuntu", Components: []string{"stable"}, KeyURL: "https://download.docker.com/linux/ubuntu/gpg",
-		Fingerprint: "9DC858229FC7DD38854AE2D88D81803C0EBFCD88",
+		Fingerprints: []string{"9DC858229FC7DD38854AE2D88D81803C0EBFCD88"},
 	},
 	{
 		Name: "vscode", Title: "Visual Studio Code", Description: "the code package from Microsoft", Category: "Editors",
 		URL: "https://packages.microsoft.com/repos/code", Suite: "stable", KeyURL: "https://packages.microsoft.com/keys/microsoft.asc",
-		Fingerprint: "BC528686B50D79E339D3721CEB3E94ADBE1229CF",
+		Fingerprints: []string{"BC528686B50D79E339D3721CEB3E94ADBE1229CF"},
 	},
 }
 

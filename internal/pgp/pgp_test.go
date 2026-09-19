@@ -5,14 +5,19 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
 
 // Fingerprints of the fixture keys, computed with gpg on the build host.
+// GitHub's keyring holds two primary keys; both are listed here, and the
+// subkeys gpg also reports are not, because a subkey is not what a signed-by
+// keyring is trusted by.
 const (
-	dockerFingerprint    = "9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
-	githubCLIFingerprint = "2C6106201985B60E6C7AC87323F3D4EA75716059"
+	dockerFingerprint          = "9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+	githubCLIFingerprint       = "2C6106201985B60E6C7AC87323F3D4EA75716059"
+	githubCLISecondFingerprint = "7F38BBB59D064DBCB3D84D725612B36462313325"
 )
 
 func readFixture(t *testing.T, name string) []byte {
@@ -54,6 +59,40 @@ func TestParseBinaryKeyringWithTwoKeys(t *testing.T) {
 	}
 	if key.Fingerprint != githubCLIFingerprint || key.Armored {
 		t.Errorf("Fingerprint = %s, Armored = %v", key.Fingerprint, key.Armored)
+	}
+	// Both primary keys are named, and neither subkey is.
+	want := []string{githubCLIFingerprint, githubCLISecondFingerprint}
+	if !slices.Equal(key.Fingerprints, want) {
+		t.Errorf("Fingerprints = %v, want %v", key.Fingerprints, want)
+	}
+}
+
+func TestFingerprintsNamesEveryKeyInTheFile(t *testing.T) {
+	// One primary key with one subkey is one fingerprint: a subkey is
+	// certified by its primary and is not separately trusted.
+	docker, err := ParsePublicKey(readFixture(t, "docker.asc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(docker.Fingerprints, []string{dockerFingerprint}) {
+		t.Errorf("docker Fingerprints = %v, want only its primary key", docker.Fingerprints)
+	}
+
+	// A key appended after another is seen. This is the shape that defeated
+	// the pin while only the first packet was read: the file still leads
+	// with the expected key, so naming it by its first fingerprint says
+	// nothing about what else it carries.
+	appended := append(append([]byte(nil), docker.Binary...), readFixture(t, "github-cli.gpg")...)
+	key, err := ParsePublicKey(appended)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key.Fingerprint != dockerFingerprint {
+		t.Errorf("Fingerprint = %s, want the first key to be unchanged", key.Fingerprint)
+	}
+	want := []string{dockerFingerprint, githubCLIFingerprint, githubCLISecondFingerprint}
+	if !slices.Equal(key.Fingerprints, want) {
+		t.Errorf("Fingerprints = %v, want %v", key.Fingerprints, want)
 	}
 }
 
@@ -113,6 +152,30 @@ func TestParseRejectsNonKeys(t *testing.T) {
 	_, err := ParsePublicKey([]byte{0x99, 0x00, 0x03, 0x03, 0x00, 0x00})
 	if err == nil || errors.Is(err, ErrNotPublicKey) || !strings.Contains(err.Error(), "version 3") {
 		t.Errorf("err = %v, want an unsupported-version error", err)
+	}
+}
+
+func TestParseRejectsAMalformedPacketAfterTheFirst(t *testing.T) {
+	// The walk reads the whole file, so a file that begins with a good key
+	// and goes wrong later is refused rather than half-read. The reader this
+	// replaced stopped after the first packet and accepted every one of
+	// these, which is the same blind spot that let an appended key through.
+	docker, err := ParsePublicKey(readFixture(t, "docker.asc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	testCases := map[string][]byte{
+		"a key packet claiming more bytes than follow": {0x99, 0x01, 0x00, 0x04},
+		"bytes that are not a packet at all":           []byte("not a packet"),
+		"a partial-length packet":                      {0xC6, 0xE0},
+	}
+	for name, trailer := range testCases {
+		t.Run(name, func(t *testing.T) {
+			data := append(append([]byte(nil), docker.Binary...), trailer...)
+			if _, err := ParsePublicKey(data); !errors.Is(err, ErrNotPublicKey) {
+				t.Errorf("err = %v, want ErrNotPublicKey", err)
+			}
+		})
 	}
 }
 

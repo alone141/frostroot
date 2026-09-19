@@ -24,6 +24,17 @@ func dockerKey(t *testing.T) []byte {
 	return data
 }
 
+// githubCLIKey is GitHub's real keyring, binary, and it holds two primary
+// keys: the catalog pins both.
+func githubCLIKey(t *testing.T) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "pgp", "testdata", "github-cli.gpg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 // fakeClient answers URLs from a map; unknown URLs fail.
 type fakeClient struct {
 	answers  map[string][]byte
@@ -46,8 +57,18 @@ func TestCatalogEntriesAreValidSources(t *testing.T) {
 			t.Errorf("%s appears twice", entry.Name)
 		}
 		seen[entry.Name] = true
-		if len(entry.Fingerprint) != 40 || strings.ToUpper(entry.Fingerprint) != entry.Fingerprint || entry.KeyURL == "" || entry.Title == "" || entry.Category == "" {
+		if len(entry.Fingerprints) == 0 || entry.KeyURL == "" || entry.Title == "" || entry.Category == "" {
 			t.Errorf("incomplete entry %+v", entry)
+		}
+		pinned := map[string]bool{}
+		for _, fingerprint := range entry.Fingerprints {
+			if len(fingerprint) != 40 || strings.ToUpper(fingerprint) != fingerprint {
+				t.Errorf("%s: %q is not 40 uppercase hex digits", entry.Name, fingerprint)
+			}
+			if pinned[fingerprint] {
+				t.Errorf("%s pins %s twice", entry.Name, fingerprint)
+			}
+			pinned[fingerprint] = true
 		}
 		for _, suite := range []string{"focal", "jammy", "noble"} {
 			source := entry.Source(suite)
@@ -119,11 +140,11 @@ func TestFetchKeyForCatalogEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fetched.Fingerprint != docker.Fingerprint || fetched.SourceURL != docker.KeyURL {
+	if fetched.Fingerprint != docker.Fingerprints[0] || fetched.SourceURL != docker.KeyURL {
 		t.Errorf("fetched = %+v", fetched)
 	}
 	key, err := pgp.ParsePublicKey(fetched.Armored)
-	if err != nil || !key.Armored || key.Fingerprint != docker.Fingerprint {
+	if err != nil || !key.Armored || key.Fingerprint != docker.Fingerprints[0] {
 		t.Errorf("Armored does not parse back to the key: %v, %+v", err, key)
 	}
 }
@@ -134,15 +155,103 @@ func TestFetchKeyForPPA(t *testing.T) {
 	// fake keyserver serves that key: the check is about consistency.
 	docker, _ := Lookup("docker")
 	client := &fakeClient{answers: map[string][]byte{
-		"https://api.launchpad.net/1.0/~deadsnakes/+archive/ubuntu/ppa": []byte(`{"name": "ppa", "signing_key_fingerprint": "` + strings.ToLower(docker.Fingerprint) + `"}`),
-		keyserverURL(docker.Fingerprint):                                dockerKey(t),
+		"https://api.launchpad.net/1.0/~deadsnakes/+archive/ubuntu/ppa": []byte(`{"name": "ppa", "signing_key_fingerprint": "` + strings.ToLower(docker.Fingerprints[0]) + `"}`),
+		keyserverURL(docker.Fingerprints[0]):                            dockerKey(t),
 	}}
 	fetched, err := FetchKey(context.Background(), client, source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fetched.Fingerprint != docker.Fingerprint || len(client.requests) != 2 {
+	if fetched.Fingerprint != docker.Fingerprints[0] || len(client.requests) != 2 {
 		t.Errorf("fetched = %+v, requests %q", fetched, client.requests)
+	}
+}
+
+func TestFetchKeyRefusesAKeyAppendedToThePinnedOne(t *testing.T) {
+	// What a compromised key host serves: the pinned key, then one of its
+	// own. Reading only the first fingerprint, the pin matches — and the
+	// whole file would become the source's signed-by keyring, where apt
+	// accepts a Release signed by either key.
+	docker, _ := Lookup("docker")
+	pinnedKey, err := pgp.ParsePublicKey(dockerKey(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	appended := append(append([]byte(nil), pinnedKey.Binary...), githubCLIKey(t)...)
+
+	// The premise: the appended file still names the pinned key first.
+	parsed, err := pgp.ParsePublicKey(appended)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Fingerprint != docker.Fingerprints[0] {
+		t.Fatalf("the appended file should still lead with the pinned key, got %s", parsed.Fingerprint)
+	}
+
+	client := &fakeClient{answers: map[string][]byte{docker.KeyURL: appended}}
+	_, err = FetchKey(context.Background(), client, docker.Source("noble"))
+	if !errors.Is(err, ErrFingerprintMismatch) {
+		t.Fatalf("err = %v, want ErrFingerprintMismatch", err)
+	}
+	// The error names the key that is not pinned, not the one that is.
+	if !strings.Contains(err.Error(), "2C61 0620") {
+		t.Errorf("the error should name the appended key: %v", err)
+	}
+}
+
+func TestFetchKeyAcceptsAFileWhoseKeysAreAllPinned(t *testing.T) {
+	// GitHub really does serve two primary keys in one file, so pinning the
+	// set has to accept that and not only single-key files.
+	githubCLI, _ := Lookup("github-cli")
+	if len(githubCLI.Fingerprints) != 2 {
+		t.Fatalf("github-cli pins %d keys, want the two its keyring holds", len(githubCLI.Fingerprints))
+	}
+	client := &fakeClient{answers: map[string][]byte{githubCLI.KeyURL: githubCLIKey(t)}}
+	fetched, err := FetchKey(context.Background(), client, githubCLI.Source("noble"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fetched.Fingerprint != githubCLI.Fingerprints[0] {
+		t.Errorf("fetched = %+v, want the first pinned key", fetched)
+	}
+	// What was accepted is what gets written: the armored file that becomes
+	// the signed-by keyring still holds both pinned keys and nothing else.
+	written, err := pgp.ParsePublicKey(fetched.Armored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(written.Fingerprints, githubCLI.Fingerprints) {
+		t.Errorf("the written keyring holds %v, want exactly the pinned set %v", written.Fingerprints, githubCLI.Fingerprints)
+	}
+}
+
+func TestFirstUnpinned(t *testing.T) {
+	const docker = "9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+	const github = "2C6106201985B60E6C7AC87323F3D4EA75716059"
+	testCases := []struct {
+		name    string
+		fetched []string
+		pinned  []string
+		want    string // "" means every fetched key is pinned
+	}{
+		{"the pinned key alone", []string{docker}, []string{docker}, ""},
+		{"a keyserver answering in lowercase", []string{strings.ToLower(docker)}, []string{docker}, ""},
+		{"both pinned keys, in order", []string{docker, github}, []string{docker, github}, ""},
+		{"both pinned keys, in the other order", []string{github, docker}, []string{docker, github}, ""},
+		// Fewer keys than pinned is not a mismatch: the file trusts less
+		// than it is allowed to, which is what a rotation looks like.
+		{"only one of the pinned keys", []string{github}, []string{docker, github}, ""},
+		{"a key appended to the pinned one", []string{docker, github}, []string{docker}, github},
+		{"only a key that is not pinned", []string{github}, []string{docker}, github},
+		{"nothing pinned at all", []string{docker}, nil, docker},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			unpinned, found := firstUnpinned(testCase.fetched, testCase.pinned)
+			if found != (testCase.want != "") || unpinned != testCase.want {
+				t.Errorf("firstUnpinned = %q, %v; want %q", unpinned, found, testCase.want)
+			}
+		})
 	}
 }
 
