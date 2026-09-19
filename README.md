@@ -487,7 +487,11 @@ verified by its own key and nothing else. The lock records which source
 every package came from and the checksum of every key file
 (`[[repositories]]`), `vendor` fetches each package from its own source (with
 Launchpad as the fallback for PPAs), and `build --offline` rebuilds from the
-pool as before, refusing if the recipe's sources no longer match the lock's.
+pool as before, refusing if the recipe's sources no longer match the lock's
+or if a key file is no longer the bytes the lock recorded: the file becomes
+the source's keyring in the image, so a changed one is a different image. A
+key you mean to change — a rotation — goes through an online build, which
+writes the new checksum into the lock where a review can see it.
 In the image, the sources are in `/etc/apt/sources.list` with their keys
 under `/etc/apt/keyrings/`, so `apt update` there works with the same trust.
 
