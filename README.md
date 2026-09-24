@@ -2,7 +2,7 @@
 
 **Freeze an Ubuntu root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
 
-> **Status: v0.12.0.** `init`, `edit`, `capture`, `validate`, `build`,
+> **Status: v0.13.0.** `init`, `edit`, `capture`, `validate`, `build`,
 > `vendor` and `build --offline` work, a recipe can add third-party apt
 > sources (PPAs, Docker, Node.js, VS Code...), Python packages from PyPI and
 > certificate authorities for a network that inspects TLS, and two offline
@@ -266,12 +266,12 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 
 | Command | What it does |
 |---|---|
-| `frostroot init [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE] [--refresh-index]` | Opens the form and writes a commented `frostroot.toml`, then fetches the signing keys of the sources you picked into `keys/`. Refuses to overwrite a recipe without `--force`. Writes nothing unless the answers validate and you confirm. |
-| `frostroot edit [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE] [--refresh-index]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back; fetches any missing source keys. The file is regenerated from the template, so your own comments in it do not survive. |
-| `frostroot capture [--root DIR] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE] [--refresh-index]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, starting with a page of what it found and what a recipe cannot carry, writes `frostroot.toml` and the signing keys of the third-party sources it could carry, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys; needs no root. |
+| `frostroot init [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Opens the form and writes a commented `frostroot.toml`, then fetches the signing keys of the sources you picked into `keys/`. Refuses to overwrite a recipe without `--force`. Writes nothing unless the answers validate and you confirm. |
+| `frostroot edit [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back; fetches any missing source keys. The file is regenerated from the template, so your own comments in it do not survive. |
+| `frostroot capture [--root DIR] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, starting with a page of what it found and what a recipe cannot carry, writes `frostroot.toml` and the signing keys of the third-party sources it could carry, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys; needs no root. |
 | `frostroot validate` | Checks `frostroot.toml`, including that every source's key file is there and is a key, and prints every problem. No network, no root. |
-| `frostroot build [--mirror URL] [--ca-bundle FILE] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-ubuntu-<release>-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. |
-| `frostroot vendor [--mirror URL] [--ca-bundle FILE] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, and every wheel it names into `vendor/wheels/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name. |
+| `frostroot build [--mirror URL] [--ca-bundle FILE \| --insecure] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-ubuntu-<release>-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. |
+| `frostroot vendor [--mirror URL] [--ca-bundle FILE \| --insecure] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, and every wheel it names into `vendor/wheels/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name. |
 | `frostroot build --offline [--keep-work] [--plain]` | Rebuilds the image from `frostroot.lock` and `vendor/debs/`, without the archive. Fails unless the result has exactly the lock's packages. The lock is read, not written. |
 | `frostroot version` | Prints the version and the commit it was built from. |
 
@@ -282,11 +282,14 @@ mirror; for `vendor` it replaces the mirror recorded in the lock.
 `--keep-work` keeps the work directory after a successful build (it is always
 kept after a failure). `--ca-bundle` names a PEM file of certificate
 authorities to trust while fetching, for a network that inspects TLS; see
-[Networks that inspect TLS](#networks-that-inspect-tls). For `init`, `edit` and
-`capture`, `--mirror` and `--ca-bundle` say where the form's apt index comes
-from and whom to trust for it, `--python-index` points the PyPI search at
-another simple index, and `--refresh-index` fetches them again before their
-week is up.
+[Networks that inspect TLS](#networks-that-inspect-tls). `--insecure` skips
+certificate verification on every fetch instead, warns about what that
+gives up, and marks a lock whose Python packages were resolved that way; see
+[Without the certificate](#without-the-certificate---insecure). For `init`,
+`edit` and `capture`, `--mirror`, `--ca-bundle` and `--insecure` say where
+the form's apt index comes from and whom to trust for it, `--python-index`
+points the PyPI search at another simple index, and `--refresh-index` fetches
+them again before their week is up.
 
 | Exit code | Meaning |
 |---|---|
@@ -654,6 +657,55 @@ department has it; `openssl s_client -showcerts -connect pypi.org:443
 </dev/null` prints the chain the proxy presents, and the last certificate in
 it is the root to save.
 
+### Without the certificate: `--insecure`
+
+Sometimes nobody has it. `--insecure` skips certificate verification on
+every fetch, on each of the five commands that fetch:
+
+```bash
+frostroot build --insecure
+```
+
+It is not the same trade everywhere, and the difference is what to know
+before using it:
+
+| What it touches | Still protected by |
+|---|---|
+| The `.deb` packages apt installs | the archive's and each source's signatures, as always |
+| Everything `vendor` downloads | the lock's SHA-256 of every file |
+| The package picker and the PyPI search in `init`, `edit` and `capture` | nothing, but they only suggest names, and `build` checks every one |
+| A PPA's signing key, fetched by `init`, `edit` or `capture` | **nothing**: the fingerprint is Launchpad's answer over the same connection, and every later build trusts the key. The command prints the PPA's Launchpad page to compare it with. |
+| The first `[python]` resolve | **nothing**: PyPI signs no packages, so whoever is on the network path decides what is resolved, and the lock then pins it by hash for every rebuild |
+
+The last row is the one that matters, so the lock records it:
+
+```toml
+[python]
+transport = "unverified"
+```
+
+`build --offline` and `vendor` warn every time they read such a lock. To
+check it, vendor it on a trusted network without the flag: every wheel is
+downloaded over a verified connection and compared with the lock, and one
+that is not what its server publishes is refused. Remove `vendor/wheels`
+first if it was already filled, so that every wheel is fetched again; the
+command says how many it did not fetch. A real but older release that a
+middleman substituted would pass this check, and the versions are in the lock
+to read. A build with a certificate, or on a trusted network, replaces the
+mark.
+
+Every run with the flag says what it gives up, first the same way everywhere,
+then for the command at hand. Nothing of the flag reaches the image: the apt
+setting lives in the chroot only while mmdebstrap runs, and pip's
+`--trusted-host` is a flag of that one run. apt, `git`, `curl` and `pip`
+inside the imported distribution verify as they always did, which on that
+same network means they fail until the recipe ships the authority in
+`[certificates]`.
+
+pip has no way to verify nothing, only hosts it may trust unverified, so the
+flag names the index's host and `files.pythonhosted.org`. A custom
+`index_url` whose files come from a third host still fails on that host.
+
 ## Capturing a machine you already have
 
 Most labs start from a machine that works, not from a blank recipe. Run
@@ -933,7 +985,9 @@ explains itself, and screens for narrow and non-UTF-8 terminals (v0.9), a
 package picker that searches the whole Ubuntu archive from inside the form
 (v0.10), the same search for PyPI names (v0.11), and a search that covers
 the third-party sources the recipe adds, which are now chosen before the
-packages that come from them (v0.12).
+packages that come from them (v0.12), and `--insecure` for a network whose
+certificate authority nobody has, with the lock recording what it could not
+verify (v0.13).
 
 **Deliberately not yet:** Fedora or any non-Ubuntu family · flat or unsigned
 apt repositories · npm and cargo lockfiles · Python source distributions ·
