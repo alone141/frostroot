@@ -18,6 +18,7 @@ type indexFlags struct {
 	mirror      string
 	pythonIndex string
 	caBundle    string
+	insecure    bool
 	refresh     bool
 }
 
@@ -26,6 +27,7 @@ func addIndexFlags(flags *flag.FlagSet) *indexFlags {
 	parsed := &indexFlags{}
 	flags.StringVar(&parsed.mirror, "mirror", "", "fetch the package index from this archive `URL` instead of Ubuntu's")
 	flags.StringVar(&parsed.caBundle, "ca-bundle", "", "trust the certificate authorities in this PEM `FILE` when fetching an https mirror, source or key, as a network that inspects TLS needs")
+	flags.BoolVar(&parsed.insecure, "insecure", false, insecureFlagUsage)
 	flags.StringVar(&parsed.pythonIndex, "python-index", "", "search this PEP 691 simple index `URL` instead of PyPI's")
 	flags.BoolVar(&parsed.refresh, "refresh-index", false, "fetch the package index again even when the cached one is fresh")
 	return parsed
@@ -39,6 +41,11 @@ and PyPI, each fetched once and kept under $XDG_CACHE_HOME/frostroot/index
 only suggest names: build checks every package against the signed archive,
 and pip resolves the Python ones. --plain never fetches; it checks names
 against the cached indexes when there are any.
+
+--insecure skips certificate verification for those fetches and for the
+signing keys of the sources you pick. The names are only suggestions, but a
+PPA's key is then fetched from wherever the network says, and every later
+build trusts it; the command says where to check it.
 
 `
 
@@ -58,6 +65,10 @@ type packageIndexes struct {
 	openPyPI    func(ctx context.Context, options index.Options) (*index.PyPIIndex, error)
 	pypiOptions index.Options
 	summaries   *index.Summaries
+	// insecure is --insecure, which the key fetch after the form needs to
+	// know as well as the indexes: a key found over an unverified connection
+	// deserves a word.
+	insecure bool
 
 	mutex sync.Mutex
 	// opened is the index a whole request was answered with, by its key;
@@ -72,13 +83,16 @@ type packageIndexes struct {
 // packageIndexes returns the indexes for this run, or false when the flags
 // cannot be honored, which has been reported.
 func (a *App) packageIndexes(parsed *indexFlags) (*packageIndexes, bool) {
-	options := index.Options{Mirror: parsed.mirror, CacheDir: index.CacheDir(a.Getenv), Refresh: parsed.refresh, Client: a.IndexClient}
+	options := index.Options{Mirror: parsed.mirror, CacheDir: index.CacheDir(a.Getenv), Refresh: parsed.refresh, Client: a.IndexClient, Insecure: parsed.insecure}
 	rootCAs, ok := a.trustPool(parsed.caBundle)
 	if !ok {
 		return nil, false
 	}
 	options.RootCAs = rootCAs
-	a.ensureKeyClient(rootCAs)
+	a.ensureKeyClient(rootCAs, parsed.insecure)
+	if parsed.insecure {
+		a.warnInsecure(insecureFormDetail)
+	}
 	pypiOptions := options
 	// --mirror is an apt mirror and says nothing about PyPI, which has its
 	// own flag.
@@ -90,10 +104,17 @@ func (a *App) packageIndexes(parsed *indexFlags) (*packageIndexes, bool) {
 		openPyPI:    index.OpenPyPI,
 		pypiOptions: pypiOptions,
 		summaries:   index.NewSummaries(pypiOptions),
+		insecure:    parsed.insecure,
 		opened:      map[string]form.PackageIndex{},
 		archives:    map[string]*index.Index{},
 		sources:     map[string]*index.Index{},
 	}, true
+}
+
+// insecureTLS reports whether this run skips certificate verification. nil
+// is a run with no indexes at all, which the tests make, and it verifies.
+func (p *packageIndexes) insecureTLS() bool {
+	return p != nil && p.insecure
 }
 
 // Open is the form.IndexOpener of this run.

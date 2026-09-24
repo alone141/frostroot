@@ -136,7 +136,7 @@ func TestIndexFlagsAreCheckedBeforeTheForm(t *testing.T) {
 		if exitCode := app.Run([]string{command, "--help"}); exitCode != exitSuccess {
 			t.Errorf("%s --help: exit %d", command, exitCode)
 		}
-		for _, wantText := range []string{"-mirror", "-ca-bundle", "-refresh-index", "only suggest names", "--plain never"} {
+		for _, wantText := range []string{"-mirror", "-ca-bundle", "-insecure", "-refresh-index", "only suggest names", "--plain never", "where to check it"} {
 			if !strings.Contains(usage.String(), wantText) {
 				t.Errorf("%s --help lacks %q:\n%s", command, wantText, usage.String())
 			}
