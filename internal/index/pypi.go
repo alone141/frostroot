@@ -218,7 +218,7 @@ func pypiIndexURL(options Options) string {
 func fetchPyPI(ctx context.Context, options Options) ([]Project, error) {
 	client := options.Client
 	if client == nil {
-		transport := pki.Transport(options.RootCAs)
+		transport := pki.Transport(options.RootCAs, options.Insecure)
 		transport.ResponseHeaderTimeout = responseHeaderTimeout
 		// The transport must not add Accept-Encoding itself, or it would
 		// decompress transparently and the count below would be of the

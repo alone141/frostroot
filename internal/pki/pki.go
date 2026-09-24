@@ -128,21 +128,26 @@ func SystemPoolWith(extraPEM []byte) (*x509.CertPool, error) {
 // Transport returns a transport that verifies against pool, keeping
 // everything else the default one does, the proxy environment above all. A
 // nil pool returns a plain clone, which verifies against the host's roots.
-func Transport(pool *x509.CertPool) *http.Transport {
+//
+// insecure verifies nothing: any certificate is accepted, from anyone, and
+// pool is not consulted. It is what --insecure asks for, on a network whose
+// authority the person does not have, and it is the whole of what the flag
+// gives up: whoever is on the path can answer as any server.
+func Transport(pool *x509.CertPool, insecure bool) *http.Transport {
 	transport, isTransport := http.DefaultTransport.(*http.Transport)
 	if !isTransport {
-		return &http.Transport{Proxy: http.ProxyFromEnvironment, TLSClientConfig: tlsConfig(pool)}
+		return &http.Transport{Proxy: http.ProxyFromEnvironment, TLSClientConfig: tlsConfig(pool, insecure)}
 	}
 	clone := transport.Clone()
-	if pool != nil {
-		clone.TLSClientConfig = tlsConfig(pool)
+	if pool != nil || insecure {
+		clone.TLSClientConfig = tlsConfig(pool, insecure)
 	}
 	return clone
 }
 
-// tlsConfig is the client configuration for pool.
-func tlsConfig(pool *x509.CertPool) *tls.Config {
-	return &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+// tlsConfig is the client configuration for pool, or for no verification.
+func tlsConfig(pool *x509.CertPool, insecure bool) *tls.Config {
+	return &tls.Config{RootCAs: pool, InsecureSkipVerify: insecure, MinVersion: tls.VersionTLS12}
 }
 
 // isPrivateKeyBlock reports whether a PEM block type names a private key.

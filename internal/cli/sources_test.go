@@ -189,10 +189,10 @@ func TestInitWithSourcesFingerprintMismatch(t *testing.T) {
 	}
 }
 
-func runEditWithKeyClient(recipeDir string, answers []string, client sources.Client) (exitCode int, stdout, stderr string) {
+func runEditWithKeyClient(recipeDir string, answers []string, client sources.Client, flags ...string) (exitCode int, stdout, stderr string) {
 	var stdoutBuffer, stderrBuffer bytes.Buffer
 	app := App{Stdout: &stdoutBuffer, Stderr: &stderrBuffer, RecipeDir: recipeDir, Prompt: &scriptedPrompt{answers: answers}, ReadFile: noHostFile, KeyClient: client}
-	exitCode = app.Run([]string{"edit"})
+	exitCode = app.Run(append([]string{"edit"}, flags...))
 	return exitCode, stdoutBuffer.String(), stderrBuffer.String()
 }
 

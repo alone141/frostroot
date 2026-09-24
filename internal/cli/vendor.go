@@ -20,7 +20,7 @@ import (
 	"frostroot/internal/tui"
 )
 
-const vendorUsageText = `usage: frostroot vendor [--mirror URL] [--ca-bundle FILE] [--prune] [--plain]
+const vendorUsageText = `usage: frostroot vendor [--mirror URL] [--ca-bundle FILE | --insecure] [--prune] [--plain]
 
 Download every package frostroot.lock names into vendor/debs/, and every Python
 wheel it names into vendor/wheels/, checked against the lock's checksums, so
@@ -29,7 +29,13 @@ or PyPI. Files already there and correct are kept, so rerunning resumes an
 interrupted download. Packages the archive has since dropped are fetched from
 Launchpad, which keeps every file ever published. Both are HTTPS, so on a
 network that inspects TLS, --ca-bundle names a PEM file of certificate
-authorities to trust while fetching.
+authorities to trust while fetching, and --insecure skips certificate
+verification instead. Every file is still checked against the lock either way.
+
+A lock whose Python packages were resolved with "build --insecure" says so,
+and vendor repeats it: those hashes are only as trustworthy as that network
+was. Vendoring such a lock without --insecure, on a trusted network, checks
+them: a wheel that is not what its server publishes is refused.
 
 `
 
@@ -37,6 +43,7 @@ func (a *App) runVendor(args []string) int {
 	flags := a.newFlagSet("vendor", vendorUsageText)
 	mirrorURL := flags.String("mirror", "", "download from this archive base `URL` instead of the one recorded in the lock")
 	caBundlePath := flags.String("ca-bundle", "", "PEM `FILE` of certificate authorities to trust while fetching, for a network that inspects TLS")
+	insecure := flags.Bool("insecure", false, insecureFlagUsage)
 	prune := flags.Bool("prune", false, "remove files in vendor/debs and vendor/wheels that the lock does not name")
 	plain := flags.Bool("plain", false, "print progress as lines instead of showing the full-screen progress screen")
 	if exitCode, stop := a.parseFlags(flags, args); stop {
@@ -83,6 +90,10 @@ func (a *App) runVendor(args []string) int {
 	if !ok {
 		return exitUserError
 	}
+	if *insecure {
+		a.warnInsecure(insecureVendorDetail)
+	}
+	a.warnIfUnverified(lock)
 	run := &vendorRun{
 		poolDir:      filepath.Join(a.RecipeDir, filepath.FromSlash(pool.DebsDirName)),
 		entries:      entries,
@@ -94,6 +105,8 @@ func (a *App) runVendor(args []string) int {
 		fallback:     a.VendorFallback,
 		client:       a.VendorClient,
 		rootCAs:      rootCAs,
+		insecure:     *insecure,
+		checksLock:   lock.PythonResolvedUnverified() && !*insecure,
 	}
 	if run.fallback == nil {
 		run.fallback = pool.FallbackURL(lock)
@@ -172,8 +185,30 @@ func (a *App) reportVendorSuccess(run *vendorRun) {
 			a.stdoutf("%d wheel file(s) in %s are not in the lock; remove them with: frostroot vendor --prune\n", len(extra), pool.WheelsDirName)
 		}
 	}
+	if run.checksLock {
+		a.reportUnverifiedLockChecked(run)
+	}
 	a.stdoutf("\nRebuild the exact image without the archive:\n  frostroot build --offline\n")
 	a.stdoutf("%s", goModuleVendorNote(a.RecipeDir))
+}
+
+// reportUnverifiedLockChecked says what a verified vendor run has shown
+// about a lock whose Python packages were resolved with --insecure. A wheel
+// downloaded now came from its server over a verified connection and
+// matched the lock's hash, so that hash is what the server publishes; a
+// wheel already in the pool was compared with the lock and nothing else, so
+// it proves nothing about the server. A real but older release passes
+// either way, and the README says so.
+func (a *App) reportUnverifiedLockChecked(run *vendorRun) {
+	summary := run.summaryByPool[pool.WheelsDirName]
+	switch {
+	case len(run.wheelEntries) == 0:
+	case summary.Present == 0:
+		a.stdoutf("The lock's Python packages were resolved without verifying TLS; every wheel downloaded now matched the lock over a verified connection, so its hashes are what the servers publish.\n")
+	default:
+		a.stdoutf("The lock's Python packages were resolved without verifying TLS; %d of %d wheels matched the lock over a verified connection, and %d were already in %s and not downloaded again. Remove %s and run frostroot vendor again to check every one.\n",
+			summary.Fetched, len(run.wheelEntries), summary.Present, pool.WheelsDirName, pool.WheelsDirName)
+	}
 }
 
 // subtitleParts describes the run above the progress screen: how many files,
@@ -237,7 +272,12 @@ type vendorRun struct {
 	fallback     func(pool.Entry) string
 	client       *http.Client
 	rootCAs      *x509.CertPool
-	progress     builder.Progress
+	insecure     bool // --insecure: verify no certificate
+	// checksLock means this verified run reads a lock whose Python packages
+	// were resolved with --insecure, so what it downloads says something
+	// about that lock, and the report says what.
+	checksLock bool
+	progress   builder.Progress
 
 	// summaryByPool holds what each pool directory ended up with, so that a
 	// message can report the packages and the wheels apart.
@@ -318,6 +358,7 @@ func (r *vendorRun) fetchPool(ctx context.Context, report func(builder.ProgressE
 		Fallback:  fallback,
 		Client:    r.client,
 		RootCAs:   r.rootCAs,
+		Insecure:  r.insecure,
 		UserAgent: "frostroot/" + builder.Version,
 		OnChecked: func(checked, total int) {
 			report(builder.ProgressEvent{Phase: builder.PhaseVendorCheck, Kind: builder.EventProgress, Done: int64(checked), Total: int64(total), Unit: builder.UnitFiles})

@@ -20,6 +20,7 @@ import (
 // the way PyPI serves it.
 type simpleIndex struct {
 	URL      string
+	server   *httptest.Server
 	requests atomic.Int64
 	// answer, when set, replies instead of the excerpt.
 	answer func(writer http.ResponseWriter) bool
@@ -58,6 +59,7 @@ func newSimpleIndex(t *testing.T) *simpleIndex {
 	}))
 	t.Cleanup(server.Close)
 	index.URL = server.URL
+	index.server = server
 	return index
 }
 

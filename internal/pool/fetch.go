@@ -69,7 +69,12 @@ type FetchOptions struct {
 	// RootCAs is what the default client verifies HTTPS against; nil means
 	// the host's own roots. A network that inspects TLS needs its authority
 	// here, and Launchpad and PyPI are both HTTPS. Ignored when Client is set.
-	RootCAs   *x509.CertPool
+	RootCAs *x509.CertPool
+	// Insecure makes the default client verify no certificate at all, from
+	// --insecure. Every file is still checked against the lock's SHA-256, so
+	// what a fetch trusts is the lock, not the server. Ignored when Client
+	// is set.
+	Insecure  bool
 	Workers   int    // concurrent downloads; <= 0 means DefaultWorkers
 	UserAgent string // "" means defaultUserAgent
 
@@ -170,7 +175,7 @@ type fetcher struct {
 func newFetcher(options FetchOptions, totalBytes int64) *fetcher {
 	f := &fetcher{options: options, client: options.Client, workers: options.Workers, totalBytes: totalBytes}
 	if f.client == nil {
-		transport := pki.Transport(options.RootCAs)
+		transport := pki.Transport(options.RootCAs, options.Insecure)
 		transport.ResponseHeaderTimeout = responseHeaderTimeout
 		f.client = &http.Client{Transport: transport}
 	}

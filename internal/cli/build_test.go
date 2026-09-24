@@ -29,6 +29,7 @@ type fakeBootstrapper struct {
 	runErr       error
 	preflightErr error
 	dpkgStatus   string                // defaults to fakeDpkgStatus
+	pipReport    string                // written where the Python step's download hook says; "" writes none
 	lastSpec     builder.BootstrapSpec // zero until Run is called
 }
 
@@ -78,6 +79,11 @@ func (f *fakeBootstrapper) Run(_ context.Context, spec builder.BootstrapSpec) er
 				return err
 			}
 			statusWritten = true
+		}
+		if reportDestination, isDownload := strings.CutPrefix(hook, "download "+builder.PythonReportPath+" "); isDownload && f.pipReport != "" {
+			if err := os.WriteFile(strings.Trim(reportDestination, "'"), []byte(f.pipReport), 0o644); err != nil {
+				return err
+			}
 		}
 	}
 	if !statusWritten {

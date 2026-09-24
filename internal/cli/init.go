@@ -74,7 +74,7 @@ url = {{tomlQuote .URL}}
 {{end}}key = {{tomlQuote .Key}}
 {{end}}{{end}}`))
 
-const initUsageText = `usage: frostroot init [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE] [--refresh-index]
+const initUsageText = `usage: frostroot init [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE | --insecure] [--refresh-index]
 
 Answer a few questions and write frostroot.toml in the current directory.
 

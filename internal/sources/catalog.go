@@ -232,6 +232,13 @@ func PPAFilesURL(owner, name, fileName string) string {
 	return "https://launchpad.net/~" + owner + "/+archive/ubuntu/" + name + "/+files/" + fileName
 }
 
+// PPAPageURL returns the PPA's page on Launchpad, which shows its signing
+// key's fingerprint: where a person checks a key that was fetched over a
+// connection they chose not to verify.
+func PPAPageURL(owner, name string) string {
+	return "https://launchpad.net/~" + owner + "/+archive/ubuntu/" + name
+}
+
 // launchpadArchiveURL is the API resource describing a PPA, whose
 // signing_key_fingerprint says which key signs it.
 func launchpadArchiveURL(owner, name string) string {

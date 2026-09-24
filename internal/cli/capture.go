@@ -17,7 +17,7 @@ import (
 // captureReportFileName is the report capture writes next to the recipe.
 const captureReportFileName = "frostroot-capture.md"
 
-const captureUsageText = `usage: frostroot capture [--root DIR] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE] [--refresh-index]
+const captureUsageText = `usage: frostroot capture [--root DIR] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE | --insecure] [--refresh-index]
 
 Describe an installed Ubuntu system as a recipe: read what apt installed,
 which third-party apt sources it uses and how the machine is set up, open

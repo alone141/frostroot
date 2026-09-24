@@ -5,11 +5,15 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"io"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -134,5 +138,38 @@ func TestParseCertificatesNamesTheCertificateThatIsBroken(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "certificate 2") {
 		t.Errorf("the error does not say which certificate is broken: %v", err)
+	}
+}
+
+func TestTransportInsecureAcceptsAnyCertificate(t *testing.T) {
+	// A server whose certificate no root signed, which is what a network that
+	// inspects TLS looks like to someone without its authority.
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte("ok"))
+	}))
+	t.Cleanup(server.Close)
+
+	verifying := &http.Client{Transport: Transport(nil, false)}
+	if _, err := verifying.Get(server.URL); err == nil {
+		t.Fatal("a verifying transport accepted a certificate no root signed")
+	}
+	insecureTransport := Transport(nil, true)
+	insecure := &http.Client{Transport: insecureTransport}
+	response, err := insecure.Get(server.URL)
+	if err != nil {
+		t.Fatalf("an insecure transport refused the certificate: %v", err)
+	}
+	defer func() { _ = response.Body.Close() }() // read-only: closing cannot lose data
+	body, err := io.ReadAll(response.Body)
+	if err != nil || string(body) != "ok" {
+		t.Errorf("body = %q, %v; want ok", body, err)
+	}
+	// What --insecure gives up is verification and nothing else: the proxy
+	// environment and the TLS floor stay as they are.
+	if insecureTransport.Proxy == nil {
+		t.Error("the insecure transport lost the proxy environment")
+	}
+	if insecureTransport.TLSClientConfig.MinVersion != tls.VersionTLS12 {
+		t.Error("the insecure transport lost the TLS 1.2 floor")
 	}
 }

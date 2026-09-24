@@ -31,7 +31,7 @@ var archiveUnreachableMessages = []string{
 	"Unable to connect", "No route to host", "404  Not Found",
 }
 
-const buildUsageText = `usage: frostroot build [--mirror URL | --offline] [--ca-bundle FILE] [--keep-work] [--plain]
+const buildUsageText = `usage: frostroot build [--mirror URL | --offline] [--ca-bundle FILE | --insecure] [--keep-work] [--plain]
 
 Build frostroot.lock and dist/<name>-ubuntu-<release>-amd64.tar.gz from frostroot.toml.
 Needs Linux, mmdebstrap, network, and user namespaces or root. Never prompts.
@@ -43,6 +43,14 @@ authorities to trust while fetching. It is not installed in the image and not
 recorded in the lock, so a build with it produces the same bytes as a build
 without it. To have the image trust them too, name the file in [certificates]
 in the recipe instead.
+
+--insecure skips certificate verification on every fetch instead, for a
+network whose authority you do not have: apt's on the build host and pip's in
+the image being built. The packages apt installs are still verified against
+their signatures. The Python packages are not: whoever is on the network path
+decides what is resolved, and the lock records that it was resolved
+unverified. Nothing of the flag reaches the image; apt inside it verifies as
+before.
 
 With --offline, rebuild the image from frostroot.lock and vendor/debs (see
 frostroot vendor) without the archive: the same packages at the same versions,
@@ -63,6 +71,7 @@ func (a *App) runBuild(args []string) int {
 	mirrorURL := flags.String("mirror", "", "archive base `URL` to use for all three pockets instead of http://archive.ubuntu.com/ubuntu")
 	offline := flags.Bool("offline", false, "rebuild from frostroot.lock and vendor/debs, without the archive")
 	caBundlePath := flags.String("ca-bundle", "", "PEM `FILE` of certificate authorities to trust while fetching, for a network that inspects TLS")
+	insecure := flags.Bool("insecure", false, insecureFlagUsage)
 	keepWork := flags.Bool("keep-work", false, "keep the work directory after a successful build")
 	plain := flags.Bool("plain", false, "print progress as lines instead of showing the full-screen build screen")
 	if exitCode, stop := a.parseFlags(flags, args); stop {
@@ -71,6 +80,12 @@ func (a *App) runBuild(args []string) int {
 	if *mirrorURL != "" && *offline {
 		a.stderrf("frostroot: --mirror and --offline exclude each other: an offline build installs from %s\n", vendorDebsDisplayName)
 		return exitUserError
+	}
+	if *insecure && *offline {
+		// Not an error: a script that always passes the flag should still
+		// rebuild offline. There is simply no fetch to skip verifying.
+		a.stderrf("note: an offline build fetches nothing, so --insecure changes nothing\n")
+		*insecure = false
 	}
 	if *mirrorURL != "" {
 		if err := validateMirrorURL(*mirrorURL); err != nil {
@@ -103,6 +118,17 @@ func (a *App) runBuild(args []string) int {
 			"with known, unfixed security vulnerabilities: security fixes are only published to Ubuntu Pro.\n"+
 			"Prefer 22.04 or 24.04 unless you specifically need %s.\n", imageRecipe.Image.Release, imageRecipe.Image.Release)
 	}
+	hasPython := len(imageRecipe.PythonPackages()) > 0
+	switch {
+	case *insecure && hasPython:
+		a.warnInsecure(insecureBuildDetail, insecurePythonDetail)
+	case *insecure:
+		a.warnInsecure(insecureBuildDetail)
+	case *offline:
+		// The lock is about to be rebuilt from; what it says about how it
+		// was resolved is worth reading before the minutes the build takes.
+		a.warnIfLockUnverified()
+	}
 
 	// SIGHUP too: mmdebstrap runs in its own process group, so a closed
 	// terminal no longer reaches it directly and frostroot must pass the
@@ -121,8 +147,8 @@ func (a *App) runBuild(args []string) int {
 		Getenv:        a.Getenv,
 		Offline:       *offline,
 		ExtraTrustPEM: extraTrust,
+		Insecure:      *insecure,
 	}
-	hasPython := len(imageRecipe.PythonPackages()) > 0
 	phases := builder.Phases(hasPython)
 	if *offline {
 		phases = builder.OfflinePhases(hasPython)

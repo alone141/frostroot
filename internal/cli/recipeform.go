@@ -113,7 +113,7 @@ func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath 
 		return exitUserError
 	}
 	a.stdoutf("\nWrote %s.\n", recipeFileName)
-	if exitCode := a.fetchMissingKeys(commandName, imageRecipe.Sources, providedKeys); exitCode != exitSuccess {
+	if exitCode := a.fetchMissingKeys(commandName, imageRecipe.Sources, providedKeys, indexes.insecureTLS()); exitCode != exitSuccess {
 		return exitCode
 	}
 	a.stdoutf("Next: frostroot validate, then frostroot build.\n")
@@ -195,7 +195,9 @@ func hasOwnComments(current, rendered string) bool {
 // and checked. Keys already present are left alone. Every source is tried;
 // any failure ends in exitUserError with the recipe already written, so
 // that fixing the network or saving a key by hand is all that is left to do.
-func (a *App) fetchMissingKeys(commandName string, recipeSources []recipe.Source, providedKeys map[string][]byte) int {
+// insecure is --insecure: a key whose fingerprint was discovered over such a
+// connection is saved with a word on where to check it.
+func (a *App) fetchMissingKeys(commandName string, recipeSources []recipe.Source, providedKeys map[string][]byte, insecure bool) int {
 	failed := false
 	for _, source := range recipeSources {
 		keyPath := recipe.KeyPath(a.RecipeDir, source)
@@ -204,6 +206,7 @@ func (a *App) fetchMissingKeys(commandName string, recipeSources []recipe.Source
 		}
 		armored, provided := providedKeys[source.Name]
 		origin := "the machine"
+		discovered := false
 		if !provided {
 			fetched, err := sources.FetchKey(context.Background(), a.KeyClient, source)
 			if err != nil {
@@ -211,7 +214,7 @@ func (a *App) fetchMissingKeys(commandName string, recipeSources []recipe.Source
 				failed = true
 				continue
 			}
-			armored, origin = fetched.Armored, fetched.SourceURL
+			armored, origin, discovered = fetched.Armored, fetched.SourceURL, fetched.Discovered
 		}
 		key, err := pgp.ParsePublicKey(armored)
 		if err != nil {
@@ -230,6 +233,16 @@ func (a *App) fetchMissingKeys(commandName string, recipeSources []recipe.Source
 			continue
 		}
 		a.stdoutf("Saved the signing key of %s from %s into %s (%s)\n", source.Name, origin, source.Key, describeFingerprints(key.Fingerprints))
+		// A catalog key is checked against a fingerprint compiled into
+		// frostroot, whatever the connection. A PPA's fingerprint is
+		// Launchpad's answer over that same connection, so with --insecure
+		// the key and the check of it came from the same unverified place,
+		// and the file is trusted by every build from now on.
+		if insecure && discovered {
+			if owner, name, isPPA := sources.PPAOf(source.URL); isPPA {
+				a.stderrf("warning: the fingerprint of %s came from Launchpad over an unverified connection, and so did the key; compare it with %s before building.\n", source.Name, sources.PPAPageURL(owner, name))
+			}
+		}
 	}
 	if failed {
 		a.stderrf("frostroot %s: %s is written, but frostroot validate will refuse it until every key is in place; frostroot edit fetches them again\n", commandName, recipeFileName)

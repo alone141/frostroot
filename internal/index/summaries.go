@@ -2,7 +2,6 @@ package index
 
 import (
 	"context"
-	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -44,15 +43,17 @@ type Summaries struct {
 	byName map[string]string
 }
 
-// NewSummaries returns a fetcher asking the host that indexURL belongs to.
-// client may be nil, and rootCAs carries --ca-bundle's pool, since pypi.org
-// is HTTPS and a proxy that inspects TLS would otherwise break this where it
-// cannot break the Ubuntu archive.
-func NewSummaries(client *http.Client, rootCAs *x509.CertPool, indexURL string) *Summaries {
+// NewSummaries returns a fetcher asking the host that options.Mirror, the
+// simple index, belongs to. Options.Client may be nil, and RootCAs and
+// Insecure are honored as everywhere else, since pypi.org is HTTPS and a
+// proxy that inspects TLS would otherwise break this where it cannot break
+// the Ubuntu archive.
+func NewSummaries(options Options) *Summaries {
+	client := options.Client
 	if client == nil {
-		client = &http.Client{Timeout: summaryTimeout, Transport: pki.Transport(rootCAs)}
+		client = &http.Client{Timeout: summaryTimeout, Transport: pki.Transport(options.RootCAs, options.Insecure)}
 	}
-	return &Summaries{client: client, baseURL: SummaryBaseURL(indexURL), byName: map[string]string{}}
+	return &Summaries{client: client, baseURL: SummaryBaseURL(options.Mirror), byName: map[string]string{}}
 }
 
 // SummaryBaseURL is where summaries come from for a simple index. Someone

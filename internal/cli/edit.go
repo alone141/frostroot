@@ -6,7 +6,7 @@ import (
 	"frostroot/internal/form"
 )
 
-const editUsageText = `usage: frostroot edit [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE] [--refresh-index]
+const editUsageText = `usage: frostroot edit [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE | --insecure] [--refresh-index]
 
 Open frostroot.toml in the form with its current values and write it back.
 The file is regenerated from frostroot's template, so its explanatory

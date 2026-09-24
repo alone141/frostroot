@@ -44,7 +44,10 @@ type HTTPClient struct {
 	Client *http.Client // nil means one honoring the proxy environment with a timeout
 	// RootCAs is what the default client verifies HTTPS against; nil means
 	// the host's own roots. Ignored when Client is set.
-	RootCAs   *x509.CertPool
+	RootCAs *x509.CertPool
+	// Insecure makes the default client verify no certificate at all, from
+	// --insecure. Ignored when Client is set.
+	Insecure  bool
 	UserAgent string
 }
 
@@ -52,7 +55,7 @@ type HTTPClient struct {
 func (c HTTPClient) Get(ctx context.Context, url string) ([]byte, error) {
 	client := c.Client
 	if client == nil {
-		client = &http.Client{Timeout: httpTimeout, Transport: pki.Transport(c.RootCAs)}
+		client = &http.Client{Timeout: httpTimeout, Transport: pki.Transport(c.RootCAs, c.Insecure)}
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -86,6 +89,10 @@ type FetchedKey struct {
 	// keyring; Fingerprint alone says less than that.
 	Fingerprints []string
 	SourceURL    string // where it came from
+	// Discovered means the pinned fingerprint was Launchpad's answer over the
+	// network rather than a constant in frostroot: a PPA's key. What such a
+	// fetch trusts is only as good as the connection it was asked over.
+	Discovered bool
 }
 
 // FetchKey fetches and checks the signing key file of source: a catalog
@@ -94,22 +101,22 @@ type FetchedKey struct {
 // publishes. Every primary key the file holds has to be pinned, not only the
 // first. A source that is neither gets ErrNoKeySource.
 func FetchKey(ctx context.Context, client Client, source recipe.Source) (FetchedKey, error) {
-	keyURL, pinned, err := keyLocation(ctx, client, source)
+	location, err := locateKey(ctx, client, source)
 	if err != nil {
 		return FetchedKey{}, err
 	}
-	data, err := client.Get(ctx, keyURL)
+	data, err := client.Get(ctx, location.keyURL)
 	if err != nil {
 		return FetchedKey{}, fmt.Errorf("fetching the key of %s: %w", source.Name, err)
 	}
 	key, err := pgp.ParsePublicKey(data)
 	if err != nil {
-		return FetchedKey{}, fmt.Errorf("the key of %s from %s: %w", source.Name, keyURL, err)
+		return FetchedKey{}, fmt.Errorf("the key of %s from %s: %w", source.Name, location.keyURL, err)
 	}
-	if unpinned, found := firstUnpinned(key.Fingerprints, pinned); found {
-		return FetchedKey{}, fmt.Errorf("%w: the file %s serves for %s holds %s; pinned is %s", ErrFingerprintMismatch, keyURL, source.Name, pgp.FormatFingerprint(unpinned), pgp.FormatFingerprints(pinned))
+	if unpinned, found := firstUnpinned(key.Fingerprints, location.pinned); found {
+		return FetchedKey{}, fmt.Errorf("%w: the file %s serves for %s holds %s; pinned is %s", ErrFingerprintMismatch, location.keyURL, source.Name, pgp.FormatFingerprint(unpinned), pgp.FormatFingerprints(location.pinned))
 	}
-	return FetchedKey{Armored: pgp.Armor(key.Binary), Fingerprint: key.Fingerprint, Fingerprints: key.Fingerprints, SourceURL: keyURL}, nil
+	return FetchedKey{Armored: pgp.Armor(key.Binary), Fingerprint: key.Fingerprint, Fingerprints: key.Fingerprints, SourceURL: location.keyURL, Discovered: location.discovered}, nil
 }
 
 // firstUnpinned returns the first of the fetched primary keys that pinned
@@ -129,22 +136,30 @@ func firstUnpinned(fetched, pinned []string) (string, bool) {
 	return "", false
 }
 
-// keyLocation says where source's key is and which keys its file may hold.
-func keyLocation(ctx context.Context, client Client, source recipe.Source) (keyURL string, pinned []string, err error) {
+// keyLocation says where a source's key is, which keys its file may hold,
+// and whether that came from the network.
+type keyLocation struct {
+	keyURL     string
+	pinned     []string
+	discovered bool
+}
+
+// locateKey says where source's key is and which keys its file may hold.
+func locateKey(ctx context.Context, client Client, source recipe.Source) (keyLocation, error) {
 	if entry, isCatalog := Lookup(source.Name); isCatalog {
-		return entry.KeyURL, entry.Fingerprints, nil
+		return keyLocation{keyURL: entry.KeyURL, pinned: entry.Fingerprints}, nil
 	}
 	owner, name, isPPA := PPAOf(source.URL)
 	if !isPPA {
-		return "", nil, fmt.Errorf("%w for %s; save its public key as %s", ErrNoKeySource, source.Name, source.Key)
+		return keyLocation{}, fmt.Errorf("%w for %s; save its public key as %s", ErrNoKeySource, source.Name, source.Key)
 	}
 	fingerprint, err := launchpadFingerprint(ctx, client, owner, name)
 	if err != nil {
-		return "", nil, err
+		return keyLocation{}, err
 	}
 	// Launchpad publishes one signing key for a PPA, so that key is the whole
 	// pinned set and a keyserver answer holding any other is refused.
-	return keyserverURL(fingerprint), []string{fingerprint}, nil
+	return keyLocation{keyURL: keyserverURL(fingerprint), pinned: []string{fingerprint}, discovered: true}, nil
 }
 
 // launchpadFingerprint asks Launchpad's API which key signs a PPA.

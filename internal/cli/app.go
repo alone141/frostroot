@@ -52,12 +52,13 @@ func (a *App) trustPool(path string) (*x509.CertPool, bool) {
 }
 
 // ensureKeyClient sets the production signing-key HTTPS client once
-// --ca-bundle is known. Tests that inject KeyClient are left alone.
-func (a *App) ensureKeyClient(rootCAs *x509.CertPool) {
+// --ca-bundle and --insecure are known. Tests that inject KeyClient are left
+// alone.
+func (a *App) ensureKeyClient(rootCAs *x509.CertPool, insecure bool) {
 	if a.KeyClient != nil {
 		return
 	}
-	a.KeyClient = sources.HTTPClient{UserAgent: "frostroot/" + builder.Version, RootCAs: rootCAs}
+	a.KeyClient = sources.HTTPClient{UserAgent: "frostroot/" + builder.Version, RootCAs: rootCAs, Insecure: insecure}
 }
 
 // recipeFileName is the recipe every command works on, in App.RecipeDir.
