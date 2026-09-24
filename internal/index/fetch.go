@@ -50,7 +50,7 @@ type pocketPlan struct {
 func fetch(ctx context.Context, options Options, what target) ([]Entry, error) {
 	client := options.Client
 	if client == nil {
-		transport := pki.Transport(options.RootCAs)
+		transport := pki.Transport(options.RootCAs, options.Insecure)
 		transport.ResponseHeaderTimeout = responseHeaderTimeout
 		client = &http.Client{Transport: transport}
 	}

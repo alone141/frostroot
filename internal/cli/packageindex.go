@@ -89,7 +89,7 @@ func (a *App) packageIndexes(parsed *indexFlags) (*packageIndexes, bool) {
 		options:     options,
 		openPyPI:    index.OpenPyPI,
 		pypiOptions: pypiOptions,
-		summaries:   index.NewSummaries(a.IndexClient, options.RootCAs, pypiOptions.Mirror),
+		summaries:   index.NewSummaries(pypiOptions),
 		opened:      map[string]form.PackageIndex{},
 		archives:    map[string]*index.Index{},
 		sources:     map[string]*index.Index{},

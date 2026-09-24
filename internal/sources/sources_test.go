@@ -140,8 +140,8 @@ func TestFetchKeyForCatalogEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fetched.Fingerprint != docker.Fingerprints[0] || fetched.SourceURL != docker.KeyURL {
-		t.Errorf("fetched = %+v", fetched)
+	if fetched.Fingerprint != docker.Fingerprints[0] || fetched.SourceURL != docker.KeyURL || fetched.Discovered {
+		t.Errorf("fetched = %+v; the pin of a catalog entry is a constant, not discovered", fetched)
 	}
 	key, err := pgp.ParsePublicKey(fetched.Armored)
 	if err != nil || !key.Armored || key.Fingerprint != docker.Fingerprints[0] {
@@ -164,6 +164,11 @@ func TestFetchKeyForPPA(t *testing.T) {
 	}
 	if fetched.Fingerprint != docker.Fingerprints[0] || len(client.requests) != 2 {
 		t.Errorf("fetched = %+v, requests %q", fetched, client.requests)
+	}
+	// The pin was Launchpad's answer, which is worth knowing to whoever
+	// fetched it over a connection they chose not to verify.
+	if !fetched.Discovered {
+		t.Errorf("fetched = %+v; a PPA's fingerprint is discovered, not pinned in frostroot", fetched)
 	}
 }
 

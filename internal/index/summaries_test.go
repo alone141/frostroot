@@ -13,6 +13,7 @@ import (
 
 // summaryServer answers /pypi/<name>/json the way PyPI does.
 type summaryServer struct {
+	server   *httptest.Server
 	requests atomic.Int64
 	byName   map[string]string
 	status   map[string]int
@@ -47,7 +48,8 @@ func newSummaryServer(t *testing.T) (*Summaries, *summaryServer) {
 		_, _ = response.Write([]byte(`{"info":{"summary":` + quoteJSON(summary) + `}}`))
 	}))
 	t.Cleanup(server.Close)
-	return NewSummaries(server.Client(), nil, server.URL), served
+	served.server = server
+	return NewSummaries(Options{Client: server.Client(), Mirror: server.URL}), served
 }
 
 func quoteJSON(text string) string {

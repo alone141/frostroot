@@ -73,6 +73,10 @@ type Options struct {
 	// verifying against RootCAs.
 	Client  *http.Client
 	RootCAs *x509.CertPool // nil means the host's roots; for an https mirror
+	// Insecure makes the default client verify no certificate at all, from
+	// --insecure. An index only suggests names, and build checks every one
+	// against the signed archive, so a forged index costs a wrong suggestion.
+	Insecure bool
 	// Progress is told how much of the download is done. It is called from
 	// the fetching goroutine, often.
 	Progress func(doneBytes, totalBytes int64)
