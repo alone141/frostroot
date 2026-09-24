@@ -1166,6 +1166,29 @@ finished in 425 s and locked 17 `[[pypi]]` entries, among them
 `Flask-SQLAlchemy 3.1.1` and `requests`: the normalization the picker and the
 warning rely on is the same one pip applies, all the way to the lock.
 
+For v0.13.0, `--insecure` was verified in three pieces on the build host,
+none of them a byte-identity run, which this flag is not held to. First the
+apt mechanism, with mmdebstrap driven directly over
+`https://archive.ubuntu.com/ubuntu` and a `CaInfo` bundle holding one bogus
+authority and nothing else, so that verification could not succeed: with
+that alone apt refused the mirror (`The certificate is NOT trusted`, exit 25
+after 14 s, an empty tarball); with the two `Verify` settings the setup hook
+now writes beside it, the same bundle bootstrapped noble in 222 s, and the
+tarball held neither `99frostroot-build-ca` nor any mention of `Verify-Peer`
+or `CaInfo` under `etc/apt`. Then pip 24.3.1, the pinned resolver, run from
+its own wheel against the v0.8 spike's server, whose certificate a private
+authority signed: it refused with `CERTIFICATE_VERIFY_FAILED`, and with
+`--trusted-host localhost:8443` it downloaded `requests`. Then the whole
+thing: a 24.04 recipe asking for `git` and `requests` built with `build
+--insecure` in 673 s, printing the three warning lines first, and its lock's
+`[python]` table ended in `transport = 'unverified'`, with 262 packages and 6
+wheels locked. `vendor` without the flag repeated the lock's warning,
+downloaded all 268 files, and reported that every wheel had matched the lock
+over a verified connection. `build --offline` repeated the warning and
+rebuilt the image in 447 s, every package as locked; `build --offline
+--insecure` noted that nothing is fetched and did the same. The image's
+`etc/apt/apt.conf.d` held no trust setting of any kind.
+
 
 ## Documentation
 
