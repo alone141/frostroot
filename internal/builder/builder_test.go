@@ -61,7 +61,8 @@ type fakeBootstrapper struct {
 	skipAptLists       bool              // leave no lists directory even when asked
 	skipExtendedStates bool              // leave no extended_states even when asked
 	skipTarball        bool
-	emptyTarball       bool // mmdebstrap creates its output file before it starts
+	emptyTarball       bool   // mmdebstrap creates its output file before it starts
+	pipReport          string // written where the Python step's download hook says; "" writes none
 
 	runCount          int
 	lastSpec          BootstrapSpec
@@ -108,6 +109,11 @@ func (f *fakeBootstrapper) Run(_ context.Context, spec BootstrapSpec) error {
 			extendedStates = sampleExtendedStates
 		}
 		if err := os.WriteFile(statesPath, []byte(extendedStates), 0o644); err != nil {
+			return err
+		}
+	}
+	if reportPath := hookArgument(spec.CustomizeHooks, "download "+PythonReportPath+" "); reportPath != "" && f.pipReport != "" {
+		if err := os.WriteFile(reportPath, []byte(f.pipReport), 0o644); err != nil {
 			return err
 		}
 	}

@@ -67,7 +67,13 @@ type BootstrapSpec struct {
 	// apt fetches a recipe's extra sources on the build host, so this is
 	// where a PPA over HTTPS needs the organization's authority.
 	CaInfoPath string
-	Progress   Progress // receives phases and output lines; nil discards them
+	// Insecure makes apt verify no certificate at all while it fetches, from
+	// --insecure, for a network whose authority nobody has. The archive's
+	// and every source's signatures are still checked, so what arrives is
+	// authenticated; only who served it is not. Like CaInfoPath, it lasts as
+	// long as the bootstrap and never reaches the image.
+	Insecure bool
+	Progress Progress // receives phases and output lines; nil discards them
 }
 
 // Bootstrapper builds an image tarball. Implementations write the tarball to
@@ -98,6 +104,14 @@ type Options struct {
 	// fetches, from --ca-bundle. They never reach the image or the lock, so
 	// a build with them and a build without them produce the same bytes.
 	ExtraTrustPEM []byte
+	// Insecure skips TLS certificate verification on every fetch the build
+	// makes: apt's on the host and pip's in the chroot, from --insecure. The
+	// packages apt installs are still verified against their signatures. The
+	// Python packages are not: the resolve trusts whatever the network
+	// answers, and the lock says so in its [python] table. The image is not
+	// touched by it, so a build with the flag and a build without it produce
+	// the same bytes when the network was honest.
+	Insecure bool
 }
 
 // Result describes a finished or failed build.
@@ -249,6 +263,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 			return Result{WorkDir: workDir}, err
 		}
 		bootstrapSpec.CaInfoPath = caInfoPath
+		bootstrapSpec.Insecure = options.Insecure
 	}
 
 	// From here on every failure keeps the work directory: it is the only
@@ -277,7 +292,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	stageOptions := StageOptions{
 		RecordForLock: offline == nil,
 		SourceLines:   imageSourceLines,
-		Python:        PythonOptions{Offline: offline != nil, SourceDateEpoch: instant.epoch},
+		Python:        PythonOptions{Offline: offline != nil, SourceDateEpoch: instant.epoch, Insecure: options.Insecure},
 	}
 	if offline != nil {
 		stageOptions.SourceLines = offline.lock.Sources
@@ -398,6 +413,12 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 				Interpreter: pythonResult.Interpreter,
 				PipVersion:  pythonResult.PipVersion,
 				IndexURL:    imageRecipe.PythonIndexURL(),
+			}
+			// Nothing but TLS stands between a resolve and whoever is on
+			// the path, and the hashes below are then what every rebuild
+			// verifies against. A lock is fact, and this is one.
+			if options.Insecure {
+				lock.Python.Transport = recipe.TransportUnverified
 			}
 			// A build resolving from an index named by the recipe installed
 			// pip from there too, and only the pinned step's own report says

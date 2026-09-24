@@ -55,6 +55,23 @@ type LockPython struct {
 	// A rebuild whose recipe names another one is a lock mismatch: the same
 	// name can be a different project on a different index.
 	IndexURL string `toml:"index_url,omitempty"`
+	// Transport is TransportUnverified when the wheels were resolved with
+	// --insecure, over a connection whose certificate nobody checked, and ""
+	// otherwise. Nothing but TLS protects a resolve, so the hashes of such a
+	// lock are only as trustworthy as that network was; every command that
+	// reads the lock says so. It is the only unverified thing a lock can
+	// hold: apt's packages are signed and vendor checks every file.
+	Transport string `toml:"transport,omitempty"`
+}
+
+// TransportUnverified is LockPython.Transport for a resolve made with
+// --insecure.
+const TransportUnverified = "unverified"
+
+// PythonResolvedUnverified reports whether the lock's Python packages were
+// resolved over an unverified connection.
+func (l Lockfile) PythonResolvedUnverified() bool {
+	return l.Python != nil && l.Python.Transport == TransportUnverified
 }
 
 // LockPyPI is one package in the image's virtual environment and the wheel it

@@ -179,11 +179,11 @@ printf 'pip==%s --hash=sha256:%s\n' {{shellQuote .PipVersion}} {{shellQuote .Pip
 printf 'pip==%s --hash=sha256:%s\n' {{shellQuote .PipVersion}} {{shellQuote .PipSHA256}} > {{shellQuote .PinPath}}
 "$venv"/bin/python -m pip install --no-input --disable-pip-version-check --no-cache-dir --upgrade \
 	--index-url {{shellQuote .IndexURL}} --report {{shellQuote .PinReportPath}} \
-	{{if .CertPath}}--cert "$pipCert" {{end}}--require-hashes --requirement {{shellQuote .PinPath}}
+	{{if .CertPath}}--cert "$pipCert" {{end}}{{range .TrustedHosts}}--trusted-host {{shellQuote .}} {{end}}--require-hashes --requirement {{shellQuote .PinPath}}
 {{- else -}}
 printf 'pip @ %s --hash=sha256:%s\n' {{shellQuote .PipURL}} {{shellQuote .PipSHA256}} > {{shellQuote .PinPath}}
 "$venv"/bin/python -m pip install --no-input --disable-pip-version-check --no-cache-dir --upgrade \
-	{{if .CertPath}}--cert "$pipCert" {{end}}--require-hashes --requirement {{shellQuote .PinPath}}
+	{{if .CertPath}}--cert "$pipCert" {{end}}{{range .TrustedHosts}}--trusted-host {{shellQuote .}} {{end}}--require-hashes --requirement {{shellQuote .PinPath}}
 {{- end}}
 rm -f {{shellQuote .PinPath}}
 
@@ -207,13 +207,19 @@ rm -rf {{shellQuote .WheelsPath}} {{shellQuote .RequirementsPath}}
 # What the environment ended up with, for frostroot to compare with the lock.
 "$venv"/bin/python -m pip list --format=json --disable-pip-version-check > {{shellQuote .ListPath}}
 {{- else -}}
+{{- if .TrustedHosts}}
+# --insecure: pip has no way to verify nothing, only hosts it may trust
+# unverified, so the index's host and the one PyPI serves files from are
+# named. Whatever answers as them decides what is resolved, and the lock
+# records the resolve as unverified.
+{{- end}}
 # --upgrade so that a package the environment already seeds, such as wheel on
 # 22.04, is resolved from PyPI like any other: without it pip calls the
 # requirement satisfied, leaves it out of the report, and the lock would not
 # record what the recipe asked for.
 "$venv"/bin/python -m pip install --no-input --disable-pip-version-check --no-cache-dir \
 	--only-binary=:all: --upgrade --report {{shellQuote .ReportPath}} \
-	{{if .IndexURL}}--index-url {{shellQuote .IndexURL}} {{end}}{{if .CertPath}}--cert "$pipCert" {{end}}{{range .Packages}}{{shellQuote .}} {{end}}
+	{{if .IndexURL}}--index-url {{shellQuote .IndexURL}} {{end}}{{if .CertPath}}--cert "$pipCert" {{end}}{{range .TrustedHosts}}--trusted-host {{shellQuote .}} {{end}}{{range .Packages}}{{shellQuote .}} {{end}}
 {{- if .ExtraTrustPath}}
 # Nothing this build was merely allowed to trust stays in the image.
 rm -f {{shellQuote .CertPath}} {{shellQuote .ExtraTrustPath}}
@@ -256,6 +262,9 @@ type pythonScriptValues struct {
 	CertPath       string
 	ExtraTrustPath string
 	ImageTrustPath string
+	// TrustedHosts are the hosts pip may fetch from without verifying their
+	// certificates, from --insecure; none means every host is verified.
+	TrustedHosts []string
 }
 
 // PythonOptions say how the Python step of a build runs.
@@ -280,6 +289,34 @@ type PythonOptions struct {
 	// ExtraTrust is certificates this build may trust that the image does
 	// not install, from --ca-bundle. They are uploaded, used, and deleted.
 	ExtraTrust bool
+	// Insecure lets pip fetch from the index without verifying its
+	// certificate, from --insecure. An offline step reaches no network and
+	// ignores it.
+	Insecure bool
+}
+
+// pypiFilesHost is where PyPI serves the files its index links to. A resolve
+// against PyPI talks to two hosts, and --trusted-host is per host.
+const pypiFilesHost = "files.pythonhosted.org"
+
+// pipTrustedHosts returns what --insecure tells pip to trust unverified: the
+// host of the index the recipe names, or PyPI's, and the host PyPI serves
+// files from, which an index that proxies PyPI may still redirect to. pip
+// has no flag that verifies nothing, so an index whose files come from a
+// third host still fails there, and the README says so.
+func pipTrustedHosts(indexURL string) []string {
+	indexHost := "pypi.org"
+	if indexURL != "" {
+		// The recipe validated the URL; a host with a port is what pip's flag
+		// takes, so it is passed as it is.
+		if parsed, err := url.Parse(indexURL); err == nil && parsed.Host != "" {
+			indexHost = parsed.Host
+		}
+	}
+	if indexHost == pypiFilesHost {
+		return []string{pypiFilesHost}
+	}
+	return []string{indexHost, pypiFilesHost}
 }
 
 // RenderPythonScript renders the script that creates the image's virtual
@@ -305,6 +342,10 @@ func RenderPythonScript(imageRecipe recipe.Recipe, options PythonOptions) (strin
 	case options.TrustImageCertificates:
 		certPath = ImageTrustPath
 	}
+	var trustedHosts []string
+	if options.Insecure && !options.Offline {
+		trustedHosts = pipTrustedHosts(imageRecipe.PythonIndexURL())
+	}
 	var script strings.Builder
 	err := pythonScriptTemplate.Execute(&script, pythonScriptValues{
 		VenvPath:         PythonVenvPath,
@@ -325,6 +366,7 @@ func RenderPythonScript(imageRecipe recipe.Recipe, options PythonOptions) (strin
 		CertPath:         certPath,
 		ExtraTrustPath:   extraTrustPath,
 		ImageTrustPath:   ImageTrustPath,
+		TrustedHosts:     trustedHosts,
 	})
 	if err != nil {
 		return "", fmt.Errorf("rendering python script: %w", err)

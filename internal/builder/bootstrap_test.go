@@ -229,8 +229,8 @@ func TestAptCaInfoHooksWriteAndRemoveOneFile(t *testing.T) {
 		}
 		// A setup hook runs before anything is installed; the directory is
 		// mmdebstrap's to have made, and the hook does not depend on that.
-		runHook(aptCaInfoSetupHook(caInfoPath))
-		confPath := filepath.Join(root, filepath.FromSlash(aptBuildCaInfoConfPath))
+		runHook(aptTrustSetupHook(aptTrustSettings(caInfoPath, false)))
+		confPath := filepath.Join(root, filepath.FromSlash(aptBuildTrustConfPath))
 		written, err := os.ReadFile(confPath)
 		if err != nil {
 			t.Fatal(err)
@@ -238,12 +238,12 @@ func TestAptCaInfoHooksWriteAndRemoveOneFile(t *testing.T) {
 		if want := `Acquire::https::CaInfo "` + caInfoPath + `";` + "\n"; string(written) != want {
 			t.Errorf("the setup hook wrote %q, want %q", written, want)
 		}
-		runHook(aptCaInfoCleanupHook)
+		runHook(aptTrustCleanupHook)
 		if _, err := os.Stat(confPath); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("after the cleanup hook, Stat(%s) = %v, want it gone", confPath, err)
 		}
 		// Twice is not an error: a hook that fails fails the build.
-		runHook(aptCaInfoCleanupHook)
+		runHook(aptTrustCleanupHook)
 		if _, err := os.Stat(filepath.Join(root, "pwned")); err == nil {
 			t.Error("part of the path was executed as shell")
 		}

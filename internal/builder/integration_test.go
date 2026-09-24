@@ -227,8 +227,8 @@ func TestIntegrationNobleTiny(t *testing.T) {
 		// removes. As an --aptopt the setting stayed: mmdebstrap writes those
 		// into 99mmdebstrap and ships it, so the image named a bundle under
 		// this build's work directory, which no machine importing it has.
-		if entry := image.entries[strings.TrimPrefix(aptBuildCaInfoConfPath, "/")]; entry != nil {
-			t.Errorf("%s must not be in the image: %+v", aptBuildCaInfoConfPath, entry)
+		if entry := image.entries[strings.TrimPrefix(aptBuildTrustConfPath, "/")]; entry != nil {
+			t.Errorf("%s must not be in the image: %+v", aptBuildTrustConfPath, entry)
 		}
 		for name, text := range image.smallFileText {
 			if strings.HasPrefix(name, "etc/apt/") && strings.Contains(text, "CaInfo") {
