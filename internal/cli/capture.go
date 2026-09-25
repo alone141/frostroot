@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -52,10 +53,16 @@ func (a *App) runCapture(args []string) int {
 	// The authorities the machine added are written before the form opens,
 	// because the Trust page checks that every file it names is there and
 	// holds a certificate. A form the person abandons leaves nothing behind
-	// that was not already there.
+	// that was not already there: the files this run created go again
+	// unless the recipe that names them was written, and a file that was
+	// already there is never touched.
 	writtenCertificates, err := a.writeCapturedCertificates(snapshot.Certificates)
 	if err != nil {
 		a.stderrf("frostroot capture: %v\n", err)
+		// The ones written before the failure, not the whole set: the file
+		// that failed was never created, and whatever was there before the
+		// run is not in the list.
+		removeCapturedCertificates(writtenCertificates)
 		return exitUserError
 	}
 
@@ -64,10 +71,17 @@ func (a *App) runCapture(args []string) int {
 	intro := []form.Field{form.NoteField(form.PageCaptured, "What capture found", captureNoteText(snapshot))}
 	indexes, ok := a.packageIndexes(indexOptions)
 	if !ok {
+		removeCapturedCertificates(writtenCertificates)
 		return exitUserError
 	}
 	if exitCode := a.runRecipeForm("capture", form.FromRecipe(snapshot.Recipe()), recipePath, *plain, snapshot.Keys, intro, indexes); exitCode != exitSuccess {
-		removeCapturedCertificates(writtenCertificates)
+		// The form can fail after the recipe is on disk: a key it then
+		// fetches may not come. That recipe names these files, and a
+		// certificate read off a machine cannot be fetched again the way a
+		// key can, so they stay whenever the recipe does.
+		if _, err := os.Stat(recipePath); err != nil {
+			removeCapturedCertificates(writtenCertificates)
+		}
 		return exitCode
 	}
 
@@ -132,20 +146,35 @@ func writeFileAtomically(path, content string) (err error) {
 
 // writeCapturedCertificates saves the authorities capture read from the
 // machine beside the recipe, and returns the files it created. A file that
-// was already there is left alone and not reported as created, so abandoning
-// the form cannot remove something the person put there.
+// was already there is left alone, whatever it holds, and not reported as
+// created: it is the person's, and neither the form's outcome nor the
+// machine's bytes may decide its fate. The Trust page then checks it like
+// any other file the recipe names, and says so if it is not a certificate.
+// Whatever happens after this, the files the run created are the whole of
+// what removeCapturedCertificates may undo.
 func (a *App) writeCapturedCertificates(certificates map[string][]byte) (written []string, err error) {
 	for _, certificatePath := range slices.Sorted(maps.Keys(certificates)) {
 		fullPath := recipe.CertificatePath(a.RecipeDir, certificatePath)
 		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
 			return written, fmt.Errorf("writing %s: %w", certificatePath, err)
 		}
-		_, statErr := os.Stat(fullPath)
-		if err := writeFileAtomically(fullPath, string(certificates[certificatePath])); err != nil {
+		// O_EXCL, so that the check and the write are one step: a file
+		// that appears between them is left alone too.
+		file, err := os.OpenFile(fullPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
 			return written, fmt.Errorf("writing %s: %w", certificatePath, err)
 		}
-		if os.IsNotExist(statErr) {
-			written = append(written, fullPath)
+		// Created, so it is the run's to remove, even if writing it fails.
+		written = append(written, fullPath)
+		_, err = file.Write(certificates[certificatePath])
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return written, fmt.Errorf("writing %s: %w", certificatePath, err)
 		}
 	}
 	return written, nil

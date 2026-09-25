@@ -80,6 +80,8 @@ Hand-typed alternatives break in ways that are easy to miss:
   - pip's trust flags: `pip-trust`
   - the form: `tui`
   - capture: `capture-roundtrip`
+  - what the imported distribution does at first login: `wsl-boot`, which
+    also stands in for the README's manual release check
 - A new recipe field needs a form field, a mapping in `FromRecipe` and
   `ToRecipe`, and a line in the recipe template in `internal/cli/init.go`.
   Otherwise `edit` silently drops it. `TestRecipeRoundTrip` and
@@ -150,9 +152,10 @@ Hand-typed alternatives break in ways that are easy to miss:
   Everything read out of a lock is hostile input.
 - `capture` only reads. It copies public signing keys and CA certificates,
   nothing else, and needs no root.
-- A network read needs a size bound and a timeout, and honors the
-  context. The index download is the one still missing its bound: issue
-  #57.
+- Every network read has a size bound and a timeout, and honors the
+  context. An apt index is bounded by the size its Release entry declares,
+  read before decompression; a body nothing declares a size for gets
+  `index.Options.MaxBodyBytes`.
 - The package index only suggests names. `internal/builder` never imports
   `internal/index`, and `--plain` never fetches.
 

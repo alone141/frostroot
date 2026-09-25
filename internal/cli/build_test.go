@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"frostroot/internal/builder"
 	"frostroot/internal/deb"
@@ -30,6 +31,7 @@ type fakeBootstrapper struct {
 	preflightErr error
 	dpkgStatus   string                // defaults to fakeDpkgStatus
 	pipReport    string                // written where the Python step's download hook says; "" writes none
+	logLines     int                   // log events to report besides the measured phase, as mmdebstrap's output would
 	lastSpec     builder.BootstrapSpec // zero until Run is called
 }
 
@@ -45,6 +47,9 @@ func (f *fakeBootstrapper) Run(_ context.Context, spec builder.BootstrapSpec) er
 	// Report one measured phase the way the real bootstrapper would.
 	spec.Progress.Report(builder.ProgressEvent{Phase: builder.PhaseDownload, Kind: builder.EventPhaseStarted})
 	spec.Progress.Report(builder.ProgressEvent{Phase: builder.PhaseDownload, Kind: builder.EventProgress, Done: 14_050_000, Total: 28_100_000, Unit: builder.UnitBytes})
+	for line := range f.logLines {
+		spec.Progress.Report(builder.ProgressEvent{Phase: builder.PhaseDownload, Kind: builder.EventLogLine, Line: fmt.Sprintf("Get:%d http://archive.ubuntu.com/ubuntu jammy/main amd64 package%d", line+1, line)})
+	}
 	spec.Progress.Report(builder.ProgressEvent{Phase: builder.PhaseDownload, Kind: builder.EventPhaseFinished})
 	if err := os.WriteFile(spec.TarballPath, []byte("tar"), 0o644); err != nil {
 		return err
@@ -713,5 +718,60 @@ func TestFormatMegabytes(t *testing.T) {
 		if got := formatMegabytes(testCase.sizeInBytes); got != testCase.want {
 			t.Errorf("formatMegabytes(%d) = %q, want %q", testCase.sizeInBytes, got, testCase.want)
 		}
+	}
+}
+
+// failingReader is a terminal whose input cannot be read: the progress
+// screen then fails as soon as it starts, and the command has to go on
+// without it.
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) {
+	return 0, errors.New("the terminal's input cannot be read")
+}
+
+// TestBuildGoesOnWhenTheScreenFails: a failed screen used to hang frostroot
+// for good. The build kept sending progress events into a buffer of 256
+// that nothing read any more, blocked in its progress callback once it was
+// full, never reached its result, and never saw a signal. The fallback now
+// follows the build as --plain would, until it finishes.
+func TestBuildGoesOnWhenTheScreenFails(t *testing.T) {
+	recipeDir := newRecipeDir(t, "valid.toml")
+	var stdout, stderr bytes.Buffer
+	// Many more events than the buffer holds, so a fallback that only waited
+	// for the result would wait for ever.
+	bootstrapper := &fakeBootstrapper{logLines: 1000}
+	app := newBuildApp(t, recipeDir, bootstrapper, &stdout, &stderr)
+	app.Stdin = failingReader{}
+	app.IsTerminal = terminalChecker(true)
+	app.Getenv = func(name string) string {
+		switch name {
+		case "XDG_CACHE_HOME":
+			return t.TempDir()
+		case "TERM":
+			return "xterm-256color"
+		}
+		return ""
+	}
+
+	exitCode := make(chan int, 1)
+	go func() { exitCode <- app.Run([]string{"build"}) }()
+	select {
+	case code := <-exitCode:
+		if code != exitSuccess {
+			t.Fatalf("exit code = %d, stderr %s", code, stderr.String())
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("build did not return within 30 s after its screen failed: the fallback hung")
+	}
+	if !strings.Contains(stderr.String(), "waiting for the build without it") {
+		t.Fatalf("the screen did not fail, so the fallback was never exercised:\n%s", stderr.String())
+	}
+	// The build's phases were followed the way --plain follows them.
+	if !strings.Contains(stderr.String(), "frostroot: Write frostroot.lock") {
+		t.Errorf("stderr lacks the plain progress the fallback prints:\n%s", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Wrote frostroot.lock (1 package)") {
+		t.Errorf("stdout lacks the summary:\n%s", stdout.String())
 	}
 }

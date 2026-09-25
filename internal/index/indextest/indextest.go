@@ -26,6 +26,12 @@ type Package struct {
 type Archive struct {
 	URL      string
 	requests atomic.Int64
+	// Overrun, when set before the first request, is appended to the
+	// Packages file as a second gzip member, so that the body runs past the
+	// size the InRelease declares: what a server that lies about its size,
+	// or a mirror mid-publication, sends. Its text would parse as more
+	// stanzas if anything read that far.
+	Overrun string
 }
 
 // Requests returns how many requests the archive has answered.
@@ -64,6 +70,13 @@ func Serve(t *testing.T, suite string, packages []Package) *Archive {
 		if !isServed {
 			http.NotFound(writer, request)
 			return
+		}
+		if archive.Overrun != "" && request.URL.Path == "/dists/"+suite+"/"+indexPath {
+			var overrun bytes.Buffer
+			extra := gzip.NewWriter(&overrun)
+			_, _ = extra.Write([]byte(archive.Overrun))
+			_ = extra.Close()
+			content = append(append([]byte(nil), content...), overrun.Bytes()...)
 		}
 		_, _ = writer.Write(content)
 	}))
