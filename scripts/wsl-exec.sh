@@ -12,6 +12,16 @@
 # shell, and this file does the rest with its arguments intact.
 set -euo pipefail
 
+# Ubuntu's Go is a snap, and a snap refuses to start when XDG_RUNTIME_DIR
+# cannot be used: "cannot create XDG_RUNTIME_DIR folder /run/user/1000:
+# permission denied", seen once when a WSL login session was starting
+# while logind was still removing the previous one's directory. A
+# directory of this user's own under /var/tmp serves as well.
+if [ ! -w "${XDG_RUNTIME_DIR:-/nonexistent}" ]; then
+	XDG_RUNTIME_DIR=/var/tmp/run-$(id -u)
+	mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+	export XDG_RUNTIME_DIR
+fi
 if command -v go > /dev/null 2>&1; then
 	PATH="$PATH:$(go env GOPATH)/bin"
 	export PATH
