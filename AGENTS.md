@@ -107,9 +107,14 @@ Hand-typed alternatives break in ways that are easy to miss:
 - Nothing the build only used stays in the image, whether pip's reports,
   the wheels, `--ca-bundle` copies or the host's `resolv.conf`. If you stage
   a new file, a hook must delete it, and `no-build-leaks` must still pass.
-- The host's environment must not change the result. The Python step
-  unsets every `PIP_*` variable and the certificate path variables. Don't
-  pass anything else through.
+- The host's environment must not change the result. mmdebstrap gets the
+  host's environment without any `PYTHON*` or `PIP_*` variable
+  (`hostEnvironment` in `internal/builder/bootstrap.go`), because it hands
+  its environment to dpkg's maintainer scripts and py3compile is Python: a
+  `PYTHONPYCACHEPREFIX` once put 930 caches under a directory named after
+  the host into the image. The Python step drops both again, unsets the
+  certificate path variables and sets `HOME`. Don't pass anything else
+  through.
 - Every value that reaches a shell is validated with a strict pattern and
   quoted with `shellQuote`. A hook never swallows a failure: no `|| true`.
   `TestHooksAndScriptNeverSwallowFailures` checks this.

@@ -2,7 +2,7 @@
 
 **Freeze an Ubuntu root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
 
-> **Status: v0.13.1.** `init`, `edit`, `capture`, `validate`, `build`,
+> **Status: v0.13.2.** `init`, `edit`, `capture`, `validate`, `build`,
 > `vendor` and `build --offline` work, a recipe can add third-party apt
 > sources (PPAs, Docker, Node.js, VS Code...), Python packages from PyPI and
 > certificate authorities for a network that inspects TLS, and two offline
