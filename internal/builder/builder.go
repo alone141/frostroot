@@ -270,21 +270,18 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	// debugging evidence. Nothing in dist/ or the lock is touched until the
 	// bootstrap has fully succeeded.
 	result := Result{WorkDir: workDir, Offline: offline != nil, SourceDateEpoch: instant.epoch, Reproducible: instant.fromLock}
-	var temporaryLockPath, placedTarballPath string
+	var temporaryLockPath, stagedTarballPath string
 	failBuild := func(err error) (Result, error) {
 		// Best effort throughout: the build has already failed, and that
 		// error is the one returned.
 		if temporaryLockPath != "" {
 			_ = os.Remove(temporaryLockPath)
 		}
-		if placedTarballPath != "" {
-			// The tarball is placed before the lock, so a lock that cannot be
-			// renamed into place would leave dist/ holding a new image beside
-			// the lock of an older one. Nothing says the two disagree, and an
-			// offline rebuild or a vendor run would then work from the wrong
-			// lock. Build promises a failed build writes no tarball, so the
-			// one just placed goes again.
-			_ = os.Remove(placedTarballPath)
+		if stagedTarballPath != "" {
+			// The image is beside its destination under a temporary name,
+			// waiting for the lock to land. It goes back to the work
+			// directory, which a failed build keeps, and dist/ is as it was.
+			export.Unstage(stagedTarballPath, bootstrapSpec.TarballPath)
 		}
 		return result, err
 	}
@@ -451,17 +448,43 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	reportCopied := func(copiedBytes, totalBytes int64) {
 		progress.Report(ProgressEvent{Phase: PhasePlaceTarball, Kind: EventProgress, Done: copiedBytes, Total: totalBytes, Unit: UnitBytes})
 	}
-	if err := export.Place(bootstrapSpec.TarballPath, tarballPath, reportCopied); err != nil {
+	// Three steps, so that dist/ holds one image and its lock whatever
+	// fails: the tarball is staged beside its destination, the slow step
+	// and the one that runs out of disk; then the lock is renamed into
+	// place; then the tarball. The lock's rename is the one that fails in
+	// practice, on a directory in its way or a file another program holds
+	// open on a Windows drive, and it fails while the previous tarball is
+	// still whole, where it used to fail after the tarball had replaced it.
+	// For the instant between the two renames the lock describes an image
+	// that is beside it under a temporary name, and should the tarball's
+	// rename fail then, the previous lock is put back.
+	stagedTarballPath, err = export.Stage(bootstrapSpec.TarballPath, tarballPath, reportCopied)
+	if err != nil {
 		return failBuild(fmt.Errorf("placing tarball: %w", err))
 	}
-	placedTarballPath = tarballPath
+	var previousLock []byte
+	lockPlaced, hadPreviousLock := false, false
 	if temporaryLockPath != "" {
-		// The lock goes into place only after the tarball has landed, so a
-		// lock never describes an image that does not exist.
+		previousLock, err = os.ReadFile(lockPath)
+		hadPreviousLock = err == nil
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return failBuild(fmt.Errorf("placing lock: reading the previous one: %w", err))
+		}
 		if err := os.Rename(temporaryLockPath, lockPath); err != nil {
 			return failBuild(fmt.Errorf("placing lock: %w", err))
 		}
+		temporaryLockPath, lockPlaced = "", true
 	}
+	if err := os.Rename(stagedTarballPath, tarballPath); err != nil {
+		if lockPlaced {
+			restoreLock(lockPath, previousLock, hadPreviousLock)
+		}
+		return failBuild(fmt.Errorf("placing tarball: %w", err))
+	}
+	stagedTarballPath = ""
+	// A copy across filesystems left the source in the work directory, a
+	// rename left nothing; tidying either way, not part of placing.
+	_ = os.Remove(bootstrapSpec.TarballPath)
 	progress.Report(ProgressEvent{Phase: PhasePlaceTarball, Kind: EventPhaseFinished})
 
 	result.LockPath = lockPath
@@ -590,6 +613,32 @@ func writeTemporaryLock(directory string, lock recipe.Lockfile) (string, error) 
 		return "", fmt.Errorf("writing the lock: %w", err)
 	}
 	return path, nil
+}
+
+// restoreLock undoes the lock's rename after the tarball it describes did
+// not land: the previous lock's bytes go back through a temporary file, or
+// the new lock is removed when there was none. Best effort: the build is
+// failing, and that error is the one returned.
+func restoreLock(lockPath string, previous []byte, hadPrevious bool) {
+	if !hadPrevious {
+		_ = os.Remove(lockPath)
+		return
+	}
+	temporary, err := export.CreateTemp(filepath.Dir(lockPath), ".frostroot.lock.*.tmp")
+	if err != nil {
+		return
+	}
+	path := temporary.Name()
+	_, err = temporary.Write(previous)
+	if closeErr := temporary.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(path, lockPath)
+	}
+	if err != nil {
+		_ = os.Remove(path)
+	}
 }
 
 // makeDirectoriesWithMode is os.MkdirAll, except that every directory it

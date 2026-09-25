@@ -117,8 +117,11 @@ Hand-typed alternatives break in ways that are easy to miss:
 **The lock**
 
 - A failed or interrupted build writes no lock, no tarball and no temporary
-  file, and keeps its work directory. The tarball goes into place first,
-  then the lock is renamed into place.
+  file, keeps its work directory, and leaves a previous image and its lock
+  as they were. The tarball is staged in `dist/` under a temporary name
+  (`export.Stage`), then the lock is renamed into place, then the tarball;
+  a failure between them puts things back (`export.Unstage`,
+  `restoreLock`).
 - The lock format stays `version = 1`. A new field is optional and
   `omitempty`. An unknown field is an error, and every older lock must still
   load and rebuild.

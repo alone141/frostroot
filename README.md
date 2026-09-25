@@ -894,9 +894,12 @@ status, which frostroot parses into the lock. A recipe with `[python]` gets
 one more hook in between, which creates the environment and installs into
 it, and whose report becomes the lock's `[[pypi]]` entries; the build host's
 `/etc/resolv.conf` is removed after it, since that hook is the one that
-needs to resolve a name. The tarball is moved into `dist/` first and the
-lock renamed into place second, so a lock never describes an image that does
-not exist. A failed build writes neither.
+needs to resolve a name. The tarball is staged in `dist/` under a temporary
+name, then the lock is renamed into place, then the tarball: the lock's
+rename is the one that fails in practice, and it fails while the previous
+tarball is still whole, so `dist/` holds one image and its lock whatever
+happens. A failed build writes neither, and leaves a previous image and its
+lock as they were.
 
 Offline, the three `deb http://…` lines become one
 `deb [trusted=yes] copy://<work>/pool ./` pointing at a flat repository
