@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"frostroot/internal/builder"
 	"frostroot/internal/pool"
@@ -439,5 +441,56 @@ func TestVendorReportsAMissingLockCertificate(t *testing.T) {
 	}
 	if fixture.requests.Load() != 0 {
 		t.Error("a refused vendor must not download")
+	}
+}
+
+// addPackages gives the fixture's lock count more packages, each served by
+// the same server, so that a run produces more progress events than the
+// screen's buffer holds.
+func (f *vendorFixture) addPackages(t *testing.T, count int) {
+	t.Helper()
+	for index := range count {
+		name := fmt.Sprintf("pkg%03d", index)
+		content := []byte("deb " + name + strings.Repeat(".", 50))
+		digest := sha256.Sum256(content)
+		urlPath := "pool/main/p/" + name + "/" + name + "_1_amd64.deb"
+		f.files[urlPath] = content
+		f.lock.Packages = append(f.lock.Packages, recipe.LockPackage{Name: name, Version: "1", Arch: "amd64", SHA256: hex.EncodeToString(digest[:]), Size: int64(len(content)), Filename: urlPath})
+	}
+	f.saveLock(t)
+}
+
+// TestVendorGoesOnWhenTheScreenFails: the same fallback as build's, which
+// had no test at all; with a lock of a few hundred packages the downloads
+// report more events than the buffer holds.
+func TestVendorGoesOnWhenTheScreenFails(t *testing.T) {
+	fixture := newVendorFixture(t)
+	fixture.addPackages(t, 300)
+	var stdout, stderr bytes.Buffer
+	app := newVendorApp(fixture, &stdout, &stderr)
+	app.Stdin = failingReader{}
+	app.IsTerminal = terminalChecker(true)
+	app.Getenv = func(name string) string {
+		if name == "TERM" {
+			return "xterm-256color"
+		}
+		return ""
+	}
+
+	exitCode := make(chan int, 1)
+	go func() { exitCode <- app.Run([]string{"vendor"}) }()
+	select {
+	case code := <-exitCode:
+		if code != exitSuccess {
+			t.Fatalf("exit code = %d, stderr %s", code, stderr.String())
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("vendor did not return within 30 s after its screen failed: the fallback hung")
+	}
+	if !strings.Contains(stderr.String(), "waiting for the downloads without it") {
+		t.Fatalf("the screen did not fail, so the fallback was never exercised:\n%s", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Vendored 302 packages") {
+		t.Errorf("stdout lacks the summary:\n%s", stdout.String())
 	}
 }

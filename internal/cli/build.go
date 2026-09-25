@@ -200,19 +200,24 @@ func (a *App) runBuildFullScreen(ctx context.Context, imageRecipe recipe.Recipe,
 	options.Progress = builder.ProgressFunc(func(event builder.ProgressEvent) { events <- event })
 	done := make(chan error, 1)
 	var result builder.Result
+	var buildErr error
 	go func() {
-		var err error
-		result, err = a.Builder.Build(buildCtx, imageRecipe, options)
+		result, buildErr = a.Builder.Build(buildCtx, imageRecipe, options)
+		// Closing events is what publishes result and buildErr to whoever
+		// drains the channel; done is the screen's.
 		close(events)
-		done <- err
+		done <- buildErr
 	}()
 
 	outcome, err := tui.RunProgress(screen, events, done, cancelBuild, a.Stdin, a.Stdout)
 	if err != nil {
-		// The screen failed; the build did not. Wait for it and report as
-		// the plain interface would.
+		// The screen failed; the build did not. Follow it as the plain
+		// interface would, and report as it would. Not by reading done: a
+		// screen that failed leaves its own goroutine waiting on done,
+		// which takes the one result the build sends.
 		a.stderrf("frostroot: %v; waiting for the build without it\n", err)
-		outcome = tui.Outcome{Err: <-done}
+		a.followWithoutScreen(events)
+		outcome = tui.Outcome{Err: buildErr, Interrupted: ctx.Err() != nil}
 	}
 	if outcome.Abandoned {
 		a.stderrf("frostroot: build interrupted; mmdebstrap is finishing its cleanup on its own, and the work directory is kept\n")
@@ -224,6 +229,20 @@ func (a *App) runBuildFullScreen(ctx context.Context, imageRecipe recipe.Recipe,
 	}
 	a.reportBuildSuccess(imageRecipe, result)
 	return exitSuccess
+}
+
+// followWithoutScreen stands in for a progress screen that failed: it
+// prints the events the work goes on sending as plain lines, the way
+// --plain would, until the work closes the channel, which it does once its
+// result is written. Waiting for the result alone hung frostroot for good:
+// the work filled the channel's buffer, blocked in its progress callback,
+// never reached its result, and never saw a signal, so only SIGKILL ended
+// it, with mmdebstrap still running.
+func (a *App) followWithoutScreen(events <-chan builder.ProgressEvent) {
+	plain := newPlainProgress(a.Stderr)
+	for event := range events {
+		plain.Report(event)
+	}
 }
 
 // reportBuildFailure explains a failed build and returns its exit code.

@@ -154,15 +154,19 @@ func (a *App) runVendorFullScreen(ctx context.Context, run *vendorRun, screen tu
 	events := make(chan builder.ProgressEvent, progressEventBuffer)
 	run.progress = builder.ProgressFunc(func(event builder.ProgressEvent) { events <- event })
 	done := make(chan error, 1)
+	var fetchErr error
 	go func() {
-		err := run.do(fetchCtx)
+		fetchErr = run.do(fetchCtx)
+		// Closing events publishes fetchErr to whoever drains the channel;
+		// done is the screen's, and a screen that failed still takes it.
 		close(events)
-		done <- err
+		done <- fetchErr
 	}()
 	outcome, err := tui.RunProgress(screen, events, done, cancelFetch, a.Stdin, a.Stdout)
 	if err != nil {
 		a.stderrf("frostroot: %v; waiting for the downloads without it\n", err)
-		outcome = tui.Outcome{Err: <-done}
+		a.followWithoutScreen(events)
+		outcome = tui.Outcome{Err: fetchErr, Interrupted: ctx.Err() != nil}
 	}
 	return outcome
 }
