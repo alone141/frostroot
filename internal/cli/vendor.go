@@ -26,11 +26,13 @@ Download every package frostroot.lock names into vendor/debs/, and every Python
 wheel it names into vendor/wheels/, checked against the lock's checksums, so
 that "frostroot build --offline" can rebuild the exact image without the archive
 or PyPI. Files already there and correct are kept, so rerunning resumes an
-interrupted download. Packages the archive has since dropped are fetched from
-Launchpad, which keeps every file ever published. Both are HTTPS, so on a
-network that inspects TLS, --ca-bundle names a PEM file of certificate
-authorities to trust while fetching, and --insecure skips certificate
-verification instead. Every file is still checked against the lock either way.
+interrupted download, and --prune removes files the lock does not name, a
+download that was cut short included. Packages the archive has since dropped
+are fetched from Launchpad, which keeps every file ever published. Both are
+HTTPS, so on a network that inspects TLS, --ca-bundle names a PEM file of
+certificate authorities to trust while fetching, and --insecure skips
+certificate verification instead. Every file is still checked against the
+lock either way.
 
 A lock whose Python packages were resolved with "build --insecure" says so,
 and vendor repeats it: those hashes are only as trustworthy as that network
@@ -130,7 +132,10 @@ func (a *App) runVendor(args []string) int {
 	}
 	switch {
 	case outcome.Abandoned:
-		a.stderrf("frostroot: vendor interrupted; finished downloads are kept, the rest is removed\n")
+		// The fetch is still winding down as the process exits, so the
+		// download it was in the middle of may not have removed its
+		// temporary file yet; --prune counts that file among the extras.
+		a.stderrf("frostroot: vendor interrupted; finished downloads are kept, and frostroot vendor --prune removes one that was cut short\n")
 		return exitInterrupted
 	case errors.Is(outcome.Err, context.Canceled) || outcome.Interrupted:
 		a.stderrf("frostroot: vendor interrupted; finished downloads are kept, so rerunning resumes\n")
@@ -183,10 +188,10 @@ func (a *App) reportVendorSuccess(run *vendorRun) {
 		a.stdoutf("Removed %d file(s) the lock does not name: %s\n", len(run.pruned), strings.Join(run.pruned, ", "))
 	} else {
 		if extra := run.summaryByPool[pool.DebsDirName].Extra; len(extra) > 0 {
-			a.stdoutf("%d .deb file(s) in %s are not in the lock; remove them with: frostroot vendor --prune\n", len(extra), pool.DebsDirName)
+			a.stdoutf("%d file(s) in %s are not in the lock; remove them with: frostroot vendor --prune\n", len(extra), pool.DebsDirName)
 		}
 		if extra := run.summaryByPool[pool.WheelsDirName].Extra; len(extra) > 0 {
-			a.stdoutf("%d wheel file(s) in %s are not in the lock; remove them with: frostroot vendor --prune\n", len(extra), pool.WheelsDirName)
+			a.stdoutf("%d file(s) in %s are not in the lock; remove them with: frostroot vendor --prune\n", len(extra), pool.WheelsDirName)
 		}
 	}
 	if run.checksLock {

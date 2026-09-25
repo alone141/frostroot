@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -228,7 +229,7 @@ func TestVendorPruneAndExtraFiles(t *testing.T) {
 	if exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor"}); exitCode != exitSuccess {
 		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "1 .deb file(s) in vendor/debs are not in the lock; remove them with: frostroot vendor --prune") {
+	if !strings.Contains(stdout.String(), "1 file(s) in vendor/debs are not in the lock; remove them with: frostroot vendor --prune") {
 		t.Errorf("stdout should mention the stale file:\n%s", stdout.String())
 	}
 	if _, err := os.Stat(filepath.Join(fixture.poolDir(), "old_0_amd64.deb")); err != nil {
@@ -492,5 +493,41 @@ func TestVendorGoesOnWhenTheScreenFails(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "Vendored 302 packages") {
 		t.Errorf("stdout lacks the summary:\n%s", stdout.String())
+	}
+}
+
+// TestVendorPruneRemovesADownloadCutShort: a vendor run abandoned at the
+// second Ctrl-C, or killed, exits before the download it was in the middle
+// of removes its temporary file. The message on that path promises the rest
+// is removed, so --prune has to be able to do it: the file counts among what
+// the lock does not name, and is reported and removed like a stale package.
+func TestVendorPruneRemovesADownloadCutShort(t *testing.T) {
+	fixture := newVendorFixture(t)
+	if err := os.MkdirAll(fixture.poolDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cutShort := filepath.Join(fixture.poolDir(), ".curl_1_amd64.deb.4242.tmp")
+	if err := os.WriteFile(cutShort, []byte("half a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "1 file(s) in vendor/debs are not in the lock; remove them with: frostroot vendor --prune") {
+		t.Errorf("stdout should count the download cut short among the files the lock does not name:\n%s", stdout.String())
+	}
+	if _, err := os.Stat(cutShort); err != nil {
+		t.Error("without --prune the file stays")
+	}
+	stdout.Reset()
+	if exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor", "--prune"}); exitCode != exitSuccess {
+		t.Fatalf("--prune: exit code = %d, stderr %s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Removed 1 file(s) the lock does not name: .curl_1_amd64.deb.4242.tmp") {
+		t.Errorf("stdout:\n%s", stdout.String())
+	}
+	if _, err := os.Stat(cutShort); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("--prune must remove the download cut short, Stat error = %v", err)
 	}
 }

@@ -257,7 +257,9 @@ func TestVerify(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, wrongSize.FileName), []byte("short"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, extra := range []string{"stale_0.9_amd64.deb", "notes.txt"} {
+	// A stale package, a download cut short by an abandoned run, and a file
+	// that is neither.
+	for _, extra := range []string{"stale_0.9_amd64.deb", ".cut_1_amd64.deb.4242.tmp", "notes.txt"} {
 		if err := os.WriteFile(filepath.Join(dir, extra), []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -281,8 +283,8 @@ func TestVerify(t *testing.T) {
 	if len(status.Corrupt) != 2 {
 		t.Errorf("Corrupt = %+v, want the wrong content and the wrong size", status.Corrupt)
 	}
-	if !slices.Equal(status.Extra, []string{"stale_0.9_amd64.deb"}) {
-		t.Errorf("Extra = %q, want only the stale .deb", status.Extra)
+	if !slices.Equal(status.Extra, []string{".cut_1_amd64.deb.4242.tmp", "stale_0.9_amd64.deb"}) {
+		t.Errorf("Extra = %q, want the stale .deb and the download cut short, not notes.txt", status.Extra)
 	}
 	if status.Complete() {
 		t.Error("Complete() = true with missing and corrupt files")
@@ -317,7 +319,7 @@ func TestPrune(t *testing.T) {
 	dir := t.TempDir()
 	keep := entryFor("keep", "1")
 	writeEntry(t, dir, keep)
-	for _, name := range []string{"old_1_amd64.deb", "older_1_amd64.deb", "README"} {
+	for _, name := range []string{"old_1_amd64.deb", "older_1_amd64.deb", ".older_1_amd64.deb.4242.tmp", "README"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -326,7 +328,7 @@ func TestPrune(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(removed, []string{"old_1_amd64.deb", "older_1_amd64.deb"}) {
+	if !slices.Equal(removed, []string{".older_1_amd64.deb.4242.tmp", "old_1_amd64.deb", "older_1_amd64.deb"}) {
 		t.Errorf("removed = %q", removed)
 	}
 	remaining, err := os.ReadDir(dir)
