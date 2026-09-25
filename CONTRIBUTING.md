@@ -3,26 +3,51 @@
 frostroot is written to be read. Anyone opening a file should be able to tell
 what every name means without scrolling, and the code should be a fair example
 of idiomatic Go. This document is the standard; `golangci-lint` and CI enforce
-the parts a machine can check.
+the parts a machine can check. [AGENTS.md](AGENTS.md) adds how to run
+things, the design rules that are easy to break, and where the project's
+state lives; it is written for AI models, and holds for everyone.
 
 If this document and the code disagree, fix one of them in the same change.
 
 ## Before you push
 
 ```sh
-gofmt -l .                          # prints nothing
-go vet ./...
-go test -race ./...
-GOOS=windows go build ./...         # the module must still compile off Linux
-golangci-lint run ./...             # v2.13.2, configured by .golangci.yml
+scripts/check.sh
 ```
 
-CI runs the same checks on every push and pull request. The integration test
-needs mmdebstrap, network and user namespaces, so it runs only by hand:
+That runs, in order:
+
+- `gofmt -l` over the files git would commit
+- `go vet ./...`, with and without the `integration` tag
+- `go test -race ./...`
+- `GOOS=windows go build ./...`, because the module must still compile off
+  Linux
+- `golangci-lint run ./...`, at the version CI pins (v2.13.2, configured by
+  `.golangci.yml`)
+
+Every step runs even when one fails, and the summary names the failures.
+`--only` and `--skip` choose steps, and `--only vuln` runs govulncheck
+against the toolchain go.mod pins. CI runs the same script on every pull
+request and every push to `master`. On a Windows checkout the toolchain
+lives in WSL, so run it as `scripts/wsl.sh scripts/check.sh` from Git Bash
+or `.\scripts\wsl.ps1 scripts/check.sh` from PowerShell.
+
+The integration tests need mmdebstrap, the network and user namespaces.
+CI runs them, and this runs them the same way by hand:
 
 ```sh
-go test -tags=integration -run TestIntegration -v -timeout 30m ./internal/builder/
+scripts/integration.sh
 ```
+
+Some things only a real build can show: byte identity end to end, what
+reaches the image, the form in a real terminal. The scenarios in
+[scripts/e2e/](scripts/e2e/README.md) check those, each ending in a
+verdict.
+
+A fix comes with a test that fails without it. `scripts/mutate.sh` runs
+that check, by reverting the fix or breaking one line, and the commit body
+records what it found. [AGENTS.md](AGENTS.md) says how, and collects the
+rules that are easy to break without noticing.
 
 ## The base standard
 
@@ -115,17 +140,21 @@ the caller handles it immediately.
 - **Keep the happy path unindented.** Handle the error and return early; don't
   nest the rest of the function in an `else`.
 - **Standard library first.** A new dependency needs a reason that would
-  convince a reviewer. Two standing exceptions:
+  convince a reviewer. Three standing exceptions:
   - The terminal interface: the Charm libraries (`bubbletea`, `huh`,
     `bubbles`, `lipgloss`) are imported by `internal/tui` and nowhere else.
     Everything the interface shows is computed in plain packages
     (`internal/form`, `internal/builder`) that know nothing about
     terminals, so it can be tested without one.
-  - Compression the standard library lacks: `.deb` files carry their control
-    file in a `control.tar` member compressed with gzip, xz or zstd depending
-    on the Ubuntu release, so `internal/deb` imports
-    `github.com/klauspost/compress/zstd` and `github.com/ulikunitz/xz`,
-    and nothing else does.
+  - Compression the standard library lacks. `.deb` files keep their control
+    file in a `control.tar` member compressed with gzip, xz or zstd,
+    depending on the Ubuntu release. So `internal/deb` imports
+    `github.com/klauspost/compress/zstd` and `github.com/ulikunitz/xz`.
+    `internal/index` also imports xz, because the archive publishes its
+    `Packages` files as `.xz`. Nothing else imports either.
+  - TOML: `github.com/pelletier/go-toml/v2`, imported by `internal/recipe`
+    and nowhere else, since that package alone owns `frostroot.toml` and
+    `frostroot.lock`.
 
 ## Comments
 
