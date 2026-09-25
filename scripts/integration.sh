@@ -13,7 +13,10 @@
 #
 # Needs Linux, mmdebstrap, ubuntu-keyring, the network, and user namespaces
 # or root. The log goes to $FROSTROOT_INTEGRATION_LOG, by default
-# /var/tmp/frostroot-integration-<uid>.log.
+# /var/tmp/frostroot-integration-<uid>.log. $FROSTROOT_INTEGRATION_TIMEOUT
+# is go test's -timeout, 40m by default: plenty on a CI runner, which takes
+# about six minutes, and not always on a slow link or a busy machine, where
+# one bootstrap has taken twenty.
 set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 2
@@ -60,7 +63,8 @@ fi
 # No -race: these tests spend their time in mmdebstrap and apt, not in Go,
 # and scripts/check.sh already runs the race detector over the same
 # packages. The default 10m timeout is not enough for four real bootstraps.
-go test -tags=integration -timeout 40m -v "${testArgs[@]}" 2>&1 | tee "$log"
+timeout=${FROSTROOT_INTEGRATION_TIMEOUT:-40m}
+go test -tags=integration -timeout "$timeout" -v "${testArgs[@]}" 2>&1 | tee "$log"
 status=${PIPESTATUS[0]}
 
 # Only the three reasons skipUnlessMmdebstrapAvailable gives, not any skip:
@@ -72,6 +76,9 @@ if grep -qE -- "$skipReasons" "$log"; then
 	echo "The integration tests skipped for want of a prerequisite:"
 	grep -E -- "$skipReasons" "$log"
 	status=1
+fi
+if grep -q -- "panic: test timed out after" "$log"; then
+	echo "go test ran out of time ($timeout); on a slow link or a busy machine, set FROSTROOT_INTEGRATION_TIMEOUT, e.g. to 90m"
 fi
 
 if [ "$full" -eq 1 ]; then
