@@ -30,53 +30,74 @@ func TarballRelPath(imageName, release, arch string) string {
 // filesystems has got. A rename reports nothing: it is instant.
 type CopyProgressFunc func(copiedBytes, totalBytes int64)
 
-// Place moves sourcePath to destinationPath, replacing any existing file. It
-// renames when both are on one filesystem. Across filesystems (EXDEV) it copies
-// to a temporary file next to the destination, syncs, renames over the
-// destination and only then removes the source, so the destination is never
-// seen half-written. Under WSL this is the normal case: the work directory is
-// on the Linux disk and dist/ often sits on a Windows drive. onCopyProgress may
-// be nil.
-func Place(sourcePath, destinationPath string, onCopyProgress CopyProgressFunc) error {
-	return place(sourcePath, destinationPath, os.Rename, onCopyProgress)
+// Stage moves sourcePath next to destinationPath under a temporary name and
+// returns that name, so that the caller can put the file in place with one
+// rename once whatever else has to land first has landed. The builder
+// renames the lock into place between the two: a lock that cannot be renamed
+// then fails while the previous tarball is still whole. Stage renames when
+// both paths are on one filesystem. Across filesystems (EXDEV) it copies
+// into the temporary file and syncs it, so the destination directory never
+// holds a half-written file under the final name. Under WSL the copy is the
+// normal case: the work directory is on the Linux disk and dist/ often sits
+// on a Windows drive. onCopyProgress may be nil; a rename reports nothing.
+func Stage(sourcePath, destinationPath string, onCopyProgress CopyProgressFunc) (stagedPath string, err error) {
+	return stage(sourcePath, destinationPath, os.Rename, onCopyProgress)
 }
 
-// removeFile is os.Remove. A test replaces it to prove that a copy whose
-// source cannot be removed is still a placed file.
-var removeFile = os.Remove
+// Unstage undoes Stage for a file that is not going into place after all:
+// one that Stage moved goes back to sourcePath, and one it copied is
+// removed, so that the source is where it was and the destination directory
+// holds nothing of it. Best effort: the caller is failing already, and that
+// error is the one it returns.
+func Unstage(stagedPath, sourcePath string) {
+	if _, err := os.Lstat(sourcePath); err == nil {
+		// Still there, so Stage copied it.
+		_ = os.Remove(stagedPath)
+		return
+	}
+	if err := os.Rename(stagedPath, sourcePath); err != nil {
+		_ = os.Remove(stagedPath)
+	}
+}
 
 // renameFunc has the signature of os.Rename. Tests pass their own to simulate
 // a move across filesystems.
 type renameFunc func(oldPath, newPath string) error
 
-func place(sourcePath, destinationPath string, rename renameFunc, onCopyProgress CopyProgressFunc) error {
+func stage(sourcePath, destinationPath string, rename renameFunc, onCopyProgress CopyProgressFunc) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(destinationPath), 0o755); err != nil {
-		return err
+		return "", err
 	}
-	err := rename(sourcePath, destinationPath)
-	if err == nil {
-		return nil
+	// The name is claimed first, so that no other build takes it, and the
+	// source is renamed over the claim: one directory, so anything but EXDEV
+	// is a real failure, and the source stays where it is.
+	temporary, err := CreateTemp(filepath.Dir(destinationPath), "."+filepath.Base(destinationPath)+".*.tmp")
+	if err != nil {
+		return "", err
 	}
-	if !errors.Is(err, syscall.EXDEV) {
-		return err
+	stagedPath := temporary.Name()
+	err = rename(sourcePath, stagedPath)
+	copied := false
+	if errors.Is(err, syscall.EXDEV) {
+		copied = true
+		err = copyInto(sourcePath, temporary, onCopyProgress)
 	}
-	if err := copyAcrossFilesystems(sourcePath, destinationPath, onCopyProgress); err != nil {
-		return err
+	if closeErr := temporary.Close(); err == nil && copied {
+		// A rename replaced the file this handle was on, so its close has
+		// nothing to say; a copy's does.
+		err = closeErr
 	}
-	// The destination already holds the new bytes, so the move has happened.
-	// Removing the source is tidying, not part of placing, and it sits in a
-	// work directory the caller is about to delete anyway. Returning its
-	// error would tell the caller that a file which did arrive did not, and
-	// the caller acts on that by refusing to write the lock that describes
-	// it. Remove on drvfs, the mount WSL uses for Windows drives, is exactly
-	// where this happens.
-	_ = removeFile(sourcePath)
-	return nil
+	if err != nil {
+		_ = os.Remove(stagedPath)
+		return "", err
+	}
+	return stagedPath, nil
 }
 
-// copyAcrossFilesystems copies sourcePath over destinationPath through a
-// temporary file in the destination directory.
-func copyAcrossFilesystems(sourcePath, destinationPath string, onCopyProgress CopyProgressFunc) (err error) {
+// copyInto copies the file at sourcePath into destination, reporting its
+// progress, and syncs it, so that what the caller renames into place is on
+// disk.
+func copyInto(sourcePath string, destination *os.File, onCopyProgress CopyProgressFunc) error {
 	source, err := os.Open(sourcePath)
 	if err != nil {
 		return err
@@ -88,33 +109,14 @@ func copyAcrossFilesystems(sourcePath, destinationPath string, onCopyProgress Co
 	if err != nil {
 		return err
 	}
-
-	temporary, err := CreateTemp(filepath.Dir(destinationPath), "."+filepath.Base(destinationPath)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			// Best effort: the copy has already failed, and that error is the
-			// one returned.
-			_ = temporary.Close()
-			_ = os.Remove(temporary.Name())
-		}
-	}()
-	var destination io.Writer = temporary
+	var writer io.Writer = destination
 	if onCopyProgress != nil {
-		destination = &progressWriter{writer: temporary, totalBytes: sourceInfo.Size(), onProgress: onCopyProgress}
+		writer = &progressWriter{writer: destination, totalBytes: sourceInfo.Size(), onProgress: onCopyProgress}
 	}
-	if _, err = io.Copy(destination, source); err != nil {
+	if _, err := io.Copy(writer, source); err != nil {
 		return err
 	}
-	if err = temporary.Sync(); err != nil {
-		return err
-	}
-	if err = temporary.Close(); err != nil {
-		return err
-	}
-	return os.Rename(temporary.Name(), destinationPath)
+	return destination.Sync()
 }
 
 // progressWriter reports the running total of bytes written through it.

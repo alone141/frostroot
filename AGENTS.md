@@ -107,9 +107,14 @@ Hand-typed alternatives break in ways that are easy to miss:
 - Nothing the build only used stays in the image, whether pip's reports,
   the wheels, `--ca-bundle` copies or the host's `resolv.conf`. If you stage
   a new file, a hook must delete it, and `no-build-leaks` must still pass.
-- The host's environment must not change the result. The Python step
-  unsets every `PIP_*` variable and the certificate path variables. Don't
-  pass anything else through.
+- The host's environment must not change the result. mmdebstrap gets the
+  host's environment without any `PYTHON*` or `PIP_*` variable
+  (`hostEnvironment` in `internal/builder/bootstrap.go`), because it hands
+  its environment to dpkg's maintainer scripts and py3compile is Python: a
+  `PYTHONPYCACHEPREFIX` once put 930 caches under a directory named after
+  the host into the image. The Python step drops both again, unsets the
+  certificate path variables and sets `HOME`. Don't pass anything else
+  through.
 - Every value that reaches a shell is validated with a strict pattern and
   quoted with `shellQuote`. A hook never swallows a failure: no `|| true`.
   `TestHooksAndScriptNeverSwallowFailures` checks this.
@@ -117,8 +122,11 @@ Hand-typed alternatives break in ways that are easy to miss:
 **The lock**
 
 - A failed or interrupted build writes no lock, no tarball and no temporary
-  file, and keeps its work directory. The tarball goes into place first,
-  then the lock is renamed into place.
+  file, keeps its work directory, and leaves a previous image and its lock
+  as they were. The tarball is staged in `dist/` under a temporary name
+  (`export.Stage`), then the lock is renamed into place, then the tarball;
+  a failure between them puts things back (`export.Unstage`,
+  `restoreLock`).
 - The lock format stays `version = 1`. A new field is optional and
   `omitempty`. An unknown field is an error, and every older lock must still
   load and rebuild.

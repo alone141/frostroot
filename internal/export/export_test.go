@@ -51,6 +51,14 @@ func assertFileContent(t *testing.T, path, want string) {
 	}
 }
 
+// assertGone fails if path still exists.
+func assertGone(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("%s should be gone, Lstat error = %v", path, err)
+	}
+}
+
 // assertDirectoryHolds fails unless directory contains exactly the named
 // entries.
 func assertDirectoryHolds(t *testing.T, directory string, wantNames ...string) {
@@ -68,6 +76,19 @@ func assertDirectoryHolds(t *testing.T, directory string, wantNames ...string) {
 	}
 }
 
+// assertStagedBeside fails unless stagedPath is a temporary name for
+// destinationPath in its directory: hidden, named after it, ending in .tmp.
+func assertStagedBeside(t *testing.T, stagedPath, destinationPath string) {
+	t.Helper()
+	if filepath.Dir(stagedPath) != filepath.Dir(destinationPath) {
+		t.Fatalf("staged at %s, want it beside %s", stagedPath, destinationPath)
+	}
+	name := filepath.Base(stagedPath)
+	if !strings.HasPrefix(name, "."+filepath.Base(destinationPath)+".") || !strings.HasSuffix(name, ".tmp") {
+		t.Fatalf("staged name %q does not follow the pattern for %s", name, filepath.Base(destinationPath))
+	}
+}
+
 // setUmask sets the process umask for the rest of the test.
 func setUmask(t *testing.T, mask int) {
 	t.Helper()
@@ -81,58 +102,56 @@ func renameAcrossFilesystems(oldPath, newPath string) error {
 	return &os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: syscall.EXDEV}
 }
 
-func TestPlaceCreatesParentAndMoves(t *testing.T) {
+func TestStageCreatesParentAndMoves(t *testing.T) {
 	sourcePath := writeSourceFile(t, "payload")
 	destinationPath := filepath.Join(t.TempDir(), "dist", "cpp-lab-ubuntu-22.04-amd64.tar.gz")
-	if err := Place(sourcePath, destinationPath, nil); err != nil {
-		t.Fatal(err)
-	}
-	assertFileContent(t, destinationPath, "payload")
-	if _, err := os.Stat(sourcePath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the source should be gone, Stat error = %v", err)
-	}
-	assertDirectoryHolds(t, filepath.Dir(destinationPath), "cpp-lab-ubuntu-22.04-amd64.tar.gz")
-}
-
-func TestPlaceOverwritesExisting(t *testing.T) {
-	// build overwrites a matching tarball without asking.
-	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
-	writeExistingFile(t, destinationPath, "stale")
-	if err := Place(writeSourceFile(t, "fresh"), destinationPath, nil); err != nil {
-		t.Fatal(err)
-	}
-	assertFileContent(t, destinationPath, "fresh")
-}
-
-func TestPlaceCopiesAcrossFilesystems(t *testing.T) {
-	setUmask(t, 0o022)
-	sourcePath := writeSourceFile(t, "payload")
-	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
-	writeExistingFile(t, destinationPath, "stale")
-
-	if err := place(sourcePath, destinationPath, renameAcrossFilesystems, nil); err != nil {
-		t.Fatal(err)
-	}
-	assertFileContent(t, destinationPath, "payload")
-	if _, err := os.Stat(sourcePath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the source should be gone after a cross-filesystem move, Stat error = %v", err)
-	}
-	destinationInfo, err := os.Stat(destinationPath)
+	stagedPath, err := Stage(sourcePath, destinationPath, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mode := destinationInfo.Mode().Perm(); mode != 0o644 {
-		t.Fatalf("mode = %v, want 0644 so the tarball is readable for wsl --import", mode)
+	assertStagedBeside(t, stagedPath, destinationPath)
+	assertFileContent(t, stagedPath, "payload")
+	assertGone(t, sourcePath)
+	assertDirectoryHolds(t, filepath.Dir(destinationPath), filepath.Base(stagedPath))
+	// The one rename that is left to the caller.
+	if err := os.Rename(stagedPath, destinationPath); err != nil {
+		t.Fatal(err)
 	}
-	assertDirectoryHolds(t, filepath.Dir(destinationPath), "out.tar.gz")
+	assertFileContent(t, destinationPath, "payload")
 }
 
-func TestPlaceReportsCopyProgress(t *testing.T) {
+func TestStageCopiesAcrossFilesystems(t *testing.T) {
+	setUmask(t, 0o022)
+	sourcePath := writeSourceFile(t, "payload")
+	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
+	writeExistingFile(t, destinationPath, "previous")
+
+	stagedPath, err := stage(sourcePath, destinationPath, renameAcrossFilesystems, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStagedBeside(t, stagedPath, destinationPath)
+	assertFileContent(t, stagedPath, "payload")
+	// A copy leaves the source in the work directory, and the destination
+	// as it was until the caller renames.
+	assertFileContent(t, sourcePath, "payload")
+	assertFileContent(t, destinationPath, "previous")
+	stagedInfo, err := os.Stat(stagedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := stagedInfo.Mode().Perm(); mode != 0o644 {
+		t.Fatalf("mode = %v, want 0644 so the tarball is readable for wsl --import", mode)
+	}
+	assertDirectoryHolds(t, filepath.Dir(destinationPath), filepath.Base(stagedPath), "out.tar.gz")
+}
+
+func TestStageReportsCopyProgress(t *testing.T) {
 	sourcePath := writeSourceFile(t, "payload")
 	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
 	var reports [][2]int64
 	onProgress := func(copiedBytes, totalBytes int64) { reports = append(reports, [2]int64{copiedBytes, totalBytes}) }
-	if err := place(sourcePath, destinationPath, renameAcrossFilesystems, onProgress); err != nil {
+	if _, err := stage(sourcePath, destinationPath, renameAcrossFilesystems, onProgress); err != nil {
 		t.Fatal(err)
 	}
 	if len(reports) == 0 {
@@ -142,7 +161,7 @@ func TestPlaceReportsCopyProgress(t *testing.T) {
 		t.Errorf("last report = %v, want the whole file copied out of its size", last)
 	}
 	reports = nil
-	if err := place(writeSourceFile(t, "payload"), filepath.Join(t.TempDir(), "renamed"), os.Rename, onProgress); err != nil {
+	if _, err := stage(writeSourceFile(t, "payload"), filepath.Join(t.TempDir(), "renamed"), os.Rename, onProgress); err != nil {
 		t.Fatal(err)
 	}
 	if len(reports) != 0 {
@@ -150,63 +169,92 @@ func TestPlaceReportsCopyProgress(t *testing.T) {
 	}
 }
 
-func TestPlaceAcrossFilesystemsRespectsUmaskWithoutChmod(t *testing.T) {
+func TestStageAcrossFilesystemsRespectsUmaskWithoutChmod(t *testing.T) {
 	// dist/ is routinely on a drvfs mount of a Windows drive, where chmod
 	// fails with EPERM. The copy must not depend on chmod: the temporary file
 	// is created with its final mode and the umask applies, as for any file a
 	// user creates.
 	setUmask(t, 0o027)
-	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
-	if err := place(writeSourceFile(t, "payload"), destinationPath, renameAcrossFilesystems, nil); err != nil {
-		t.Fatal(err)
-	}
-	destinationInfo, err := os.Stat(destinationPath)
+	stagedPath, err := stage(writeSourceFile(t, "payload"), filepath.Join(t.TempDir(), "dist", "out.tar.gz"), renameAcrossFilesystems, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mode := destinationInfo.Mode().Perm(); mode != 0o640 {
+	stagedInfo, err := os.Stat(stagedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := stagedInfo.Mode().Perm(); mode != 0o640 {
 		t.Fatalf("mode = %v, want 0644 minus umask 027", mode)
 	}
 }
 
-func TestPlaceAcrossFilesystemsLeavesOtherTemporaryFilesAlone(t *testing.T) {
+func TestStageLeavesOtherTemporaryFilesAlone(t *testing.T) {
 	distDir := filepath.Join(t.TempDir(), "dist")
 	// Another build's temporary file for the same destination.
 	otherBuildsTemporary := filepath.Join(distDir, ".out.tar.gz.12345.tmp")
 	writeExistingFile(t, otherBuildsTemporary, "theirs")
 
-	if err := place(writeSourceFile(t, "ours"), filepath.Join(distDir, "out.tar.gz"), renameAcrossFilesystems, nil); err != nil {
+	stagedPath, err := stage(writeSourceFile(t, "ours"), filepath.Join(distDir, "out.tar.gz"), renameAcrossFilesystems, nil)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if stagedPath == otherBuildsTemporary {
+		t.Fatal("staged over another build's temporary file")
+	}
 	assertFileContent(t, otherBuildsTemporary, "theirs")
+	assertFileContent(t, stagedPath, "ours")
 }
 
-func TestPlaceAcrossFilesystemsWithMissingSource(t *testing.T) {
+func TestStageAcrossFilesystemsWithMissingSource(t *testing.T) {
 	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
 	missingSource := filepath.Join(t.TempDir(), "absent.tar.gz")
-	if err := place(missingSource, destinationPath, renameAcrossFilesystems, nil); err == nil {
-		t.Fatal("place succeeded, want an error for the missing source")
+	if _, err := stage(missingSource, destinationPath, renameAcrossFilesystems, nil); err == nil {
+		t.Fatal("stage succeeded, want an error for the missing source")
 	}
 	assertDirectoryHolds(t, filepath.Dir(destinationPath))
 }
 
-func TestPlaceDoesNotCopyOnOtherRenameErrors(t *testing.T) {
-	// Only EXDEV means "try copying". Anything else is a real failure, and the
-	// source must stay where it is.
+func TestStageDoesNotCopyOnOtherRenameErrors(t *testing.T) {
+	// Only EXDEV means "try copying". Anything else is a real failure, the
+	// source must stay where it is, and the name that was claimed goes.
 	renameDenied := func(oldPath, newPath string) error {
 		return &os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: syscall.EACCES}
 	}
 	sourcePath := writeSourceFile(t, "payload")
 	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
 
-	err := place(sourcePath, destinationPath, renameDenied, nil)
+	_, err := stage(sourcePath, destinationPath, renameDenied, nil)
 	if !errors.Is(err, syscall.EACCES) {
-		t.Fatalf("place error = %v, want EACCES", err)
+		t.Fatalf("stage error = %v, want EACCES", err)
 	}
-	if _, err := os.Stat(destinationPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the destination must not exist, Stat error = %v", err)
-	}
+	assertDirectoryHolds(t, filepath.Dir(destinationPath))
 	assertFileContent(t, sourcePath, "payload")
+}
+
+func TestUnstagePutsAMovedFileBack(t *testing.T) {
+	// The builder's failure path: the lock could not be renamed into place,
+	// and the image goes back to the work directory the failed build keeps.
+	sourcePath := writeSourceFile(t, "payload")
+	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
+	stagedPath, err := Stage(sourcePath, destinationPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	Unstage(stagedPath, sourcePath)
+	assertFileContent(t, sourcePath, "payload")
+	assertDirectoryHolds(t, filepath.Dir(destinationPath))
+}
+
+func TestUnstageRemovesACopy(t *testing.T) {
+	sourcePath := writeSourceFile(t, "payload")
+	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
+	stagedPath, err := stage(sourcePath, destinationPath, renameAcrossFilesystems, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	Unstage(stagedPath, sourcePath)
+	assertFileContent(t, sourcePath, "payload")
+	assertDirectoryHolds(t, filepath.Dir(destinationPath))
 }
 
 func TestCreateTemp(t *testing.T) {
@@ -230,27 +278,5 @@ func TestCreateTemp(t *testing.T) {
 		if !strings.HasPrefix(name, ".frostroot.lock.") || !strings.HasSuffix(name, ".tmp") {
 			t.Errorf("name %q does not follow the pattern", name)
 		}
-	}
-}
-
-// TestPlaceAcrossFilesystemsSucceedsWhenTheSourceCannotBeRemoved: once the
-// destination holds the new bytes the move has happened, and the source sits
-// in a work directory the caller deletes anyway. Reporting the failed remove
-// told the builder that a tarball which did arrive had not, and the builder
-// answered by not writing the lock that describes it, leaving dist/ with a
-// new image and an older lock. Remove on drvfs is where this happens.
-func TestPlaceAcrossFilesystemsSucceedsWhenTheSourceCannotBeRemoved(t *testing.T) {
-	original := removeFile
-	removeFile = func(string) error { return errors.New("drvfs says no") }
-	t.Cleanup(func() { removeFile = original })
-
-	sourcePath := writeSourceFile(t, "payload")
-	destinationPath := filepath.Join(t.TempDir(), "out.tar.gz")
-	if err := place(sourcePath, destinationPath, renameAcrossFilesystems, nil); err != nil {
-		t.Fatalf("Place = %v, want nil: the destination is the new bytes", err)
-	}
-	placed, err := os.ReadFile(destinationPath)
-	if err != nil || string(placed) != "payload" {
-		t.Fatalf("destination = %q, %v", placed, err)
 	}
 }

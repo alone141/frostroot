@@ -13,10 +13,12 @@ import (
 
 // Status is what Verify found in a pool directory.
 type Status struct {
-	Present []Entry  // files there with the right size and checksum
-	Missing []Entry  // files not there
-	Corrupt []Entry  // files there with another size or checksum
-	Extra   []string // .deb files there that the lock does not name, sorted
+	Present []Entry // files there with the right size and checksum
+	Missing []Entry // files not there
+	Corrupt []Entry // files there with another size or checksum
+	// Extra is the files there that the lock does not name, sorted: .deb and
+	// .whl packages, and the .tmp files of downloads that were cut short.
+	Extra []string
 }
 
 // Complete reports whether every entry is present and correct. Extra files
@@ -73,7 +75,7 @@ func Verify(dir string, entries []Entry, onChecked func(checked, total int)) (St
 	}
 	for _, directoryEntry := range directoryEntries {
 		name := directoryEntry.Name()
-		if !directoryEntry.IsDir() && (strings.HasSuffix(name, ".deb") || strings.HasSuffix(name, ".whl")) && !listed[name] {
+		if !directoryEntry.IsDir() && (isPackageFile(name) || isPartialDownload(name)) && !listed[name] {
 			status.Extra = append(status.Extra, name)
 		}
 	}
@@ -113,9 +115,23 @@ func checkFile(path string, entry Entry) (fileState, error) {
 	return filePresent, nil
 }
 
-// Prune removes the package files in dir, .deb or .whl, that entries do not
-// name and returns their names, sorted. Nothing else in the directory is
-// touched.
+// isPackageFile reports whether name is a package file, .deb or .whl.
+func isPackageFile(name string) bool {
+	return strings.HasSuffix(name, ".deb") || strings.HasSuffix(name, ".whl")
+}
+
+// isPartialDownload reports whether name is a download of Fetch's that was
+// cut short: a hidden .tmp file, the shape export.CreateTemp gives them. A
+// download removes its own when it fails or is canceled, but a vendor run
+// that is abandoned at the second Ctrl-C, or killed, exits before that
+// runs, so these count among what the lock does not name and Prune removes.
+func isPartialDownload(name string) bool {
+	return strings.HasPrefix(name, ".") && strings.HasSuffix(name, ".tmp")
+}
+
+// Prune removes the files in dir that entries do not name, .deb or .whl
+// packages and the .tmp files of downloads that were cut short, and returns
+// their names, sorted. Nothing else in the directory is touched.
 func Prune(dir string, entries []Entry) ([]string, error) {
 	status, err := Verify(dir, entries, nil)
 	if err != nil {

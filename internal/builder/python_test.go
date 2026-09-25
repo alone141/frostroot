@@ -495,19 +495,26 @@ func TestRenderPythonScriptUpgradesWhatTheRecipeAsksFor(t *testing.T) {
 }
 
 func TestPythonEnvironmentIsNeutralInARealShell(t *testing.T) {
-	// The PIP_ sweep is shell, not Go: prove it clears the variables and
-	// survives an environment that has none.
+	// The sweeps are shell, not Go: prove they clear the variables and
+	// survive an environment that has none.
 	script := renderPythonScript(t, pythonRecipe(), PythonOptions{})
 	sweep, _, found := strings.Cut(script, "venv=")
 	if !found {
 		t.Fatalf("the script has no venv assignment:\n%s", script)
 	}
-	check := sweep + "\nenv | grep -E '^(PIP_|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|SSL_CERT_)' || echo 'nothing of the host left'\n"
+	check := sweep + "\nenv | grep -E '^(PIP_|PYTHON|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|SSL_CERT_)' || echo 'nothing of the host left'\n"
 	command := exec.Command("sh", "-c", check)
 	command.Env = append(os.Environ(),
 		"PIP_INDEX_URL=https://nexus.invalid/simple",
 		"PIP_EXTRA_INDEX_URL=https://other.invalid/simple",
 		"PIP_TRUSTED_HOST=nexus.invalid",
+		// What Python itself reads: a cache prefix would put a directory
+		// named after the build host in the image, in place of the caches
+		// the script compiles into the environment, and a seed of the
+		// host's would order set constants its way.
+		"PYTHONPYCACHEPREFIX=/home/builder/.cache/host-bytecode",
+		"PYTHONDONTWRITEBYTECODE=1",
+		"PYTHONHASHSEED=42",
 		// The build host's own trust, which pip reads by four other names.
 		"REQUESTS_CA_BUNDLE=/etc/ssl/certs/host.pem",
 		"CURL_CA_BUNDLE=/etc/ssl/certs/host.pem",
@@ -526,6 +533,12 @@ func TestPythonEnvironmentIsNeutralInARealShell(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "PIP_CONFIG_FILE=/dev/null") {
 		t.Errorf("the script did not disable pip's configuration files:\n%s", output)
+	}
+	if strings.Contains(string(output), "host-bytecode") || strings.Contains(string(output), "PYTHONDONTWRITEBYTECODE") {
+		t.Errorf("the build host's Python settings survived the script:\n%s", output)
+	}
+	if !strings.Contains(string(output), "PYTHONHASHSEED=0\n") {
+		t.Errorf("the script's own seed did not survive its sweep:\n%s", output)
 	}
 }
 

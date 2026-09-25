@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -97,7 +98,7 @@ func (a *App) runInit(args []string) int {
 	if !ok {
 		return exitUserError
 	}
-	return a.runRecipeForm("init", form.Defaults(a.host()), recipePath, *plain, nil, nil, indexes)
+	return a.runRecipeForm("init", form.Defaults(a.host()), recipePath, *overwrite, *plain, nil, nil, indexes)
 }
 
 // renderRecipe returns imageRecipe as the file init and edit write, byte
@@ -110,9 +111,19 @@ func renderRecipe(imageRecipe recipe.Recipe) (string, error) {
 	return rendered.String(), nil
 }
 
+// errRecipeExists is what writeRecipe returns for a recipe it may not
+// replace: init and capture refuse an existing one before their form opens,
+// and this is the same refusal for one that appeared while it was open.
+var errRecipeExists = errors.New("a recipe appeared while the form was open; nothing written, use --force to overwrite it")
+
 // writeRecipe renders imageRecipe to a temporary file next to recipePath,
 // proves that it parses back to the same recipe, and renames it into place.
-func writeRecipe(recipePath string, imageRecipe recipe.Recipe) (err error) {
+// Unless replace is set, a file already at recipePath is left alone and
+// errRecipeExists returned: the check init and capture make before the form
+// is a look at the directory that is minutes old by the time the form is
+// answered, and a recipe that appeared meanwhile, from a checkout, an
+// editor or a second frostroot, must not be replaced on its strength.
+func writeRecipe(recipePath string, imageRecipe recipe.Recipe, replace bool) (err error) {
 	renderedText, err := renderRecipe(imageRecipe)
 	if err != nil {
 		return err
@@ -143,7 +154,27 @@ func writeRecipe(recipePath string, imageRecipe recipe.Recipe) (err error) {
 	if !reflect.DeepEqual(reloaded, imageRecipe) {
 		return fmt.Errorf("internal error: the rendered recipe does not parse back to the same recipe:\n%s", renderedText)
 	}
-	return os.Rename(temporaryPath, recipePath)
+	if replace {
+		return os.Rename(temporaryPath, recipePath)
+	}
+	// Claiming the name with O_EXCL checks and creates in one step, so that
+	// nothing slips in between the two; the rename then fills the claim.
+	var claim *os.File
+	claim, err = os.OpenFile(recipePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("%s: %w", recipePath, errRecipeExists)
+	}
+	if err != nil {
+		return err
+	}
+	if err = claim.Close(); err == nil {
+		err = os.Rename(temporaryPath, recipePath)
+	}
+	if err != nil {
+		// The claim is an empty file of this run's, not a recipe.
+		_ = os.Remove(recipePath)
+	}
+	return err
 }
 
 // tomlQuote renders value as a TOML basic string.

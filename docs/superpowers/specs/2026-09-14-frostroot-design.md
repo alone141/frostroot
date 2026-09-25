@@ -433,7 +433,7 @@ follow-up.
 Rules:
 
 - Do not write lock or tarball unless the whole build succeeded.
-- Write the lock to a uniquely named `*.tmp` and rename only after the tarball lands. Builds never touch another build's temporary files; concurrent builds in one directory are otherwise last-writer-wins and not supported.
+- Write the lock to a uniquely named `*.tmp`. Stage the tarball beside its destination under a temporary name, rename the lock into place, then the tarball (v0.13.2; the lock's rename is the one that fails in practice, and it used to fail after the tarball had replaced the previous one, which left the previous lock describing an image that was gone). Builds never touch another build's temporary files; concurrent builds in one directory are otherwise last-writer-wins and not supported.
 - On failure: delete tmp artifacts; keep the work directory; print its path; reprint the tail of mmdebstrap stderr when mmdebstrap failed.
 - On Ctrl-C: treat as failure (keep work directory, remove tmp artifacts). Signal mmdebstrap's process group with SIGINT, as a terminal would, and wait however long it takes, never SIGKILL: in root mode it has proc, sys and dev mounted inside the chroot. A second Ctrl-C stops frostroot waiting; mmdebstrap's cleanup carries on.
 - frostroot never deletes a chroot directory. Under this design it never creates one it would have to.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# proves: two offline rebuilds of one lock are byte-identical, Python environment included, and leave the lock as it was
+# proves: two offline rebuilds of one lock are byte-identical, Python environment included, whatever PYTHON variables the build host has set, and leave the lock as it was
 # needs: the network, mmdebstrap, ubuntu-keyring, user namespaces
 # takes: about 30 minutes: an online build, vendor, two offline builds
 #
@@ -8,7 +8,11 @@
 # offline twice, and the two tarballs must be the same bytes. The online
 # build is not compared with them: it installs in another order than an
 # offline rebuild does, which the README's "Rebuilding offline" explains.
-# E2E_RELEASE picks the Ubuntu release, 24.04 by default.
+# The second rebuild runs with PYTHONPYCACHEPREFIX set, as a build host
+# might have it: the hook inherits the build user's environment, and that
+# variable once sent every compiled cache to a directory named after the
+# host, inside the image. E2E_RELEASE picks the Ubuntu release, 24.04 by
+# default.
 source "$(dirname "$0")/lib.sh"
 
 e2e_begin offline-identical
@@ -38,9 +42,10 @@ e2e_check "the rebuild says it is reproducible" e2e_contains "$LAB/offline1.out"
 first=$(e2e_sha "$tarball")
 mv "$tarball" "$LAB/offline1.tar.gz"
 
-e2e_run offline2 "$lab" "$FROSTROOT" build --offline --plain
+PYTHONPYCACHEPREFIX=$LAB/host-bytecode e2e_run offline2 "$lab" "$FROSTROOT" build --offline --plain
 e2e_expect_status 0 offline2
 second=$(e2e_sha "$tarball")
+e2e_check "the second rebuild holds no cache written under the host's PYTHONPYCACHEPREFIX" e2e_lacks "$(e2e_entries "$tarball")" "host-bytecode"
 echo "  offline 1: $first"
 echo "  offline 2: $second"
 e2e_check "two offline rebuilds are byte-identical" test "$first" = "$second"

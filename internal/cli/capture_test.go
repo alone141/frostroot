@@ -378,3 +378,32 @@ func TestCaptureRemovesWhatItWroteWhenAWriteFails(t *testing.T) {
 		t.Errorf("a capture that failed before the form wrote a recipe: %v", err)
 	}
 }
+
+// TestCaptureLeavesARecipeThatAppearedWhileTheFormWasOpen: the same check as
+// init's, and the certificates written before the form for its Trust page
+// to check go again, since the recipe that appeared names none of them.
+func TestCaptureLeavesARecipeThatAppearedWhileTheFormWasOpen(t *testing.T) {
+	recipeDir := t.TempDir()
+	recipePath := filepath.Join(recipeDir, "frostroot.toml")
+	root := fakeUbuntuRoot(t, "24.04")
+	withLocalAuthority(t, root, corpCertificatePEM(t))
+	prompt := &interferingPrompt{scriptedPrompt: scriptedPrompt{answers: answersWith(nil)}, beforeQuestion: "Write frostroot.toml", act: func() {
+		if err := os.WriteFile(recipePath, []byte("theirs\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	var stdout, stderr bytes.Buffer
+	app := App{Stdout: &stdout, Stderr: &stderr, RecipeDir: recipeDir, Prompt: prompt, ReadFile: noHostFile}
+	if exitCode := app.Run([]string{"capture", "--root", root}); exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d; stderr %s", exitCode, exitUserError, stderr.String())
+	}
+	if content, err := os.ReadFile(recipePath); err != nil || string(content) != "theirs\n" {
+		t.Errorf("the recipe that appeared was touched: %q, %v", content, err)
+	}
+	if _, err := os.Stat(filepath.Join(recipeDir, "certs", "corp-root.pem")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the certificate written for the form stayed beside a recipe that does not name it: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(recipeDir, captureReportFileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a capture that wrote no recipe wrote a report: %v", err)
+	}
+}

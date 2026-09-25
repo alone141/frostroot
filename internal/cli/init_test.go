@@ -371,3 +371,50 @@ func TestRenderRecipeKeepsThePythonIndexURL(t *testing.T) {
 		t.Errorf("a recipe naming no index must not mention one:\n%s", renderedPlain)
 	}
 }
+
+// interferingPrompt answers like scriptedPrompt and, before one question,
+// does what another program might while the form is open.
+type interferingPrompt struct {
+	scriptedPrompt
+	beforeQuestion string // a substring of the question to act before
+	act            func()
+}
+
+func (p *interferingPrompt) Ask(question, defaultAnswer string) (string, error) {
+	if strings.Contains(question, p.beforeQuestion) {
+		p.act()
+	}
+	return p.scriptedPrompt.Ask(question, defaultAnswer)
+}
+
+// TestInitLeavesARecipeThatAppearedWhileTheFormWasOpen: the check for an
+// existing recipe is made before the form opens, and the form takes as long
+// as a person takes. A recipe that appeared meanwhile, from a checkout, an
+// editor or a second frostroot, was replaced without a word, exit 0.
+func TestInitLeavesARecipeThatAppearedWhileTheFormWasOpen(t *testing.T) {
+	recipeDir := t.TempDir()
+	recipePath := filepath.Join(recipeDir, "frostroot.toml")
+	prompt := &interferingPrompt{beforeQuestion: "Write frostroot.toml", act: func() {
+		if err := os.WriteFile(recipePath, []byte("theirs\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	var stdout, stderr bytes.Buffer
+	app := App{Stdout: &stdout, Stderr: &stderr, RecipeDir: recipeDir, Prompt: prompt, ReadFile: noHostFile}
+	if exitCode := app.Run([]string{"init"}); exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d; stderr %s", exitCode, exitUserError, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "--force") {
+		t.Errorf("stderr should say how to overwrite on purpose:\n%s", stderr.String())
+	}
+	if content, err := os.ReadFile(recipePath); err != nil || string(content) != "theirs\n" {
+		t.Errorf("the recipe that appeared was touched: %q, %v", content, err)
+	}
+	leftovers, err := filepath.Glob(filepath.Join(recipeDir, ".*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leftovers) != 0 {
+		t.Errorf("temporary files left behind: %q", leftovers)
+	}
+}

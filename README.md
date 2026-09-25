@@ -2,7 +2,7 @@
 
 **Freeze an Ubuntu root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
 
-> **Status: v0.13.1.** `init`, `edit`, `capture`, `validate`, `build`,
+> **Status: v0.13.2.** `init`, `edit`, `capture`, `validate`, `build`,
 > `vendor` and `build --offline` work, a recipe can add third-party apt
 > sources (PPAs, Docker, Node.js, VS Code...), Python packages from PyPI and
 > certificate authorities for a network that inspects TLS, and two offline
@@ -271,7 +271,7 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 | `frostroot capture [--root DIR] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, starting with a page of what it found and what a recipe cannot carry, writes `frostroot.toml` and the signing keys of the third-party sources it could carry, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys; needs no root. |
 | `frostroot validate` | Checks `frostroot.toml`, including that every source's key file is there and is a key, and prints every problem. No network, no root. |
 | `frostroot build [--mirror URL] [--ca-bundle FILE \| --insecure] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-ubuntu-<release>-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. |
-| `frostroot vendor [--mirror URL] [--ca-bundle FILE \| --insecure] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, and every wheel it names into `vendor/wheels/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name. |
+| `frostroot vendor [--mirror URL] [--ca-bundle FILE \| --insecure] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, and every wheel it names into `vendor/wheels/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name, including the partial download an abandoned run leaves behind. |
 | `frostroot build --offline [--keep-work] [--plain]` | Rebuilds the image from `frostroot.lock` and `vendor/debs/`, without the archive. Fails unless the result has exactly the lock's packages. The lock is read, not written. |
 | `frostroot version` | Prints the version and the commit it was built from. |
 
@@ -606,8 +606,11 @@ thing between the resolve and whatever answers, and the hashes that first
 resolve writes are pinned from then on. It must carry no credentials, since
 a recipe is committed and reviewed. It replaces PyPI rather than adding to
 it: `--extra-index-url` invites dependency confusion and is deliberately not
-offered. The field has no question in the form yet; write it by hand, and
-`frostroot edit` gives it back unchanged.
+offered. It needs at least one package in `include`: with none there is no
+Python step, so the lock would never record the index and an offline rebuild
+could never match it, and `validate` refuses the recipe. The field has no
+question in the form yet; write it by hand, and `frostroot edit` gives it
+back unchanged.
 
 ## Networks that inspect TLS
 
@@ -891,9 +894,12 @@ status, which frostroot parses into the lock. A recipe with `[python]` gets
 one more hook in between, which creates the environment and installs into
 it, and whose report becomes the lock's `[[pypi]]` entries; the build host's
 `/etc/resolv.conf` is removed after it, since that hook is the one that
-needs to resolve a name. The tarball is moved into `dist/` first and the
-lock renamed into place second, so a lock never describes an image that does
-not exist. A failed build writes neither.
+needs to resolve a name. The tarball is staged in `dist/` under a temporary
+name, then the lock is renamed into place, then the tarball: the lock's
+rename is the one that fails in practice, and it fails while the previous
+tarball is still whole, so `dist/` holds one image and its lock whatever
+happens. A failed build writes neither, and leaves a previous image and its
+lock as they were.
 
 Offline, the three `deb http://…` lines become one
 `deb [trusted=yes] copy://<work>/pool ./` pointing at a flat repository
@@ -1219,6 +1225,21 @@ fixes of v0.13.1 are each pinned by a test that fails with the fix
 reverted, run with `scripts/mutate.sh` and recorded in the commit; the
 index bound was also measured, a body that would expand to 80 MB being
 refused with under 32 MB allocated.
+
+For v0.13.2 the six fixes are each pinned by a test that fails with the fix
+reverted, run with `scripts/mutate.sh` and recorded in the commit, and
+`scripts/check.sh` ran every step. With the branch's binary, the
+`offline-identical` scenario built a 24.04 image with `git` and `requests`
+in 477 s, vendored it in 26 s and rebuilt it offline twice, in 501 s and
+441 s, the second time with `PYTHONPYCACHEPREFIX` set on the build host:
+both rebuilds came out as one SHA-256, and the image holds no cache under
+the host's prefix. The same scenario had failed with only the Python hook
+sweeping that variable, the image then holding 930 caches under
+`<prefix>/usr/lib/python3/` written by dpkg's `py3compile`, which is what
+showed that mmdebstrap needs the host's `PYTHON` and `PIP` variables dropped
+before it starts. `tui` passed its 4 checks in 14 s, and `capture-roundtrip`
+its 10, with a real build placed through the new staging order and captured
+back into a recipe that validates.
 
 
 ## Documentation

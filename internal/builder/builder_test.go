@@ -1218,16 +1218,28 @@ func TestBuildCanceledKeepsWorkDirAndWritesNothing(t *testing.T) {
 	assertNoBuildOutput(t, options)
 }
 
-// TestBuildLeavesNoTarballWhenTheLockCannotBePlaced: Build promises that a
-// failed build writes no lock and no tarball. The tarball is placed first,
-// so a lock that cannot be renamed into place used to leave dist/ holding a
-// new image beside an older lock, with nothing saying the two disagree; an
-// offline rebuild or a vendor run would then work from the wrong lock.
-// A directory in the lock's place is what makes the rename fail here.
-func TestBuildLeavesNoTarballWhenTheLockCannotBePlaced(t *testing.T) {
+// TestBuildLeavesThePreviousImageWhenTheLockCannotBePlaced: Build promises
+// that a failed build writes no lock and no tarball, and that dist/ holds
+// one image and its lock. The tarball used to be placed first, so a lock
+// that could not be renamed into place left dist/ holding a new image
+// beside an older lock; removing that image again left the older lock
+// describing a tarball that was gone, and destroyed the only copy of the
+// one just built. The tarball is staged under a temporary name now and goes
+// into place after the lock, so the previous tarball is whole and the new
+// one is back in the kept work directory. A directory in the lock's place
+// is what stops the lock here: it is refused when the previous lock is
+// read, before anything is renamed.
+func TestBuildLeavesThePreviousImageWhenTheLockCannotBePlaced(t *testing.T) {
 	options, _ := newTestOptions(t)
 	lockPath := filepath.Join(options.RecipeDir, LockFileName)
 	if err := os.MkdirAll(filepath.Join(lockPath, "occupied"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	previousTarball := expectedTarballPath(options)
+	if err := os.MkdirAll(filepath.Dir(previousTarball), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(previousTarball, []byte("previous image"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	result, err := buildWith(&fakeBootstrapper{}, options)
@@ -1237,11 +1249,105 @@ func TestBuildLeavesNoTarballWhenTheLockCannotBePlaced(t *testing.T) {
 	if !strings.Contains(err.Error(), "placing lock") {
 		t.Errorf("error = %v, want it to name the lock", err)
 	}
-	if _, statErr := os.Stat(expectedTarballPath(options)); !os.IsNotExist(statErr) {
-		t.Errorf("dist/ still holds a tarball the lock does not describe: %v", statErr)
+	if content, err := os.ReadFile(previousTarball); err != nil || string(content) != "previous image" {
+		t.Errorf("the previous image was touched: %q, %v", content, err)
 	}
 	if result.WorkDir == "" {
-		t.Error("a failed build keeps its work directory")
+		t.Fatal("a failed build keeps its work directory")
+	}
+	if content, err := os.ReadFile(filepath.Join(result.WorkDir, "image.tar.gz")); err != nil || string(content) != "tarball" {
+		t.Errorf("the image just built is not back in the work directory: %q, %v", content, err)
+	}
+	assertNoTemporaryFiles(t, options.RecipeDir)
+}
+
+// TestBuildLeavesThePreviousPairWhenTheLockRenameFails: the realistic
+// failure, a lock that reads fine and cannot be replaced, with a previous
+// tarball and lock in dist/. The recipe directory is made read-only once the
+// build reaches the placing phase, which is after its temporary lock was
+// written there, so that only the rename fails.
+func TestBuildLeavesThePreviousPairWhenTheLockRenameFails(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root can write anywhere")
+	}
+	options, _ := newTestOptions(t)
+	lockPath := filepath.Join(options.RecipeDir, LockFileName)
+	previousTarball := expectedTarballPath(options)
+	if err := os.MkdirAll(filepath.Dir(previousTarball), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	previous := map[string]string{lockPath: "previous lock", previousTarball: "previous image"}
+	for path, content := range previous {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { _ = os.Chmod(options.RecipeDir, 0o755) })
+	options.Progress = ProgressFunc(func(event ProgressEvent) {
+		if event.Phase == PhasePlaceTarball && event.Kind == EventPhaseStarted {
+			if err := os.Chmod(options.RecipeDir, 0o555); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	result, err := buildWith(&fakeBootstrapper{}, options)
+	if err == nil || !strings.Contains(err.Error(), "placing lock") {
+		t.Fatalf("error = %v, want the lock's rename to fail", err)
+	}
+	for path, want := range previous {
+		if content, err := os.ReadFile(path); err != nil || string(content) != want {
+			t.Errorf("%s was touched: %q, %v", path, content, err)
+		}
+	}
+	if content, err := os.ReadFile(filepath.Join(result.WorkDir, "image.tar.gz")); err != nil || string(content) != "tarball" {
+		t.Errorf("the image just built is not back in the work directory: %q, %v", content, err)
+	}
+	// The temporary lock cannot be removed from a directory that is no
+	// longer writable, which is the directory's doing; dist/ is clean.
+	leftovers, err := filepath.Glob(filepath.Join(options.RecipeDir, "dist", "*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leftovers) != 0 {
+		t.Errorf("temporary files left in dist/: %q", leftovers)
+	}
+}
+
+// TestBuildRestoresThePreviousLockWhenTheTarballCannotBePlaced: the other
+// order of failure, the lock in place and the tarball's rename refused,
+// here by a directory where the tarball goes. dist/ must end as it began:
+// the previous lock byte for byte, or no lock when there was none, and no
+// image of this build.
+func TestBuildRestoresThePreviousLockWhenTheTarballCannotBePlaced(t *testing.T) {
+	options, _ := newTestOptions(t)
+	lockPath := filepath.Join(options.RecipeDir, LockFileName)
+	if err := os.WriteFile(lockPath, []byte("previous lock"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(expectedTarballPath(options), "occupied"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	result, err := buildWith(&fakeBootstrapper{}, options)
+	if err == nil || !strings.Contains(err.Error(), "placing tarball") {
+		t.Fatalf("error = %v, want the tarball's rename to fail", err)
+	}
+	if content, err := os.ReadFile(lockPath); err != nil || string(content) != "previous lock" {
+		t.Errorf("the previous lock was not put back: %q, %v", content, err)
+	}
+	if content, err := os.ReadFile(filepath.Join(result.WorkDir, "image.tar.gz")); err != nil || string(content) != "tarball" {
+		t.Errorf("the image just built is not back in the work directory: %q, %v", content, err)
+	}
+	assertNoTemporaryFiles(t, options.RecipeDir)
+
+	options, _ = newTestOptions(t)
+	if err := os.MkdirAll(filepath.Join(expectedTarballPath(options), "occupied"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := buildWith(&fakeBootstrapper{}, options); err == nil {
+		t.Fatal("a build whose tarball cannot be placed must fail")
+	}
+	if _, err := os.Stat(filepath.Join(options.RecipeDir, LockFileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("with no previous lock, none must be left, Stat error = %v", err)
 	}
 	assertNoTemporaryFiles(t, options.RecipeDir)
 }

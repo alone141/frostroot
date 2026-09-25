@@ -92,7 +92,7 @@ type Summary struct {
 	Fetched      int      // files downloaded, replacements included
 	Replaced     int      // corrupt files replaced
 	FetchedBytes int64    // bytes downloaded
-	Extra        []string // .deb files in the pool that the lock does not name
+	Extra        []string // files in the pool that the lock does not name; see Status.Extra
 }
 
 // Fetch makes options.Dir hold every entry: it verifies what is there,
