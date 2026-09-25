@@ -107,6 +107,15 @@ func Validate(imageRecipe Recipe) []string {
 	}
 	if indexURL := imageRecipe.PythonIndexURL(); indexURL != "" {
 		addProblem(CheckPythonIndexURL(indexURL))
+		// A recipe that asks for no package has no Python step, so a build
+		// writes no [python] table and the lock never records the index. An
+		// offline rebuild then compares the recipe's index_url with a lock
+		// that has none and fails, with advice to build online again, which
+		// writes the same lock. Only a hand-edited recipe gets here: the
+		// form drops the table with the last package.
+		if len(imageRecipe.PythonPackages()) == 0 {
+			problems = append(problems, "python.index_url is set but python.include names no package: nothing would resolve from the index, and the lock would not record it")
+		}
 	}
 	seenCertificateNames := map[string]bool{}
 	for _, certificatePath := range imageRecipe.CertificatePaths() {

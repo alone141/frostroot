@@ -296,3 +296,20 @@ func TestPythonIndexURL(t *testing.T) {
 		t.Errorf("PythonIndexURL with no table = %q, want empty", got)
 	}
 }
+
+func TestValidateRefusesAnIndexURLWithoutPackages(t *testing.T) {
+	// With no package to resolve, the build has no Python step and the lock
+	// never records the index; an offline rebuild would then fail on the
+	// index_url for ever, told to build online again, which changes nothing.
+	imageRecipe := loadValidRecipe(t)
+	imageRecipe.Python = &Python{Include: []string{}, IndexURL: "https://nexus.example.com/repository/pypi/simple"}
+	problems := Validate(imageRecipe)
+	if joined := strings.Join(problems, "\n"); !strings.Contains(joined, "python.index_url is set but python.include names no package") {
+		t.Errorf("Validate = %q, want the index without packages refused", problems)
+	}
+	// The same index with a package is what the README documents.
+	imageRecipe.Python.Include = []string{"requests"}
+	if problems := Validate(imageRecipe); len(problems) > 0 {
+		t.Errorf("Validate = %q, want a recipe with a package and an index accepted", problems)
+	}
+}

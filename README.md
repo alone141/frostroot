@@ -606,8 +606,11 @@ thing between the resolve and whatever answers, and the hashes that first
 resolve writes are pinned from then on. It must carry no credentials, since
 a recipe is committed and reviewed. It replaces PyPI rather than adding to
 it: `--extra-index-url` invites dependency confusion and is deliberately not
-offered. The field has no question in the form yet; write it by hand, and
-`frostroot edit` gives it back unchanged.
+offered. It needs at least one package in `include`: with none there is no
+Python step, so the lock would never record the index and an offline rebuild
+could never match it, and `validate` refuses the recipe. The field has no
+question in the form yet; write it by hand, and `frostroot edit` gives it
+back unchanged.
 
 ## Networks that inspect TLS
 
