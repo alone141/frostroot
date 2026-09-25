@@ -15,6 +15,12 @@
 # PowerShell 5.1 does not escape them for a native program, so 'say "hi"'
 # arrives as: say hi. Put a command that needs them in a script file.
 #
+# WSL passes no variable from the Windows side unless WSLENV names it, so a
+# $env:FROSTROOT_INTEGRATION_TIMEOUT set here would reach the script as
+# unset. Every FROSTROOT_* and E2E_* variable set here, and
+# SOURCE_DATE_EPOCH, is added to WSLENV for the call, and WSLENV is put back
+# afterwards.
+#
 # If script execution is disabled on this machine, run it as:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\wsl.ps1 COMMAND...
 $ErrorActionPreference = 'Stop'
@@ -29,5 +35,17 @@ if ($env:FROSTROOT_WSL_DISTRO) {
     $wslArgs += @('-d', $env:FROSTROOT_WSL_DISTRO)
 }
 $wslArgs += @('--cd', $root, '-e', 'bash', '-l', 'scripts/wsl-exec.sh')
-& wsl.exe @wslArgs @args
-exit $LASTEXITCODE
+$forwarded = Get-ChildItem Env: |
+    Where-Object { $_.Name -match '^(FROSTROOT_|E2E_)' -or $_.Name -eq 'SOURCE_DATE_EPOCH' } |
+    ForEach-Object { $_.Name }
+$savedWslEnv = $env:WSLENV
+try {
+    if ($forwarded) {
+        $env:WSLENV = (@($savedWslEnv) + @($forwarded) | Where-Object { $_ }) -join ':'
+    }
+    & wsl.exe @wslArgs @args
+    $status = $LASTEXITCODE
+} finally {
+    $env:WSLENV = $savedWslEnv
+}
+exit $status

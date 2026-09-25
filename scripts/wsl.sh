@@ -16,6 +16,10 @@
 #   - Git Bash rewrites arguments that look like POSIX paths (/var/tmp/x
 #     becomes C:/Program Files/Git/var/tmp/x) when calling a Windows
 #     program. MSYS_NO_PATHCONV turns that off.
+#   - WSL passes no variable from the Windows side unless WSLENV names it,
+#     so FROSTROOT_INTEGRATION_TIMEOUT=90m scripts/wsl.sh ... would reach
+#     the script as unset. Every FROSTROOT_* and E2E_* variable set here,
+#     and SOURCE_DATE_EPOCH, is added to WSLENV.
 set -euo pipefail
 
 if [ "$#" -eq 0 ]; then
@@ -27,5 +31,9 @@ distro=()
 if [ -n "${FROSTROOT_WSL_DISTRO:-}" ]; then
 	distro=(-d "$FROSTROOT_WSL_DISTRO")
 fi
+while IFS= read -r name; do
+	WSLENV="${WSLENV:+$WSLENV:}$name"
+done < <(compgen -e | grep -E '^(FROSTROOT_|E2E_)|^SOURCE_DATE_EPOCH$' || true)
+export WSLENV="${WSLENV:-}"
 export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
 exec wsl.exe "${distro[@]}" --cd "$root" -e bash -l scripts/wsl-exec.sh "$@"

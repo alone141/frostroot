@@ -52,6 +52,11 @@ Hand-typed alternatives break in ways that are easy to miss:
   calls a Windows program. `scripts/wsl.sh` switches that off.
 - golangci-lint is installed in `$(go env GOPATH)/bin`, which no login
   profile puts on PATH. `scripts/wsl-exec.sh` adds it.
+- A variable set on the Windows side reaches WSL only if `WSLENV` names
+  it. The wrappers forward every `FROSTROOT_*` and `E2E_*` variable and
+  `SOURCE_DATE_EPOCH`, so `FROSTROOT_INTEGRATION_TIMEOUT=90m scripts/wsl.sh
+  scripts/integration.sh` works. Any other variable has to be set inside
+  WSL.
 - Windows PowerShell 5.1 drops the double quotes inside an argument it
   passes to a native program. Put anything that needs them in a script file.
 - frostroot refuses to build under `/mnt`, a Windows drive.
