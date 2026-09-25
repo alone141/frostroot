@@ -1103,6 +1103,24 @@ func TestBuildOfflineRefusesBeforeAnyWork(t *testing.T) {
 			wantText:  "python index_url is https://nexus.example.com/repository/pypi/simple, the lock resolved from PyPI",
 		},
 		{
+			// The lock's lines become the image's sources.list. With none
+			// staged, the line mmdebstrap installs from, a [trusted=yes]
+			// copy:// of this build's work directory, would be what the
+			// image keeps, and two rebuilds would differ in it.
+			name: "lock without sources",
+			prepare: func(t *testing.T, options Options) recipe.Recipe {
+				t.Helper()
+				lock := writeVendoredLock(t, options)
+				lock.Sources = nil
+				if err := recipe.SaveLock(filepath.Join(options.RecipeDir, LockFileName), lock); err != nil {
+					t.Fatal(err)
+				}
+				return sampleRecipe()
+			},
+			wantError: pool.ErrBadLock,
+			wantText:  "records no sources",
+		},
+		{
 			name: "pool incomplete",
 			prepare: func(t *testing.T, options Options) recipe.Recipe {
 				t.Helper()

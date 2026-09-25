@@ -92,6 +92,15 @@ func planOffline(recipeDir string, imageRecipe recipe.Recipe, release distro.Rel
 	if err != nil {
 		return nil, err
 	}
+	// The lock's source lines become the image's sources.list. With none,
+	// nothing would be staged in their place, and the line mmdebstrap was
+	// given to install from, deb [trusted=yes] copy://<work directory>/pool,
+	// would stay in the image: a build host's scratch path, trusted, and
+	// different in every rebuild. Every frostroot that wrote a lock wrote the
+	// lines, so an empty list is an edited lock.
+	if len(lock.Sources) == 0 {
+		return nil, fmt.Errorf("%w: it records no sources, so the image's sources.list cannot be written; run frostroot build online, then frostroot vendor", pool.ErrBadLock)
+	}
 	var differences []string
 	if lock.Release != imageRecipe.Image.Release || lock.Suite != release.Suite {
 		differences = append(differences, fmt.Sprintf("release %s in the lock, %s in the recipe", lock.Release, imageRecipe.Image.Release))
