@@ -22,7 +22,7 @@ On a Windows checkout, run these through `scripts/wsl.sh` or
 
 | Scenario | Proves | Takes |
 |---|---|---|
-| `offline-identical` | Two offline rebuilds of one lock are byte-identical, the Python environment included, and leave the lock as it was. | ~30 min |
+| `offline-identical` | Two offline rebuilds of one lock are byte-identical, the Python environment included, whatever `PYTHON` variables the build host has set, and leave the lock as it was. | ~30 min |
 | `certificates` | `[certificates]` reaches the image and the lock. `--ca-bundle` reaches neither. Offline rebuilds are the same bytes with and without it. An offline build refuses a certificate changed under the lock. | ~30 min |
 | `no-build-leaks` | Two online builds frozen at one instant over HTTPS, one plain and one with `--ca-bundle` and `--insecure`, come out the same bytes. No file in the image names the build's work directory. | ~15 min |
 | `insecure` | `build --insecure` warns and marks the Python resolve unverified in the lock. `vendor` and `build --offline` repeat the warning, and a verified `vendor` reports what it checked. | ~25 min |

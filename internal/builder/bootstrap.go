@@ -292,11 +292,31 @@ func checkKeyring(spec BootstrapSpec) error {
 // is also why WaitDelay stays unset, since Go kills the child when it expires.
 func runInterruptibly(ctx context.Context, program string, args, environment []string, stdout, stderr io.Writer) error {
 	command := exec.CommandContext(ctx, program, args...)
-	command.Env = append(os.Environ(), environment...)
+	command.Env = append(hostEnvironment(os.Environ()), environment...)
 	command.Stdout = stdout
 	command.Stderr = stderr
 	interruptOnCancel(command)
 	return command.Run()
+}
+
+// hostEnvironment returns the build host's environment without what would
+// reach the image through it. mmdebstrap hands its own environment to every
+// command it runs in the chroot, dpkg's maintainer scripts included, and
+// unsets only TMPDIR and APT_CONFIG. Python reads a dozen variables out of
+// it: with PYTHONPYCACHEPREFIX set on the host, py3compile wrote every
+// package's caches under <prefix>/usr/lib/python3/ inside the image, a
+// directory named after the host, and PYTHONDONTWRITEBYTECODE would have
+// written none. pip's PIP_ variables go with them. The Python hook drops
+// both again for itself, then sets the few it wants.
+func hostEnvironment(environ []string) []string {
+	kept := make([]string, 0, len(environ))
+	for _, entry := range environ {
+		if strings.HasPrefix(entry, "PYTHON") || strings.HasPrefix(entry, "PIP_") {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept
 }
 
 // tailBuffer is an io.Writer that keeps only the last capacity bytes written

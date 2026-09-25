@@ -106,16 +106,25 @@ export PATH
 SOURCE_DATE_EPOCH={{.SourceDateEpoch}}
 export SOURCE_DATE_EPOCH
 {{- end}}
+# The hook inherits the build user's environment, and Python reads a dozen
+# variables out of it: PYTHONPYCACHEPREFIX sends every cache the compileall
+# below writes to <prefix>/<absolute path>/, a directory in the image named
+# after the build host, and PYTHONDONTWRITEBYTECODE writes none. Two hosts
+# must make one tarball from one lock, so every PYTHON variable goes, before
+# the one the script wants is set.
+for pythonVariable in $(env | sed -n 's/^\(PYTHON[A-Za-z0-9_]*\)=.*/\1/p'); do
+	unset "$pythonVariable"
+done
 # Compiling a module that holds a set constant marshals it in the order that
 # run's hash seed produced, and 3.8 does not sort it, so two rebuilds of one
 # lock differed in a couple of hundred caches. A fixed seed makes what is
 # written depend on the sources alone.
 PYTHONHASHSEED=0
 export PYTHONHASHSEED
-# The hook inherits the build user's environment, and pip writes under $HOME:
-# a real build left the builder's own /home/<name>/.cache inside the image.
-# Root's home is where a root process belongs, and the cache is refused
-# outright, since nothing in the image will install from it again.
+# pip writes under $HOME: a real build left the builder's own
+# /home/<name>/.cache inside the image. Root's home is where a root process
+# belongs, and the cache is refused outright, since nothing in the image
+# will install from it again.
 HOME=/root
 export HOME
 

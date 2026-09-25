@@ -619,3 +619,22 @@ func TestTailBuffer(t *testing.T) {
 		})
 	}
 }
+
+// TestRunInterruptiblyDropsTheHostsPythonEnvironment: mmdebstrap passes its
+// environment on to dpkg's maintainer scripts, and py3compile is Python. A
+// PYTHONPYCACHEPREFIX on the build host put 930 caches under a directory
+// named after the host into a real image, and the hook's own sweep could do
+// nothing about caches the packages wrote.
+func TestRunInterruptiblyDropsTheHostsPythonEnvironment(t *testing.T) {
+	t.Setenv("PYTHONPYCACHEPREFIX", "/home/builder/.cache/host-bytecode")
+	t.Setenv("PYTHONDONTWRITEBYTECODE", "1")
+	t.Setenv("PIP_INDEX_URL", "https://nexus.invalid/simple")
+	var output bytes.Buffer
+	err := runInterruptibly(context.Background(), "sh", []string{"-c", `printf %s "${PYTHONPYCACHEPREFIX-unset}:${PYTHONDONTWRITEBYTECODE-unset}:${PIP_INDEX_URL-unset}:$TMPDIR:$PATH"`}, []string{"TMPDIR=/work/dir"}, &output, &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "unset:unset:unset:/work/dir:" + os.Getenv("PATH"); output.String() != want {
+		t.Fatalf("the child saw %q, want %q: nothing of the host's Python, and the rest as it was", output.String(), want)
+	}
+}
