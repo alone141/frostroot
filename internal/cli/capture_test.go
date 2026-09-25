@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -269,5 +270,111 @@ func TestCaptureDeclinedWritesNoCertificates(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(recipeDir); len(entries) != 0 {
 		t.Errorf("declining must leave the directory as it was, found %v", entries)
+	}
+}
+
+// TestCaptureLeavesAnExistingCertificateAlone: a file the person put beside
+// the recipe is theirs. A capture that is declined must leave it byte for
+// byte as it was, and a capture that is written must not replace it with
+// the machine's bytes either; the Trust page checks what it holds.
+func TestCaptureLeavesAnExistingCertificateAlone(t *testing.T) {
+	recipeDir := t.TempDir()
+	root := fakeUbuntuRoot(t, "24.04")
+	withLocalAuthority(t, root, corpCertificatePEM(t))
+	own := []byte("# the person's own file, not a certificate at all\n")
+	ownPath := filepath.Join(recipeDir, "certs", "corp-root.pem")
+	if err := os.MkdirAll(filepath.Dir(ownPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ownPath, own, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, answer := range []string{"n", "y"} {
+		exitCode, _, stderr := runCaptureWithAnswers(recipeDir, root, answersWith(map[int]string{answerWrite: answer}), "--force")
+		// Written or declined, the outcome is not the point; the file is.
+		t.Logf("answer %q: exit %d, stderr %q", answer, exitCode, stderr)
+		after, err := os.ReadFile(ownPath)
+		if err != nil {
+			t.Fatalf("after answering %q the file is gone: %v", answer, err)
+		}
+		if !bytes.Equal(after, own) {
+			t.Errorf("after answering %q the file holds the machine's bytes, not the person's", answer)
+		}
+	}
+}
+
+// TestCaptureKeepsCertificatesTheWrittenRecipeNames: the form writes the
+// recipe and can still fail afterwards, saving a source's key. The recipe
+// on disk then names the certificate files, and a certificate read off a
+// machine cannot be fetched again the way a key can, so they stay.
+func TestCaptureKeepsCertificatesTheWrittenRecipeNames(t *testing.T) {
+	recipeDir := t.TempDir()
+	root := fakeUbuntuRoot(t, "24.04")
+	withLocalAuthority(t, root, corpCertificatePEM(t))
+	// A source with its key, which the form saves after writing the recipe,
+	// and a stray file where the keys directory would go, so that the save
+	// fails and nothing else does.
+	for relative, content := range map[string][]byte{
+		"etc/apt/sources.list.d/docker.list": []byte("deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable\n"),
+		"etc/apt/keyrings/docker.asc":        dockerKeyFixture(t),
+	} {
+		path := filepath.Join(root, filepath.FromSlash(relative))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(recipeDir, "keys"), []byte("not a directory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	exitCode, _, stderr := runCaptureWithAnswers(recipeDir, root, answersWith(nil))
+	if exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d for a key that could not be saved; stderr %s", exitCode, exitUserError, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(recipeDir, "frostroot.toml")); err != nil {
+		t.Fatalf("the recipe was not written before the key failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(recipeDir, "certs", "corp-root.pem")); err != nil {
+		t.Errorf("the certificate the written recipe names was removed: %v", err)
+	}
+	if !strings.Contains(stderr, "frostroot edit fetches them again") {
+		t.Errorf("stderr does not say how to get the key:\n%s", stderr)
+	}
+}
+
+// TestCaptureRemovesWhatItWroteWhenAWriteFails: a certificate that cannot be
+// written ends the capture before the form, and the ones written before it
+// are not left behind.
+func TestCaptureRemovesWhatItWroteWhenAWriteFails(t *testing.T) {
+	recipeDir := t.TempDir()
+	root := fakeUbuntuRoot(t, "24.04")
+	authority := corpCertificatePEM(t)
+	withLocalAuthority(t, root, authority)
+	// A second authority whose target cannot be created: a directory stands
+	// where the file would go, and sorts after corp-root.
+	second := filepath.Join(root, "usr", "local", "share", "ca-certificates", "zz-second.crt")
+	if err := os.WriteFile(second, authority, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(recipeDir, "certs", "zz-second.pem"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	exitCode, _, stderr := runCaptureWithAnswers(recipeDir, root, answersWith(nil))
+	if exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d; stderr %s", exitCode, exitUserError, stderr)
+	}
+	if !strings.Contains(stderr, "zz-second.pem") {
+		t.Errorf("stderr does not name the file that could not be written:\n%s", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(recipeDir, "certs", "corp-root.pem")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the certificate written before the failure was left behind: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(recipeDir, "frostroot.toml")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a capture that failed before the form wrote a recipe: %v", err)
 	}
 }
