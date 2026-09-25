@@ -631,7 +631,14 @@ func TestBuildMirrorFlagReachesBuilder(t *testing.T) {
 }
 
 func TestBuildRejectsInvalidMirror(t *testing.T) {
-	invalidMirrorURLs := []string{"ftp://mirror.example/ubuntu", "mirror.example/ubuntu", "http://", "http://mirror.example/ubu ntu"}
+	// The same rule as a source URL, since the mirror lands in the same deb
+	// lines: apt comments out everything after a "#", so a URL ending in one
+	// once produced a line with no suite and no components, and brackets
+	// would be read as options. Credentials would ship in the image.
+	invalidMirrorURLs := []string{
+		"ftp://mirror.example/ubuntu", "mirror.example/ubuntu", "http://", "http://mirror.example/ubu ntu",
+		"http://mirror.example/ubuntu#", "http://mirror.example/[ubuntu]", "http://user:secret-token@mirror.example/ubuntu",
+	}
 	for _, mirrorURL := range invalidMirrorURLs {
 		t.Run(mirrorURL, func(t *testing.T) {
 			bootstrapper := &fakeBootstrapper{}
@@ -642,6 +649,14 @@ func TestBuildRejectsInvalidMirror(t *testing.T) {
 			}
 			if bootstrapper.bootstrapRan() {
 				t.Error("the bootstrap must not run")
+			}
+			// The message validate gives a source, so that the flag and the
+			// recipe field are refused in the same words.
+			if !strings.Contains(stderr.String(), "--mirror") || !strings.Contains(stderr.String(), "invalid source url") {
+				t.Errorf("stderr should refuse the mirror as validate refuses a source URL:\n%s", stderr.String())
+			}
+			if strings.Contains(stderr.String(), "secret-token") {
+				t.Errorf("stderr quotes the credentials:\n%s", stderr.String())
 			}
 		})
 	}

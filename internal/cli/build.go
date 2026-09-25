@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -358,12 +357,14 @@ func (a *App) reportKeptWorkDir(workDir string) {
 	}
 }
 
-// validateMirrorURL accepts http and https URLs with a host. The URL becomes
-// part of apt source lines, so whitespace would split it.
+// validateMirrorURL applies the recipe's source URL rule to --mirror. The
+// URL becomes part of the deb lines the image keeps, where a space splits
+// the line, a bracket is read as an option, "#" comments out the suite and
+// the components, and credentials ship in the image. One rule, in one
+// place: a copy of it here once drifted to refusing whitespace alone.
 func validateMirrorURL(mirrorURL string) error {
-	parsed, err := url.Parse(mirrorURL)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || strings.ContainsAny(mirrorURL, " \t\r\n") {
-		return fmt.Errorf("--mirror %q: expected an http or https URL such as http://mirror.example.com/ubuntu", mirrorURL)
+	if err := recipe.CheckSourceURL(mirrorURL); err != nil {
+		return fmt.Errorf("--mirror: %w", err)
 	}
 	return nil
 }
