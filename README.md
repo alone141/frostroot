@@ -2,7 +2,7 @@
 
 **Freeze an Ubuntu root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
 
-> **Status: v0.13.0.** `init`, `edit`, `capture`, `validate`, `build`,
+> **Status: v0.13.1.** `init`, `edit`, `capture`, `validate`, `build`,
 > `vendor` and `build --offline` work, a recipe can add third-party apt
 > sources (PPAs, Docker, Node.js, VS Code...), Python packages from PyPI and
 > certificate authorities for a network that inspects TLS, and two offline
@@ -1054,11 +1054,15 @@ authorities they cannot verify, capture an image frostroot built, and drive
 the full-screen form in a real pseudo-terminal. `scripts/e2e/run.sh` lists
 them.
 
-**The WSL boot check is manual**, because no CI runner can run `wsl --import`.
-For every release you ship, import the tarball and check: `whoami` is your
-user, `sudo -n id` needs no password, `systemctl is-system-running` is
-`running` or `degraded`, `getent hosts archive.ubuntu.com` resolves, `locale`
-has no warnings, and `date` shows the recipe's timezone. For v0.1.0 this was
+**The WSL boot check cannot run in CI**, because no runner can run
+`wsl --import`. On a WSL host, `scripts/e2e/run.sh wsl-boot` makes it: it
+builds an image, imports it as a throwaway distribution, checks it at first
+login and removes it, and `E2E_FROSTROOT` puts a release's binary through
+it. For every release you ship, run it, or import the tarball and check by
+hand: `whoami` is your user, `sudo -n id` needs no password,
+`systemctl is-system-running` is `running` or `degraded`,
+`getent hosts archive.ubuntu.com` resolves, `locale` has no warnings, and
+`date` shows the recipe's timezone. For v0.1.0 this was
 done on Windows 11 with WSL 2.6.3 for all three releases, along with the
 failure paths; the results are recorded in the
 [feasibility analysis](docs/superpowers/reviews/2026-09-15-frostroot-feasibility.md#release-verification-v010-2026-09-16).
@@ -1200,6 +1204,21 @@ over a verified connection. `build --offline` repeated the warning and
 rebuilt the image in 447 s, every package as locked; `build --offline
 --insecure` noted that nothing is fetched and did the same. The image's
 `etc/apt/apt.conf.d` held no trust setting of any kind.
+
+For v0.13.1 the first login, which this section asks to be checked for
+every release, was checked by the new `wsl-boot` scenario with the
+**v0.13.0 release binary**, the one people download: a 24.04 image with
+`git`, `requests` and a `[certificates]` authority built in 467 s, imported
+as a throwaway distribution in 9 s through `wsl.exe` from inside WSL, and at
+first login: the recipe's user, passwordless sudo,
+`systemctl is-system-running` = `running`, DNS, a locale without warnings,
+UTC, `python3` at `/opt/frostroot/venv/bin/python3` with `requests` 2.34.2
+and pip 24.3.1, the authority trusted by the image's store, and apt holding
+no setting of the build's; then the distribution was removed. The four
+fixes of v0.13.1 are each pinned by a test that fails with the fix
+reverted, run with `scripts/mutate.sh` and recorded in the commit; the
+index bound was also measured, a body that would expand to 80 MB being
+refused with under 32 MB allocated.
 
 
 ## Documentation
