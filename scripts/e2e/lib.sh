@@ -77,11 +77,20 @@ e2e_require_bootstrap() {
 }
 
 # e2e_build_frostroot builds the checkout's binary into the lab: $FROSTROOT.
+# With E2E_FROSTROOT naming a binary, that one is copied in instead, which
+# is how a release's own binary is put through a scenario.
 e2e_build_frostroot() {
-	e2e_require go
 	FROSTROOT=$LAB/frostroot
-	if ! (cd "$e2eRepo" && go build -o "$FROSTROOT" ./cmd/frostroot); then
-		e2e_abort "go build failed"
+	if [ -n "${E2E_FROSTROOT:-}" ]; then
+		if [ ! -f "$E2E_FROSTROOT" ]; then
+			e2e_abort "E2E_FROSTROOT=$E2E_FROSTROOT is not a file"
+		fi
+		cp "$E2E_FROSTROOT" "$FROSTROOT" && chmod 755 "$FROSTROOT" || e2e_abort "could not copy $E2E_FROSTROOT"
+	else
+		e2e_require go
+		if ! (cd "$e2eRepo" && go build -o "$FROSTROOT" ./cmd/frostroot); then
+			e2e_abort "go build failed"
+		fi
 	fi
 	echo "binary: $("$FROSTROOT" version | head -1)"
 }

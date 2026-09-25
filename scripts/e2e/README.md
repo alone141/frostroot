@@ -31,6 +31,7 @@ On a Windows checkout, run these through `scripts/wsl.sh` or
 | `failed-build` | A misspelled package fails the build with exit 2. apt's own explanation is printed first, and neither a lock nor a tarball is written. | ~2 min |
 | `capture-roundtrip` | `capture` of an image frostroot built writes a recipe that validates and asks for the same packages. | ~10 min |
 | `tui` | The full-screen form draws in a pseudo-terminal, searches the real archive and PyPI, and writes what was picked. | ~3 min |
+| `wsl-boot` | An image imports into WSL and boots: the user, sudo, systemd, DNS, locale, timezone, the Python environment, the recipe's certificate authority, and apt still verifying TLS. Needs `wsl.exe`, so it skips anywhere but WSL. `E2E_FROSTROOT=/path/to/binary` puts a release's binary through it. | ~15 min |
 | `harness` | The harness reports a failure when it should, and never removes anything outside its root. | seconds |
 
 AGENTS.md has a list of which change calls for which scenario.
@@ -96,6 +97,8 @@ e2e_end
 
 `lib.sh` provides these:
 
+- `e2e_build_frostroot` builds the checkout's binary into the lab as
+  `$FROSTROOT`, or copies in the one `E2E_FROSTROOT` names.
 - `e2e_run LABEL DIR COMMAND...` runs a command, with its output in
   `$LAB/LABEL.out` and `$LAB/LABEL.err`, and its exit status in
   `$e2eStatus`. Standard input is `/dev/null` unless `E2E_STDIN` names a
