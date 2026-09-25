@@ -242,7 +242,20 @@ func fetchPyPI(ctx context.Context, options Options) ([]Project, error) {
 		return nil, fmt.Errorf("%s: %s", url, response.Status)
 	}
 	total := response.ContentLength
-	counted := &countingReader{reader: response.Body, onRead: func(count int64) {
+	// A Content-Length bounds the body already: the client stops at it.
+	// A body sent without one, chunked, would be read to whatever end the
+	// server chose, so it gets a ceiling nothing legitimate reaches, read
+	// before decompression. One byte past the ceiling tells a longer body
+	// from one of exactly that size.
+	ceiling := options.MaxBodyBytes
+	if ceiling <= 0 {
+		ceiling = DefaultMaxBodyBytes
+	}
+	if total >= 0 {
+		ceiling = total
+	}
+	bounded := &boundedReader{reader: response.Body, limit: ceiling + 1}
+	counted := &countingReader{reader: bounded, onRead: func(count int64) {
 		if options.Progress != nil {
 			options.Progress(count, total)
 		}
@@ -260,7 +273,19 @@ func fetchPyPI(ctx context.Context, options Options) ([]Project, error) {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
+		if errors.Is(err, errTooLarge) || counted.count > ceiling {
+			return nil, fmt.Errorf("%s: %w", url, errTooLarge)
+		}
 		return nil, fmt.Errorf("%s: %w", url, err)
+	}
+	// The decoder stops at the document's closing brace; whatever a server
+	// sends after it is read up to the ceiling, and one byte past it is the
+	// whole of what a longer body gets to say.
+	if _, err := io.Copy(io.Discard, counted); err != nil && !errors.Is(err, errTooLarge) {
+		return nil, fmt.Errorf("%s: %w", url, err)
+	}
+	if counted.count > ceiling {
+		return nil, fmt.Errorf("%s: %w", url, errTooLarge)
 	}
 	if len(projects) == 0 {
 		return nil, fmt.Errorf("%s lists no projects", url)

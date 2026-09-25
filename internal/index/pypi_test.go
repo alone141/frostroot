@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -297,4 +298,88 @@ func gzipped(t *testing.T, text string) []byte {
 		t.Fatal(err)
 	}
 	return buffer.Bytes()
+}
+
+// TestOpenPyPIRefusesABodyPastTheCeiling: a body with a Content-Length is
+// cut at it by the client itself, so the one that can run away is a body
+// sent without one, chunked, which used to be read to whatever end the
+// server chose. It is cut at the ceiling instead, however much it would
+// have parsed to.
+func TestOpenPyPIRefusesABodyPastTheCeiling(t *testing.T) {
+	served := newSimpleIndex(t)
+	options := pypiOptionsFor(t, served)
+	options.MaxBodyBytes = 64 << 10
+	// Every byte the client takes off the wire is counted, so that the test
+	// can tell a read that stopped at the ceiling from one that read it all
+	// and refused afterwards.
+	var read atomic.Int64
+	options.Client = &http.Client{Transport: &countingTransport{base: http.DefaultTransport, read: &read}}
+	document, err := os.ReadFile(filepath.Join("testdata", "pypi-simple.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The genuine document, whole, and then a tail past the ceiling, in
+	// chunks: with no Content-Length set, the standard library sends a
+	// flushed body chunked, and the client has no length to stop at.
+	tail := strings.Repeat(`{"name": "filler"}`, 20_000)
+	served.answer = func(response http.ResponseWriter) bool {
+		response.Header().Set("Content-Type", pypiSimpleJSON)
+		flusher, canFlush := response.(http.Flusher)
+		if !canFlush {
+			t.Error("the test server cannot flush")
+			return true
+		}
+		_, _ = response.Write(document)
+		flusher.Flush()
+		for chunk := 0; chunk < len(tail); chunk += 4096 {
+			if _, err := response.Write([]byte(tail[chunk:min(chunk+4096, len(tail))])); err != nil {
+				return true // the client stopped reading, as it should
+			}
+			flusher.Flush()
+		}
+		return true
+	}
+
+	_, err = OpenPyPI(context.Background(), options)
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, errTooLarge) {
+		t.Fatalf("OpenPyPI = %v, want ErrUnavailable wrapping errTooLarge", err)
+	}
+	if read.Load() > options.MaxBodyBytes+1 {
+		t.Errorf("the client read %d bytes of a body it should have stopped reading at %d", read.Load(), options.MaxBodyBytes+1)
+	}
+
+	// The same document, whole, with a Content-Length: a body of exactly
+	// its declared length is what every index is, and the ceiling does not
+	// apply to it.
+	served.answer = nil
+	options.MaxBodyBytes = 1
+	if opened, err := OpenPyPI(context.Background(), options); err != nil || opened.Len() != 15 {
+		t.Errorf("OpenPyPI with a declared length below the ceiling = %v, %v; want the index", opened, err)
+	}
+}
+
+// countingTransport counts the bytes read from every response body.
+type countingTransport struct {
+	base http.RoundTripper
+	read *atomic.Int64
+}
+
+func (c *countingTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	response, err := c.base.RoundTrip(request)
+	if err != nil {
+		return nil, err
+	}
+	response.Body = &countingBody{ReadCloser: response.Body, read: c.read}
+	return response, nil
+}
+
+type countingBody struct {
+	io.ReadCloser
+	read *atomic.Int64
+}
+
+func (c *countingBody) Read(buffer []byte) (int, error) {
+	count, err := c.ReadCloser.Read(buffer)
+	c.read.Add(int64(count))
+	return count, err
 }

@@ -30,6 +30,33 @@ const responseHeaderTimeout = 30 * time.Second
 // published between the two requests, or the download was cut.
 var errChanged = errors.New("does not match its Release entry")
 
+// errTooLarge means a body kept coming past the size that bounds it: what
+// its Release entry declared, or Options.MaxBodyBytes when nothing did.
+// Nothing past that byte is read: the size is what bounds the download,
+// and a server that declares one thing and sends another is refused at
+// the bound rather than parsed to the end.
+var errTooLarge = errors.New("longer than its declared size")
+
+// boundedReader reads at most limit bytes and then reports errTooLarge
+// rather than EOF, so a caller knows the body was cut short rather than
+// finished.
+type boundedReader struct {
+	reader io.Reader
+	limit  int64 // bytes still allowed
+}
+
+func (b *boundedReader) Read(buffer []byte) (int, error) {
+	if b.limit <= 0 {
+		return 0, errTooLarge
+	}
+	if int64(len(buffer)) > b.limit {
+		buffer = buffer[:b.limit]
+	}
+	count, err := b.reader.Read(buffer)
+	b.limit -= int64(count)
+	return count, err
+}
+
 // listedFile is one line of a Release file's SHA256 section.
 type listedFile struct {
 	path   string // below dists/<pocket>/
@@ -228,6 +255,12 @@ func (f *fetcher) pocket(plan pocketPlan) ([]Entry, error) {
 // decompressed, and parsed paragraph by paragraph, so neither the 15 MB
 // file nor its 73 MB of text is ever held. The entries count only once the
 // size and the digest are what Release said.
+//
+// The size Release declared bounds the read, before decompression, so a
+// server that keeps sending is cut off at that byte rather than parsed to
+// the end: an index whose 1.7 MB expanded to 144 MB of stanzas once took
+// 278 MB of heap before the size was ever compared, and a larger one would
+// have ended the process, not the source.
 func (f *fetcher) file(pocket, component string, file listedFile) ([]Entry, error) {
 	url := f.baseURL + "/dists/" + pocket + "/" + file.path
 	body, err := f.get(url)
@@ -236,7 +269,10 @@ func (f *fetcher) file(pocket, component string, file listedFile) ([]Entry, erro
 	}
 	defer func() { _ = body.Close() }() // the body has been read or the fetch failed
 	hasher := sha256.New()
-	counted := &countingReader{reader: io.TeeReader(body, hasher), onRead: func(count int64) {
+	// One byte past the declared size is enough to tell a longer body from
+	// one of exactly that size, and is all a longer one gets to send.
+	bounded := &boundedReader{reader: body, limit: file.size + 1}
+	counted := &countingReader{reader: io.TeeReader(bounded, hasher), onRead: func(count int64) {
 		f.doneBytes += count
 		f.pocketBytes += count
 		if f.progress != nil {
@@ -258,13 +294,19 @@ func (f *fetcher) file(pocket, component string, file listedFile) ([]Entry, erro
 		if f.ctx.Err() != nil {
 			return nil, f.ctx.Err()
 		}
+		if errors.Is(err, errTooLarge) || counted.count > file.size {
+			return nil, fmt.Errorf("%s: %w", url, errTooLarge)
+		}
 		// A cut download fails in the decompressor before the digest is
 		// ever compared.
 		return nil, fmt.Errorf("%s: %w: %w", url, errChanged, err)
 	}
 	// A decompressor may stop before the last bytes of its input.
-	if _, err := io.Copy(io.Discard, counted); err != nil {
+	if _, err := io.Copy(io.Discard, counted); err != nil && !errors.Is(err, errTooLarge) {
 		return nil, fmt.Errorf("%s: %w", url, err)
+	}
+	if counted.count > file.size {
+		return nil, fmt.Errorf("%s: %w", url, errTooLarge)
 	}
 	if counted.count != file.size || hex.EncodeToString(hasher.Sum(nil)) != file.sha256 {
 		return nil, fmt.Errorf("%s: %w", url, errChanged)

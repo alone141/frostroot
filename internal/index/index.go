@@ -81,7 +81,17 @@ type Options struct {
 	// the fetching goroutine, often.
 	Progress func(doneBytes, totalBytes int64)
 	Now      func() time.Time // nil means time.Now
+	// MaxBodyBytes bounds a download whose size nothing declares: a simple
+	// index sent without a Content-Length. 0 means DefaultMaxBodyBytes. An
+	// apt index is bounded by the size its Release entry declares instead,
+	// and a body with a Content-Length by that.
+	MaxBodyBytes int64
 }
+
+// DefaultMaxBodyBytes is the most a download whose size nothing declares
+// may be. PyPI's own simple index is 40 MB gzipped, and nothing legitimate
+// is ten times that.
+const DefaultMaxBodyBytes = 512 << 20
 
 // Index is the packages of one release, sorted by name, and of any sources
 // merged into it.

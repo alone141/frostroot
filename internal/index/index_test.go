@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"github.com/ulikunitz/xz"
 
 	"frostroot/internal/distro"
+	"frostroot/internal/index/indextest"
 )
 
 // testNow is when every test runs.
@@ -423,5 +425,67 @@ func TestCacheDir(t *testing.T) {
 	options.CacheDir = ""
 	if opened, err := Open(context.Background(), options); err != nil || opened.Len() != 17 {
 		t.Errorf("Open without a cache directory = %v, %v", opened, err)
+	}
+}
+
+// TestOpenRefusesAnIndexLongerThanReleaseDeclares: the size Release lists
+// bounds the download before anything is parsed. A body that keeps coming
+// past it is refused at that byte, however much it would expand to, so a
+// repository cannot end the process where it should only fail its own
+// source. The tail here would expand to about 200 MB of stanzas if it were
+// ever read; the read stops at the declared size plus one byte.
+func TestOpenRefusesAnIndexLongerThanReleaseDeclares(t *testing.T) {
+	served := newArchive(t, ".gz")
+	options := optionsFor(t, served)
+	universe := "/dists/noble/universe/binary-amd64/Packages.gz"
+	good := served.files[universe]
+	// A gzip member of one hugely repetitive stanza, appended after the
+	// genuine member: gzip readers concatenate members, so a reader that
+	// ignored the declared size would decompress and keep it all.
+	stanza := "Package: filler\nVersion: 1\nDescription: " + strings.Repeat("x", 4000) + "\n\n"
+	tail := compress(t, ".gz", []byte(strings.Repeat(stanza, 20_000)))
+	served.intercept = func(writer http.ResponseWriter, request *http.Request) bool {
+		if request.URL.Path != universe {
+			return false
+		}
+		_, _ = writer.Write(append(append([]byte(nil), good...), tail...))
+		return true
+	}
+
+	var heapBefore, heapAfter runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&heapBefore)
+	_, err := Open(context.Background(), options)
+	runtime.ReadMemStats(&heapAfter)
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, errTooLarge) {
+		t.Fatalf("Open = %v, want ErrUnavailable wrapping errTooLarge", err)
+	}
+	if errors.Is(err, errChanged) {
+		t.Errorf("err = %v; a body that is too long is not a body that changed", err)
+	}
+	// The tail is 80 MB decompressed; a bounded read allocates a small
+	// multiple of the declared size and no more.
+	if allocated := heapAfter.TotalAlloc - heapBefore.TotalAlloc; allocated > 32<<20 {
+		t.Errorf("Open allocated %d MB reading a body it should have cut off at %d bytes", allocated>>20, len(good)+1)
+	}
+	if _, err := os.Stat(cachePath(options, archiveTarget(options))); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("an index that was too long was cached: %v", err)
+	}
+}
+
+// A source that overruns its declared size fails alone, and is not asked
+// again: a changed file is worth a second request, because the mirror may
+// have finished publishing, but a file that is too long stays too long.
+func TestOpenSourceThatOverrunsItsSizeFailsAlone(t *testing.T) {
+	served := indextest.Serve(t, "noble", dockerPackages)
+	served.Overrun = strings.Repeat("Package: filler\nVersion: 1\n\n", 100_000)
+	docker := Source{Name: "docker", URL: served.URL, Suite: "noble", Components: []string{"main"}}
+
+	_, err := OpenSource(context.Background(), sourceOptionsFor(t), docker)
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, errTooLarge) {
+		t.Fatalf("OpenSource = %v, want ErrUnavailable wrapping errTooLarge", err)
+	}
+	if served.Requests() != 2 {
+		t.Errorf("requests = %d, want the InRelease and one Packages file: a body that is too long is not fetched twice", served.Requests())
 	}
 }
