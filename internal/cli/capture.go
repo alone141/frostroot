@@ -74,14 +74,14 @@ func (a *App) runCapture(args []string) int {
 		removeCapturedCertificates(writtenCertificates)
 		return exitUserError
 	}
-	if exitCode := a.runRecipeForm("capture", form.FromRecipe(snapshot.Recipe()), recipePath, *plain, snapshot.Keys, intro, indexes); exitCode != exitSuccess {
+	if exitCode := a.runRecipeForm("capture", form.FromRecipe(snapshot.Recipe()), recipePath, *overwrite, *plain, snapshot.Keys, intro, indexes); exitCode != exitSuccess {
 		// The form can fail after the recipe is on disk: a key it then
 		// fetches may not come. That recipe names these files, and a
 		// certificate read off a machine cannot be fetched again the way a
-		// key can, so they stay whenever the recipe does.
-		if _, err := os.Stat(recipePath); err != nil {
-			removeCapturedCertificates(writtenCertificates)
-		}
+		// key can, so the ones it names stay. A recipe that names none of
+		// them is not this run's: one that appeared while the form was open
+		// and was left alone, beside which these files would mean nothing.
+		removeCapturedCertificates(certificatesNotNamedBy(recipePath, a.RecipeDir, writtenCertificates))
 		return exitCode
 	}
 
@@ -178,6 +178,27 @@ func (a *App) writeCapturedCertificates(certificates map[string][]byte) (written
 		}
 	}
 	return written, nil
+}
+
+// certificatesNotNamedBy returns the files among written that the recipe at
+// recipePath, in recipeDir, does not name: all of them when no recipe loads
+// from there.
+func certificatesNotNamedBy(recipePath, recipeDir string, written []string) []string {
+	imageRecipe, err := recipe.Load(recipePath)
+	if err != nil {
+		return written
+	}
+	named := map[string]bool{}
+	for _, certificatePath := range imageRecipe.CertificatePaths() {
+		named[recipe.CertificatePath(recipeDir, certificatePath)] = true
+	}
+	var unnamed []string
+	for _, path := range written {
+		if !named[path] {
+			unnamed = append(unnamed, path)
+		}
+	}
+	return unnamed
 }
 
 // removeCapturedCertificates undoes writeCapturedCertificates when the form

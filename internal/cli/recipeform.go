@@ -44,11 +44,14 @@ func isCharacterDevice(stream any) bool {
 // runRecipeForm asks the recipe questions starting from initial, in the
 // full-screen or the plain interface, and writes the recipe to recipePath.
 // Nothing is written unless every answer validates and the user confirms.
+// replace says whether a recipe already at recipePath may be replaced: edit
+// rewrites the file it opened, and init and capture pass --force; without
+// it, a recipe that appeared while the form was open is left alone.
 // providedKeys are armored signing keys by source name that the caller
 // already has (capture read them from the machine); other missing keys are
 // fetched. intro is shown before the questions: what capture has to say,
 // or nothing.
-func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath string, plainRequested bool, providedKeys map[string][]byte, intro []form.Field, indexes *packageIndexes) int {
+func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath string, replace, plainRequested bool, providedKeys map[string][]byte, intro []form.Field, indexes *packageIndexes) int {
 	host := a.host()
 	host.OpenIndex = indexes.Open
 	host.OpenPythonIndex = indexes.OpenPython
@@ -108,8 +111,8 @@ func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath 
 		}
 	}
 
-	if err := writeRecipe(recipePath, imageRecipe); err != nil {
-		a.stderrf("frostroot: %v\n", err)
+	if err := writeRecipe(recipePath, imageRecipe, replace); err != nil {
+		a.stderrf("frostroot %s: %v\n", commandName, err)
 		return exitUserError
 	}
 	a.stdoutf("\nWrote %s.\n", recipeFileName)
