@@ -17,20 +17,12 @@ jobs:
       - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
-      - name: gofmt
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "These files need gofmt:"
-            echo "$unformatted"
-            exit 1
-          fi
-      - name: go vet
-        run: go vet ./... && go vet -tags=integration ./...
-      - name: go test
-        run: go test -race ./...
-      - name: Build for Windows
-        run: GOOS=windows go build ./...
+      # The same script CONTRIBUTING.md asks for before a push, so a clean
+      # run on a laptop is a clean run here: gofmt, vet with and without the
+      # integration tag, go test -race, and the Windows build. Lint has a job
+      # of its own below.
+      - name: gofmt, vet, test and the Windows build
+        run: scripts/check.sh --only fmt,vet,test,windows
 
   integration:
     # The tests behind the integration tag bootstrap real images and compare
@@ -48,61 +40,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends mmdebstrap ubuntu-keyring
-      - name: Check the prerequisites are really here
-        # skipUnlessMmdebstrapAvailable skips when either is missing, so a
-        # job that installed neither would pass having run nothing at all.
-        run: |
-          command -v mmdebstrap >/dev/null || { echo "mmdebstrap is not installed"; exit 1; }
-          test -e /usr/share/keyrings/ubuntu-archive-keyring.gpg || { echo "the Ubuntu archive keyring is not installed"; exit 1; }
-      - name: go test -tags=integration
-        # No -race: these tests spend their time in mmdebstrap and apt, not in
-        # Go, and the unit job already runs the race detector over the same
-        # packages. The default 10m timeout is not enough for four real
-        # bootstraps.
-        #
-        # ./... and not one package: naming ./internal/builder/ here meant the
-        # integration tests of internal/form (every catalog package exists in
-        # all three releases) and internal/index (the real index of all three)
-        # had never run, though the README says they do. A package that gains
-        # an integration test later is now covered by having one.
-        run: |
-          set -o pipefail
-          go test -tags=integration -timeout 40m -v ./... 2>&1 | tee integration.log
-      - name: A bootstrap that never ran proves nothing
-        # Only the three reasons skipUnlessMmdebstrapAvailable gives, not any
-        # skip: TestIntegrationUnreachableWorkRootFailsFast skips as root on
-        # purpose, because root mode has no user namespace to make
-        # unreachable, and that is a fact about the host rather than a job
-        # that did nothing. A missing prerequisite reads exactly like a pass
-        # in the summary, which is what this catches.
-        run: |
-          if grep -qE -- "needs Linux|mmdebstrap not installed|ubuntu-keyring not installed" integration.log; then
-            echo "The integration tests skipped for want of a prerequisite:"
-            grep -E -- "needs Linux|mmdebstrap not installed|ubuntu-keyring not installed" integration.log
-            exit 1
-          fi
-      - name: Every integration test named here actually passed
-        # The defect this job was widened to fix was a test nobody ran, which
-        # is indistinguishable from a test that passed unless something
-        # insists on seeing it. Each name below must appear as a pass; a test
-        # renamed or moved fails this step and is meant to, because the list
-        # is how the job knows what it is for.
-        run: |
-          missing=0
-          for name in \
-            TestIntegrationNobleTiny \
-            TestIntegrationOfflineRebuild \
-            TestIntegrationPython \
-            TestIntegrationCatalogExistsInEveryRelease \
-            TestIntegrationOpenEveryRelease; do
-            if grep -qE -- "^--- PASS: $name " integration.log; then
-              echo "ok   $name"
-            else
-              echo "MISSING   $name did not run to a pass"
-              missing=1
-            fi
-          done
-          exit $missing
+      # Every package's integration tests, and two checks a green summary
+      # alone cannot give: that none of them skipped for want of a
+      # prerequisite, and that each test the script names ran to a pass. The
+      # script says why each is there, and runs the same way by hand.
+      - name: Integration tests, and proof that they ran
+        run: scripts/integration.sh
 
   lint:
     name: golangci-lint
@@ -134,17 +77,9 @@ jobs:
       - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
-      - name: Install govulncheck
-        # Pinned, like every other tool version here: @latest would make the
-        # meaning of a red build depend on the day.
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
-      - name: Check the toolchain really is the one go.mod pins
-        # setup-go reads go.mod, but a job that silently used another
-        # toolchain would clear a check it never performed.
-        run: |
-          pinned=$(sed -n 's/^go \([0-9.]*\)$/\1/p' go.mod)
-          running=$(go env GOVERSION)
-          echo "go.mod pins go$pinned; this job runs $running"
-          test "go$pinned" = "$running" || { echo "the toolchain is not the pinned one"; exit 1; }
+      # govulncheck at a pinned version (@latest would make the meaning of a
+      # red build depend on the day), against the toolchain go.mod pins,
+      # which the step checks it really is running: a job that silently used
+      # another toolchain would clear a check it never performed.
       - name: govulncheck
-        run: govulncheck ./...
+        run: scripts/check.sh --only vuln

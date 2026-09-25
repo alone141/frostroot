@@ -1003,7 +1003,9 @@ Each exclusion has a door left open in the design. Adding Fedora means a new
 go test ./...
 ```
 
-runs offline, without root, without mmdebstrap and without a terminal. It
+runs offline, without root, without mmdebstrap and without a terminal
+(`scripts/check.sh` runs it under the race detector, together with every
+other check [CONTRIBUTING.md](CONTRIBUTING.md) asks for). It
 covers recipe and lock parsing, the distro table, dpkg status parsing, the
 rendered files and hooks (including running the hook text through a real
 shell with hostile paths), the build orchestration against a fake
@@ -1024,10 +1026,12 @@ package name, the hook order online and offline, and the comparison of an
 image's environment with the lock.
 
 ```sh
-go test -tags=integration -run TestIntegration -v -timeout 30m ./...
+scripts/integration.sh
 ```
 
-builds a real 24.04 image with mmdebstrap and inspects the tarball: thousands
+runs every test behind the `integration` tag the way CI does, and fails
+unless each test CI requires was seen to pass. It builds a real 24.04 image
+with mmdebstrap and inspects the tarball: thousands
 of symlinks all with targets, hardlinks and file capabilities intact, no
 subordinate-uid owners, the user, sudoers, `wsl.conf`, timezone and locale in
 place, and no leaked host files; it also checks that the build reported every
@@ -1041,6 +1045,14 @@ environment and its `profile.d` line are in the tarball, that nothing the
 Python step used was left in the image, and that two offline rebuilds have
 one SHA-256. They need Linux, mmdebstrap, ubuntu-keyring, network, and user
 namespaces or root, and take about twenty minutes.
+
+The [end-to-end scenarios](scripts/e2e/README.md) go further, and each ends
+in a verdict of its own. They check that two offline rebuilds with Python
+packages are the same bytes, and what `[certificates]`, `--ca-bundle` and
+`--insecure` do and do not leave in the image. They run apt and pip against
+authorities they cannot verify, capture an image frostroot built, and drive
+the full-screen form in a real pseudo-terminal. `scripts/e2e/run.sh` lists
+them.
 
 **The WSL boot check is manual**, because no CI runner can run `wsl --import`.
 For every release you ship, import the tarball and check: `whoami` is your
@@ -1194,6 +1206,9 @@ rebuilt the image in 447 s, every package as locked; `build --offline
 
 | Document | What it is |
 |---|---|
+| [AGENTS.md](AGENTS.md) | For AI models and anyone new: the commands, the design rules that are easy to break, where the project's state lives. |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | The code standard: names, errors, design, comments, tests, commits. |
+| [End-to-end scenarios](scripts/e2e/README.md) | What each real-build scenario proves, and how to write one. |
 | [Design spec](docs/superpowers/specs/2026-09-14-frostroot-design.md) | Source of truth for v1: recipe, lock, tarball, build pipeline. |
 | [TUI spec](docs/superpowers/specs/2026-09-17-frostroot-tui.md) | v0.2: the form, the build screen, the progress parser, the plain fallback. |
 | [Capture spec](docs/superpowers/specs/2026-09-17-frostroot-capture.md) | v0.3: reading an installed machine, the report of the gaps. |
@@ -1231,6 +1246,8 @@ internal/pool/      the vendored pools: manifests from the lock, verify, fetch, 
 internal/deb/       Debian formats: control stanzas, Packages indexes, .deb control files, flat repository index
 internal/export/    tarball naming and atomic placement
 testdata/           recipe fixtures
+scripts/            check.sh (every check before a push), integration.sh, mutate.sh, and wsl.sh/wsl.ps1 to run any of them in WSL from Windows
+scripts/e2e/        real-build scenarios that check themselves: byte identity, what reaches the image, trust, the form in a terminal
 ```
 
 ## License
