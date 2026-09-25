@@ -1226,6 +1226,21 @@ reverted, run with `scripts/mutate.sh` and recorded in the commit; the
 index bound was also measured, a body that would expand to 80 MB being
 refused with under 32 MB allocated.
 
+For v0.13.2 the six fixes are each pinned by a test that fails with the fix
+reverted, run with `scripts/mutate.sh` and recorded in the commit, and
+`scripts/check.sh` ran every step. With the branch's binary, the
+`offline-identical` scenario built a 24.04 image with `git` and `requests`
+in 477 s, vendored it in 26 s and rebuilt it offline twice, in 501 s and
+441 s, the second time with `PYTHONPYCACHEPREFIX` set on the build host:
+both rebuilds came out as one SHA-256, and the image holds no cache under
+the host's prefix. The same scenario had failed with only the Python hook
+sweeping that variable, the image then holding 930 caches under
+`<prefix>/usr/lib/python3/` written by dpkg's `py3compile`, which is what
+showed that mmdebstrap needs the host's `PYTHON` and `PIP` variables dropped
+before it starts. `tui` passed its 4 checks in 14 s, and `capture-roundtrip`
+its 10, with a real build placed through the new staging order and captured
+back into a recipe that validates.
+
 
 ## Documentation
 
