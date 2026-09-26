@@ -867,3 +867,23 @@ func TestModifiedConffilesStayInsideTheRoot(t *testing.T) {
 		t.Errorf("modified = %q, want only the edited file inside the root", modified)
 	}
 }
+
+// TestParseDeb822SourcesEnabled: apt reads Enabled with StringToBool, so
+// "false", "0", "off" and "disable" turn a stanza off as "no" does, and a
+// word apt does not know leaves it on, as its default is. Only "no" used to
+// count, and a repository its owner had turned off with "false" was carried
+// as live, re-enabling it in the image.
+func TestParseDeb822SourcesEnabled(t *testing.T) {
+	for value, live := range map[string]bool{
+		"": true, "yes": true, "enabled": true, "true": true, "1": true, "on": true, "maybe": true,
+		"no": false, "No": false, "false": false, "FALSE": false, "0": false, "off": false, "disable": false, "without": false,
+	} {
+		stanza := "Types: deb\nURIs: https://x.example\nSuites: noble\nComponents: main\n"
+		if value != "" {
+			stanza += "Enabled: " + value + "\n"
+		}
+		if got := len(parseDeb822Sources("/etc/apt/sources.list.d/x.sources", stanza)) == 1; got != live {
+			t.Errorf("Enabled: %q carried = %v, want %v, as apt reads it", value, got, live)
+		}
+	}
+}

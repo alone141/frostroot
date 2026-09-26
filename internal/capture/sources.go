@@ -6,6 +6,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"frostroot/internal/pgp"
@@ -100,7 +101,7 @@ func parseOneLineSources(file, content string) []aptSource {
 func parseDeb822Sources(file, content string) []aptSource {
 	var entries []aptSource
 	for _, stanza := range readStanzas(strings.NewReader(content)) {
-		if !slices.Contains(strings.Fields(stanza["Types"]), "deb") || strings.EqualFold(stanza["Enabled"], "no") {
+		if !slices.Contains(strings.Fields(stanza["Types"]), "deb") || deb822Disabled(stanza["Enabled"]) {
 			continue
 		}
 		signedBy := deb822SignedBy(stanza["Signed-By"])
@@ -111,6 +112,25 @@ func parseDeb822Sources(file, content string) []aptSource {
 		}
 	}
 	return entries
+}
+
+// deb822Disabled reports whether an Enabled value turns a stanza off, the
+// way apt reads it (StringToBool in apt-pkg/contrib/strutl.cc, checked
+// against apt 2.8.3): the number 0, and "no", "false", "without", "off" and
+// "disable" in any case, do; every other value leaves the stanza on, "yes"
+// and a word apt does not know alike, because apt falls back to its default
+// of enabled. Only "no" used to count, so a repository its owner had turned
+// off with "false" was carried as live, and re-enabled in the image.
+func deb822Disabled(value string) bool {
+	value = strings.TrimSpace(value)
+	if number, err := strconv.ParseInt(value, 0, 64); err == nil {
+		return number == 0
+	}
+	switch strings.ToLower(value) {
+	case "no", "false", "without", "off", "disable":
+		return true
+	}
+	return false
 }
 
 // deb822SignedBy returns a Signed-By value as a path or as the inline armored
