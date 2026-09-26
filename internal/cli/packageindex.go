@@ -195,12 +195,15 @@ func (p *packageIndexes) get(ctx context.Context, request form.IndexRequest, pro
 		return nil, archiveErr
 	}
 	adapted := packageIndex{merged}
-	if len(unreachable) == 0 || offline {
-		// Only a whole answer is remembered, so that a repository which was
-		// down is tried again rather than left out of every later answer.
-		// An offline answer is remembered whatever it is missing: it fetches
-		// nothing, so asking it again would miss exactly the same thing at
-		// the price of merging the whole archive afresh.
+	// Only a whole answer is remembered, so that a repository which was
+	// down is tried again rather than left out of every later answer. What
+	// is missing is what the merged index says, not the failures counted
+	// above: a repository that could not be reached but has a cache comes
+	// back as that cache, without an error, marked missing. An offline
+	// answer is remembered whatever it is missing: it fetches nothing, so
+	// asking it again would miss exactly the same thing at the price of
+	// merging the whole archive afresh.
+	if _, missing := merged.Sources(); len(missing) == 0 || offline {
 		p.mutex.Lock()
 		p.opened[key] = adapted
 		p.mutex.Unlock()
@@ -223,15 +226,25 @@ func (p *packageIndexes) archive(ctx context.Context, releaseVersion string, opt
 		return nil, err
 	}
 	fetched.done()
-	if !offline {
+	if !offline && isWhole(opened) {
 		// What a fetch opened is what later questions get. An offline read
 		// keeps to its own answer: it may be a stale cache, and the fetch it
-		// would displace is the one that was asked for.
+		// would displace is the one that was asked for. A cache served
+		// because the archive could not be reached is not kept either, so
+		// that the archive is tried again.
 		p.mutex.Lock()
 		p.archives[releaseVersion] = opened
 		p.mutex.Unlock()
 	}
 	return opened, nil
+}
+
+// isWhole reports whether an index was read from its repository rather than
+// served from a cache because the repository could not be reached, which
+// index.Open reports as the repository missing rather than as an error.
+func isWhole(opened *index.Index) bool {
+	_, missing := opened.Sources()
+	return len(missing) == 0
 }
 
 // source opens one third-party repository, once per repository. A failure
@@ -261,7 +274,7 @@ func (p *packageIndexes) source(ctx context.Context, options index.Options, want
 		return nil, err
 	}
 	fetched.done()
-	if !offline {
+	if !offline && isWhole(opened) {
 		p.mutex.Lock()
 		p.sources[key] = opened
 		p.mutex.Unlock()
