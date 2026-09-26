@@ -350,9 +350,12 @@ func reduce(stanza deb.Stanza, component string) (Entry, bool) {
 	}, true
 }
 
-// oneLine makes text safe for a tab-separated line.
+// oneLine makes text safe for a tab-separated line: a tab would split the
+// line and a newline would end it. deb.ReadStanzas joins a continuation
+// line to its field with a newline, and a vendor's stanza may fold any
+// field that way, not only the description.
 func oneLine(text string) string {
-	return strings.TrimSpace(strings.NewReplacer("\t", " ", "\r", " ").Replace(text))
+	return strings.TrimSpace(strings.NewReplacer("\t", " ", "\r", " ", "\n", " ").Replace(text))
 }
 
 // countingReader reports every read.

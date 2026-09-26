@@ -489,3 +489,84 @@ func TestOpenSourceThatOverrunsItsSizeFailsAlone(t *testing.T) {
 		t.Errorf("requests = %d, want the InRelease and one Packages file: a body that is too long is not fetched twice", served.Requests())
 	}
 }
+
+// TestOpenKeepsAFoldedFieldOnOneCacheLine: deb.ReadStanzas joins a
+// continuation line to its field with a newline, and a vendor's stanza may
+// fold Section or Version that way. The cache is a line per package, so a
+// newline inside a field wrote a line the next run could not parse, which
+// deleted the cache and fetched the repository again, for ever.
+func TestOpenKeepsAFoldedFieldOnOneCacheLine(t *testing.T) {
+	served := indextest.Serve(t, "noble", []indextest.Package{
+		{Name: "folded", Version: "1.0", Section: "admin\n extra", Description: "a stanza whose section runs over two lines"},
+	})
+	options := Options{
+		Release:  distro.Release{Suite: "noble", ArchiveURL: served.URL, Components: []string{"main"}},
+		CacheDir: t.TempDir(),
+		Now:      func() time.Time { return testNow },
+	}
+	opened, err := Open(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry, found := opened.Lookup("folded"); !found || entry.Section != "admin extra" {
+		t.Errorf("Lookup = %+v, %v; want the folded section on one line", entry, found)
+	}
+	before := served.Requests()
+	again, err := Open(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if served.Requests() != before {
+		t.Errorf("the cache did not read back: %d more requests", served.Requests()-before)
+	}
+	if entry, found := again.Lookup("folded"); !found || entry.Section != "admin extra" {
+		t.Errorf("from the cache, Lookup = %+v, %v", entry, found)
+	}
+}
+
+// TestOpenServesTheCacheWhenTheDeadlinePasses: a source gets twenty seconds
+// so that one slow vendor does not hold up the rest, and a deadline ended
+// the fetch the way a cancellation does, with an error, while a readable
+// index sat in the cache directory. A deadline is a fact about the network,
+// so the cache is served and marked missing, as it is when the repository
+// answers nothing at all; a cancellation still ends everything.
+func TestOpenServesTheCacheWhenTheDeadlinePasses(t *testing.T) {
+	served := newArchive(t, ".gz")
+	options := optionsFor(t, served)
+	if _, err := Open(context.Background(), options); err != nil {
+		t.Fatal(err)
+	}
+	// An archive slower than the caller allows. The handler reads intercept
+	// under the archive's mutex, so it is set under it too.
+	served.mutex.Lock()
+	served.intercept = func(http.ResponseWriter, *http.Request) bool {
+		time.Sleep(300 * time.Millisecond)
+		return false
+	}
+	served.mutex.Unlock()
+	options.Refresh = true
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	opened, err := Open(ctx, options)
+	if err != nil {
+		t.Fatalf("Open = %v, want the cache served once the deadline passed", err)
+	}
+	if _, missing := opened.Sources(); !slices.Equal(missing, []string{"archive"}) {
+		t.Errorf("missing = %v, want the archive named as not reached", missing)
+	}
+	if !strings.Contains(opened.Describe(), "not reachable") {
+		t.Errorf("Describe = %q, want it to say the archive was not reached", opened.Describe())
+	}
+
+	// A caller that gave up gets no cache: nothing it asked for is wanted.
+	canceled, cancelNow := context.WithCancel(context.Background())
+	served.mutex.Lock()
+	served.intercept = func(http.ResponseWriter, *http.Request) bool {
+		cancelNow()
+		return false
+	}
+	served.mutex.Unlock()
+	if _, err := Open(canceled, options); !errors.Is(err, context.Canceled) {
+		t.Errorf("Open after cancel = %v, want context.Canceled even with a cache", err)
+	}
+}

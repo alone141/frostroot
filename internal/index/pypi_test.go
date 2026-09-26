@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"frostroot/internal/index/indextest"
 )
 
 // simpleIndex serves the excerpt in testdata as PyPI's simple index, gzipped
@@ -382,4 +384,33 @@ func (c *countingBody) Read(buffer []byte) (int, error) {
 	count, err := c.ReadCloser.Read(buffer)
 	c.read.Add(int64(count))
 	return count, err
+}
+
+// TestOpenPyPIKeepsACacheAPrivateIndexCannotBreak: the cache is a line per
+// name, read back in strictly increasing normalized order. pypi.org
+// publishes only PEP 503 names and never two that normalize alike; a private
+// index may serve either, and the cache it produced failed to read on every
+// run, which fetched the whole index again each time. Such names are left
+// out of the index, since no recipe could name them anyway.
+func TestOpenPyPIKeepsACacheAPrivateIndexCannotBreak(t *testing.T) {
+	served := indextest.ServePyPI(t, []string{"good", "bad\nname", "GOOD", "also.good", "two  spaces"}, nil)
+	options := Options{Mirror: served.URL, CacheDir: t.TempDir(), Now: func() time.Time { return testNow }}
+	opened, err := OpenPyPI(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := projectNames(opened.projects); !slices.Equal(names, []string{"also.good", "good"}) {
+		t.Errorf("projects = %q, want the two names a recipe could hold, once each", names)
+	}
+	before := served.Requests()
+	again, err := OpenPyPI(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if served.Requests() != before {
+		t.Errorf("the cache did not read back: %d more requests", served.Requests()-before)
+	}
+	if names := projectNames(again.projects); !slices.Equal(names, []string{"also.good", "good"}) {
+		t.Errorf("from the cache, projects = %q", names)
+	}
 }

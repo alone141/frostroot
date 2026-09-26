@@ -85,7 +85,12 @@ func (x *Index) SectionsMatching(query string) []SectionCount {
 	counts := map[string]int{}
 	for position, lowered := range x.lowered {
 		if _, isMatch := rankOf(lowered, query); isMatch {
-			counts[x.entries[position].Section]++
+			// The same rule as newIndex: a package without a section is
+			// no section to narrow to, and a row named "" beside "all
+			// sections" would filter by nothing.
+			if section := x.entries[position].Section; section != "" {
+				counts[section]++
+			}
 		}
 	}
 	return sortedSections(counts)

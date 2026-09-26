@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -452,5 +453,103 @@ func TestPackageIndexesSurviveASourceThatCannotBeRead(t *testing.T) {
 	}
 	if attempts != 1 || !recovered.Has("docker-ce") {
 		t.Errorf("attempts = %d, docker-ce found = %v; want the source tried again and searched", attempts, recovered.Has("docker-ce"))
+	}
+}
+
+// openIndexes returns this run's indexes for flags, with the caches under
+// cacheHome, the way a command gets them.
+func openIndexes(t *testing.T, cacheHome string, flags *indexFlags) *packageIndexes {
+	t.Helper()
+	app := (&App{Getenv: environmentWith(map[string]string{"XDG_CACHE_HOME": cacheHome})}).withDefaults()
+	indexes, ok := app.packageIndexes(flags)
+	if !ok {
+		t.Fatal("packageIndexes refused plain flags")
+	}
+	return indexes
+}
+
+// failingTransport is a network that answers nothing.
+type failingTransport struct{}
+
+func (failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("the vendor is down")
+}
+
+// TestPackageIndexesTryAgainASourceServedFromItsCache: index.Open returns
+// no error for a repository it cannot reach when a cache of it exists; it
+// returns the cache with the repository marked missing. get decided
+// completeness from its own list of failures, and the source memo kept
+// whatever opened without an error, so such an answer was remembered whole
+// and the retry for a repository that was down never fired: the stale-cache
+// path is the common one.
+func TestPackageIndexesTryAgainASourceServedFromItsCache(t *testing.T) {
+	archive := indextest.Serve(t, "noble", noblePackages)
+	docker := indextest.Serve(t, "noble", []indextest.Package{
+		{Name: "docker-ce", Version: "5:27.3.1-1~ubuntu.24.04~noble", Section: "admin", Description: "Docker: the open-source application container engine"},
+	})
+	cacheHome := t.TempDir()
+	request := form.IndexRequest{Release: "24.04", Sources: []recipe.Source{{Name: "docker", URL: docker.URL, Key: "keys/docker.asc"}}}
+	// A first run fills the caches.
+	if _, err := openIndexes(t, cacheHome, &indexFlags{mirror: archive.URL}).Open(context.Background(), request, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// The next run asks for fresh indexes and finds the vendor down: its
+	// cache serves, and says so.
+	indexes := openIndexes(t, cacheHome, &indexFlags{mirror: archive.URL, refresh: true})
+	down, attempts := true, 0
+	realOpenSource := indexes.openSource
+	indexes.openSource = func(ctx context.Context, options index.Options, wanted index.Source) (*index.Index, error) {
+		attempts++
+		if down {
+			options.Client = &http.Client{Transport: failingTransport{}}
+		}
+		return realOpenSource(ctx, options, wanted)
+	}
+	opened, err := indexes.Open(context.Background(), request, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 1 || !opened.Has("docker-ce") || !strings.Contains(opened.Describe(), "docker not reachable") {
+		t.Fatalf("attempts = %d, Describe = %q; want the cache searched and the vendor named as missing", attempts, opened.Describe())
+	}
+
+	// Asked again with the vendor back, the same run tries it again.
+	down = false
+	recovered, err := indexes.Open(context.Background(), request, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 2 || strings.Contains(recovered.Describe(), "not reachable") {
+		t.Errorf("attempts = %d, Describe = %q; want the source tried again and the answer whole", attempts, recovered.Describe())
+	}
+}
+
+// TestPackageIndexesRefreshPyPIAfterAnOfflineLook: KnownPython reads the
+// cache and never fetches, and it stored what it read in the one PyPI memo,
+// so an OpenPython that followed got the cache back whatever --refresh-index
+// asked, and PyPI was not fetched again for the rest of the run. The apt
+// path keeps offline and fetched answers apart; so does PyPI now.
+func TestPackageIndexesRefreshPyPIAfterAnOfflineLook(t *testing.T) {
+	pypi := indextest.ServePyPI(t, pypiProjects, nil)
+	cacheHome := t.TempDir()
+	request := form.IndexRequest{Release: "24.04"}
+	if _, err := openIndexes(t, cacheHome, &indexFlags{pythonIndex: pypi.URL}).OpenPython(context.Background(), request, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	before := pypi.Requests()
+	indexes := openIndexes(t, cacheHome, &indexFlags{pythonIndex: pypi.URL, refresh: true})
+	if indexes.KnownPython() == nil || pypi.Requests() != before {
+		t.Fatalf("KnownPython should read the cache and fetch nothing: nil = %v, %d requests", indexes.KnownPython() == nil, pypi.Requests()-before)
+	}
+	if _, err := indexes.OpenPython(context.Background(), request, nil); err != nil {
+		t.Fatal(err)
+	}
+	if pypi.Requests() == before {
+		t.Error("--refresh-index did not fetch PyPI again after KnownPython had read the cache")
+	}
+	if indexes.KnownPython() == nil {
+		t.Error("KnownPython after the fetch should be the fetched index")
 	}
 }

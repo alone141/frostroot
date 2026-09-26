@@ -166,15 +166,23 @@ func openTarget(ctx context.Context, options Options, what target) (*Index, erro
 	}
 	entries, err := fetch(ctx, options, what)
 	if err != nil {
-		if ctx.Err() != nil {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			// The caller gave up, so nothing it asked for is wanted any
+			// more, a stale cache included.
 			return nil, ctx.Err()
 		}
 		if cached != nil {
+			// The repository could not be reached, or not within the time
+			// its caller allowed, which for one source among several is
+			// twenty seconds. Either way the cache says more about it than
+			// "not reachable" would, so it is served, and says so: to a
+			// reader that is the same thing as a source left out.
 			cached.staleBecause = err
-			// Served from a cache because the repository could not be
-			// reached: the same thing, to a reader, as one left out.
 			cached.missing = []string{what.missingName()}
 			return cached, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}

@@ -1246,7 +1246,12 @@ kept inside `--root`, apt's reading of `Enabled`, one repository listed with
 and without a trailing slash, several keyrings in one `Signed-By`) are each
 pinned the same way, and `capture-roundtrip` passed its 10 checks again
 with that binary, the 24.04 image built in 650 s and captured back into a
-recipe that validates.
+recipe that validates. So are the six fixes to the package index (a field
+folded over two lines in the cache, a source deadline served from the cache
+rather than reported, sections counted for section-less packages, names a
+private PyPI index serves that the cache could not give back, and the two
+memos that kept a stale answer), and `tui` passed its 4 checks again with
+that binary, searching the real archive and PyPI.
 
 
 ## Documentation
