@@ -1,8 +1,9 @@
 // Package capture reads an installed Ubuntu system and describes it as a
 // recipe plus a report of what a recipe cannot carry. It reads package
 // metadata and a few configuration files; the only files it copies are the
-// public signing keys of apt sources, it never reads the content of a home
-// directory beyond entry names, and it never needs root.
+// public signing keys of apt sources and the certificate authorities under
+// /usr/local/share/ca-certificates, both public; it never reads the content
+// of a home directory beyond entry names, and it never needs root.
 package capture
 
 import (

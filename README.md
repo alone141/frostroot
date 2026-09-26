@@ -268,7 +268,7 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 |---|---|
 | `frostroot init [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Opens the form and writes a commented `frostroot.toml`, then fetches the signing keys of the sources you picked into `keys/`. Refuses to overwrite a recipe without `--force`. Writes nothing unless the answers validate and you confirm. |
 | `frostroot edit [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back; fetches any missing source keys. The file is regenerated from the template, so your own comments in it do not survive. |
-| `frostroot capture [--root DIR] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, starting with a page of what it found and what a recipe cannot carry, writes `frostroot.toml` and the signing keys of the third-party sources it could carry, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys; needs no root. |
+| `frostroot capture [--root DIR] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, starting with a page of what it found and what a recipe cannot carry, writes `frostroot.toml`, the signing keys of the third-party sources it could carry and the certificate authorities the machine added under `/usr/local/share/ca-certificates`, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys and certificates; needs no root. |
 | `frostroot validate` | Checks `frostroot.toml`, including that every source's key file is there and is a key, and prints every problem. No network, no root. |
 | `frostroot build [--mirror URL] [--ca-bundle FILE \| --insecure] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-ubuntu-<release>-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. |
 | `frostroot vendor [--mirror URL] [--ca-bundle FILE \| --insecure] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, and every wheel it names into `vendor/wheels/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name, including the partial download an abandoned run leaves behind. |
@@ -754,7 +754,8 @@ Two rules, both deliberate:
   `frostroot-capture.md` lists each area with what was found and what to do
   about it. A capture that stayed quiet about these would leave you believing
   the machine was captured when it was not.
-- **It copies nothing but apt signing keys, which are public.** A live
+- **It copies nothing but apt signing keys and certificate authorities,
+  which are public.** A live
   machine holds SSH keys, tokens, `.env` files and shell history; an image
   built from a tarball of it would hand all of that to every student.
   `capture` reads package metadata and a few configuration files, lists the
@@ -1239,7 +1240,13 @@ sweeping that variable, the image then holding 930 caches under
 showed that mmdebstrap needs the host's `PYTHON` and `PIP` variables dropped
 before it starts. `tui` passed its 4 checks in 14 s, and `capture-roundtrip`
 its 10, with a real build placed through the new staging order and captured
-back into a recipe that validates.
+back into a recipe that validates. The five capture fixes that followed
+(certificates below the trust directory and behind symlinks, conffile paths
+kept inside `--root`, apt's reading of `Enabled`, one repository listed with
+and without a trailing slash, several keyrings in one `Signed-By`) are each
+pinned the same way, and `capture-roundtrip` passed its 10 checks again
+with that binary, the 24.04 image built in 650 s and captured back into a
+recipe that validates.
 
 
 ## Documentation

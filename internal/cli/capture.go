@@ -26,7 +26,8 @@ the form with those values, and write frostroot.toml plus
 frostroot-capture.md, a report of everything a recipe cannot carry (pip and
 npm installs, /opt, edits to /etc, dotfiles...). Reads package metadata and
 a few configuration files; the only files it copies are the public signing
-keys of apt sources; needs no root.
+keys of apt sources and the certificate authorities the machine added under
+/usr/local/share/ca-certificates, both public; needs no root.
 
 ` + indexUsageText
 
