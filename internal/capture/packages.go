@@ -194,12 +194,22 @@ func (root systemRoot) ownedPaths() (map[string]bool, bool) {
 }
 
 // modifiedConffiles returns the configuration files whose content no longer
-// matches the checksum dpkg recorded: the ones somebody edited.
+// matches the checksum dpkg recorded: the ones somebody edited. A path the
+// status names is the captured machine's, and a symlink in it points into
+// that machine too, so both are resolved under the root; one that leaves it
+// is not compared, like a file that cannot be read. With --root DIR the
+// status was written by another machine: a ".." that climbs out of the tree
+// would otherwise read this host and name its files in the report, and a
+// link would be compared with this host's copy.
 func (root systemRoot) modifiedConffiles(installed []installedPackage) []string {
 	var modified []string
 	for _, pkg := range installed {
 		for _, file := range pkg.conffiles {
-			content, err := os.ReadFile(root.path(file.path))
+			path, inside := root.pathInRoot(strings.TrimPrefix(file.path, "/"))
+			if !inside {
+				continue
+			}
+			content, err := os.ReadFile(path)
 			if err != nil {
 				continue // deleted or unreadable: nothing to compare
 			}

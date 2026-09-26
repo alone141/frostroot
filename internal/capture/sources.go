@@ -6,7 +6,9 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"unicode"
 
 	"frostroot/internal/pgp"
 	"frostroot/internal/recipe"
@@ -19,8 +21,9 @@ type aptSource struct {
 	uri        string
 	suite      string
 	components []string
-	// signedBy is the Signed-By option: a path inside the root, an inline
-	// armored key, or "" when the entry relies on the trusted keyrings.
+	// signedBy is the Signed-By option: one or more keyring paths inside the
+	// root, separated by commas or whitespace, an inline armored key, or ""
+	// when the entry relies on the trusted keyrings.
 	signedBy string
 }
 
@@ -83,7 +86,7 @@ func parseOneLineSources(file, content string) []aptSource {
 			options := strings.Trim(strings.Join(fields[:closing+1], " "), "[]")
 			for _, option := range strings.Fields(options) {
 				if value, isSignedBy := strings.CutPrefix(option, "signed-by="); isSignedBy {
-					signedBy, _, _ = strings.Cut(value, ",")
+					signedBy = value
 				}
 			}
 			fields = fields[closing+1:]
@@ -100,7 +103,7 @@ func parseOneLineSources(file, content string) []aptSource {
 func parseDeb822Sources(file, content string) []aptSource {
 	var entries []aptSource
 	for _, stanza := range readStanzas(strings.NewReader(content)) {
-		if !slices.Contains(strings.Fields(stanza["Types"]), "deb") || strings.EqualFold(stanza["Enabled"], "no") {
+		if !slices.Contains(strings.Fields(stanza["Types"]), "deb") || deb822Disabled(stanza["Enabled"]) {
 			continue
 		}
 		signedBy := deb822SignedBy(stanza["Signed-By"])
@@ -111,6 +114,25 @@ func parseDeb822Sources(file, content string) []aptSource {
 		}
 	}
 	return entries
+}
+
+// deb822Disabled reports whether an Enabled value turns a stanza off, the
+// way apt reads it (StringToBool in apt-pkg/contrib/strutl.cc, checked
+// against apt 2.8.3): the number 0, and "no", "false", "without", "off" and
+// "disable" in any case, do; every other value leaves the stanza on, "yes"
+// and a word apt does not know alike, because apt falls back to its default
+// of enabled. Only "no" used to count, so a repository its owner had turned
+// off with "false" was carried as live, and re-enabled in the image.
+func deb822Disabled(value string) bool {
+	value = strings.TrimSpace(value)
+	if number, err := strconv.ParseInt(value, 0, 64); err == nil {
+		return number == 0
+	}
+	switch strings.ToLower(value) {
+	case "no", "false", "without", "off", "disable":
+		return true
+	}
+	return false
 }
 
 // deb822SignedBy returns a Signed-By value as a path or as the inline armored
@@ -155,14 +177,17 @@ func (root systemRoot) sourcesForRecipe(releaseSuite string) (carried []carriedS
 	// One URI and suite can be listed more than once: a .sources file added
 	// by a vendor's current instructions, beside the .list its older ones
 	// left behind. They are one repository, so they are decided together
-	// rather than the first copy standing for all of them.
+	// rather than the first copy standing for all of them. A trailing slash
+	// on the URI is not a difference: apt fetches the same repository, and
+	// everything downstream trims it, so the identity does too, or the two
+	// copies became docker and docker-2 with two key files.
 	var identities []string
 	copies := map[string][]aptSource{}
 	for _, entry := range root.aptSources() {
 		if isUbuntuArchiveURI(entry.uri) {
 			continue
 		}
-		identity := entry.uri + " " + entry.suite
+		identity := strings.TrimRight(entry.uri, "/") + " " + entry.suite
 		if _, grouped := copies[identity]; !grouped {
 			identities = append(identities, identity)
 		}
@@ -284,8 +309,14 @@ func sourceOrigin(chosen aptSource, entries []aptSource, keyOrigin string) strin
 	return origin
 }
 
-// sourceKey reads a Signed-By value as a key: inline, or a file under the
-// root. It returns the key armored and where it came from.
+// sourceKey reads a Signed-By value as a key: inline, or one or more keyring
+// files under the root. apt lets a source name several keyrings, separated
+// by commas in a one-line entry and by commas or whitespace in deb822, and
+// trusts a Release signed by any key in any of them, which is what a
+// vendor's key rotation instructions produce. Every keyring named must read,
+// and the recipe's key file is all of them together, so that the build
+// trusts exactly what the machine did. It returns the key armored and where
+// it came from.
 func (root systemRoot) sourceKey(signedBy string) (armored []byte, origin string, err error) {
 	if strings.HasPrefix(signedBy, armoredKeyPrefix) {
 		key, err := pgp.ParsePublicKey([]byte(signedBy))
@@ -294,19 +325,27 @@ func (root systemRoot) sourceKey(signedBy string) (armored []byte, origin string
 		}
 		return pgp.Armor(key.Binary), "inline in the source file", nil
 	}
-	keyPath, inside := root.pathInRoot(strings.TrimPrefix(signedBy, "/"))
-	if !inside {
-		return nil, "", fmt.Errorf("the signed-by key %s is outside %s, so it belongs to this machine rather than the one being captured", signedBy, root)
+	keyringPaths := strings.FieldsFunc(signedBy, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
+	if len(keyringPaths) == 0 {
+		return nil, "", fmt.Errorf("the signed-by option %q names no keyring", signedBy)
 	}
-	data, err := os.ReadFile(keyPath)
-	if err != nil {
-		return nil, "", fmt.Errorf("the signed-by key %s could not be read: %w", signedBy, err)
+	var binary []byte
+	for _, keyringPath := range keyringPaths {
+		keyPath, inside := root.pathInRoot(strings.TrimPrefix(keyringPath, "/"))
+		if !inside {
+			return nil, "", fmt.Errorf("the signed-by key %s is outside %s, so it belongs to this machine rather than the one being captured", keyringPath, root)
+		}
+		data, err := os.ReadFile(keyPath)
+		if err != nil {
+			return nil, "", fmt.Errorf("the signed-by key %s could not be read: %w", keyringPath, err)
+		}
+		key, err := pgp.ParsePublicKey(data)
+		if err != nil {
+			return nil, "", fmt.Errorf("the signed-by key %s: %w", keyringPath, err)
+		}
+		binary = append(binary, key.Binary...)
 	}
-	key, err := pgp.ParsePublicKey(data)
-	if err != nil {
-		return nil, "", fmt.Errorf("the signed-by key %s: %w", signedBy, err)
-	}
-	return pgp.Armor(key.Binary), signedBy, nil
+	return pgp.Armor(binary), strings.Join(keyringPaths, ", "), nil
 }
 
 // sourceNameSeparators replaces every run of characters a source name cannot

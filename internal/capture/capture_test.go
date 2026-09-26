@@ -381,7 +381,7 @@ func TestParseSourceFiles(t *testing.T) {
 	oneLine := "# comment\ndeb [arch=amd64 signed-by=/k.gpg,/other.gpg] https://ppa.example/ubuntu noble main universe\ndeb-src http://archive.ubuntu.com/ubuntu noble main\ndeb http://plain.example/repo noble main\nbroken\n"
 	got := parseOneLineSources("/etc/apt/sources.list", oneLine)
 	want := []aptSource{
-		{file: "/etc/apt/sources.list", uri: "https://ppa.example/ubuntu", suite: "noble", components: []string{"main", "universe"}, signedBy: "/k.gpg"},
+		{file: "/etc/apt/sources.list", uri: "https://ppa.example/ubuntu", suite: "noble", components: []string{"main", "universe"}, signedBy: "/k.gpg,/other.gpg"},
 		{file: "/etc/apt/sources.list", uri: "http://plain.example/repo", suite: "noble", components: []string{"main"}},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -781,5 +781,176 @@ func TestCaptureMachinePackagesAreNothingOnAWSLRoot(t *testing.T) {
 	finding := snapshot.Finding(AreaMachinePackages)
 	if finding.Area != AreaMachinePackages || finding.Count != 0 {
 		t.Errorf("finding = %+v, want the area present with nothing found", finding)
+	}
+}
+
+// TestCaptureLeavesASymlinkedCertificateOutsideTheRoot: update-ca-certificates
+// follows symlinks, so a link under ca-certificates is an ordinary layout.
+// Capturing a mounted tree, a link whose target is not in that tree resolves
+// on this machine, and its bytes used to be copied into the recipe as the
+// other machine's authority. It is reported instead, and a link that stays
+// inside the tree is read like a file.
+func TestCaptureLeavesASymlinkedCertificateOutsideTheRoot(t *testing.T) {
+	hostAuthority := filepath.Join(t.TempDir(), "host-root.crt")
+	if err := os.WriteFile(hostAuthority, selfSignedPEM(t, "host-root"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := systemRoot(buildRoot(t, map[string]string{
+		"usr/local/share/ca-certificates/from-host.crt": "-> " + hostAuthority,
+		"usr/local/share/ca-certificates/inside.crt":    "-> ../../../share/pki/corp.crt",
+		"usr/share/pki/corp.crt":                        string(selfSignedPEM(t, "corp-root")),
+	}))
+	carried, left := root.certificatesForRecipe()
+	if len(carried) != 1 || carried[0].path != "certs/inside.pem" {
+		t.Errorf("carried %+v, want only the link that stays inside the root", carried)
+	}
+	if len(left) != 1 || !strings.Contains(left[0].description, "from-host.crt") || !strings.Contains(left[0].reason, "symlink out of") {
+		t.Errorf("left = %+v, want the link out of the root reported", left)
+	}
+}
+
+// TestCaptureCarriesCertificatesInSubdirectories: update-ca-certificates
+// trusts every .crt below /usr/local/share/ca-certificates, and a machine
+// keeping its authority at corp/root.crt used to yield nothing carried and
+// nothing reported. The path below the directory names the certificate, and
+// a symlinked directory, which capture does not descend, is reported.
+func TestCaptureCarriesCertificatesInSubdirectories(t *testing.T) {
+	root := systemRoot(buildRoot(t, map[string]string{
+		"usr/local/share/ca-certificates/corp/root.crt":        string(selfSignedPEM(t, "corp-root")),
+		"usr/local/share/ca-certificates/corp/issuing/sub.crt": string(selfSignedPEM(t, "corp-issuing")),
+		"usr/local/share/ca-certificates/more":                 "-> ../../../share/pki",
+		"usr/share/pki/other.crt":                              string(selfSignedPEM(t, "other")),
+	}))
+	carried, left := root.certificatesForRecipe()
+	var paths, origins []string
+	for _, certificate := range carried {
+		paths = append(paths, certificate.path)
+		origins = append(origins, certificate.from)
+	}
+	if !slices.Equal(paths, []string{"certs/corp-issuing-sub.pem", "certs/corp-root.pem"}) {
+		t.Errorf("carried %q, want both certificates named after their paths", paths)
+	}
+	if !slices.Equal(origins, []string{"/usr/local/share/ca-certificates/corp/issuing/sub.crt", "/usr/local/share/ca-certificates/corp/root.crt"}) {
+		t.Errorf("origins = %q", origins)
+	}
+	if len(left) != 1 || !strings.Contains(left[0].description, "/more") || !strings.Contains(left[0].reason, "directory") {
+		t.Errorf("left = %+v, want the symlinked directory reported", left)
+	}
+}
+
+// TestModifiedConffilesStayInsideTheRoot: dpkg's status names the files a
+// package owns, and a mounted tree's status was written by another machine.
+// A ".." that climbs out of the tree, or a conffile that is a symlink to a
+// path on this machine, used to be read here and compared, so a hostile
+// status could name this host's files in the report, and a benign link was
+// compared with the wrong machine's copy. Neither is read; an edited file
+// inside the tree still is.
+func TestModifiedConffilesStayInsideTheRoot(t *testing.T) {
+	hostFile := filepath.Join(t.TempDir(), "host.conf")
+	if err := os.WriteFile(hostFile, []byte("this machine's\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	climb := "/etc/" + strings.Repeat("../", 12) + strings.TrimPrefix(hostFile, "/")
+	root := systemRoot(buildRoot(t, map[string]string{
+		"var/lib/dpkg/status": dpkgStanza("hostile", "optional", installed, "Conffiles:",
+			" "+climb+" "+md5Of("something else"),
+			" /etc/linked.conf "+md5Of("something else"),
+			" /etc/edited.conf "+md5Of("shipped\n")),
+		"etc/linked.conf": "-> " + hostFile,
+		"etc/edited.conf": "edited\n",
+	}))
+	packages, ok := root.installedPackages()
+	if !ok {
+		t.Fatal("the status could not be read")
+	}
+	if modified := root.modifiedConffiles(packages); !slices.Equal(modified, []string{"/etc/edited.conf"}) {
+		t.Errorf("modified = %q, want only the edited file inside the root", modified)
+	}
+}
+
+// TestParseDeb822SourcesEnabled: apt reads Enabled with StringToBool, so
+// "false", "0", "off" and "disable" turn a stanza off as "no" does, and a
+// word apt does not know leaves it on, as its default is. Only "no" used to
+// count, and a repository its owner had turned off with "false" was carried
+// as live, re-enabling it in the image.
+func TestParseDeb822SourcesEnabled(t *testing.T) {
+	for value, live := range map[string]bool{
+		"": true, "yes": true, "enabled": true, "true": true, "1": true, "on": true, "maybe": true,
+		"no": false, "No": false, "false": false, "FALSE": false, "0": false, "off": false, "disable": false, "without": false,
+	} {
+		stanza := "Types: deb\nURIs: https://x.example\nSuites: noble\nComponents: main\n"
+		if value != "" {
+			stanza += "Enabled: " + value + "\n"
+		}
+		if got := len(parseDeb822Sources("/etc/apt/sources.list.d/x.sources", stanza)) == 1; got != live {
+			t.Errorf("Enabled: %q carried = %v, want %v, as apt reads it", value, got, live)
+		}
+	}
+}
+
+// TestSourcesForRecipeFoldsATrailingSlash: the same repository in a .list
+// with a trailing slash and a .sources without used to be two sources,
+// docker and docker-2, two key files, and a recipe configuring one
+// repository twice, which validate does not refuse. Everything downstream
+// trims the slash; so does the identity the copies are grouped by.
+func TestSourcesForRecipeFoldsATrailingSlash(t *testing.T) {
+	root := buildRoot(t, map[string]string{
+		"etc/apt/keyrings/docker.asc":        string(pgp.Armor(fakeKeyPacket)),
+		"etc/apt/sources.list.d/docker.list": "deb [signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu/ noble stable\n",
+		"etc/apt/sources.list.d/docker.sources": "Types: deb\nURIs: https://download.docker.com/linux/ubuntu\n" +
+			"Suites: noble\nComponents: stable\nSigned-By: /etc/apt/keyrings/docker.asc\n",
+	})
+	carried, left := systemRoot(root).sourcesForRecipe("noble")
+	if len(carried) != 1 || len(left) != 0 {
+		t.Fatalf("carried %+v, left %+v; want one repository", carried, left)
+	}
+	if carried[0].source.Name != "docker" || carried[0].source.URL != "https://download.docker.com/linux/ubuntu" {
+		t.Errorf("source = %+v", carried[0].source)
+	}
+	if !strings.Contains(carried[0].from, "also listed in") {
+		t.Errorf("from = %q, want the folded copy named", carried[0].from)
+	}
+}
+
+// TestSourcesForRecipeCarriesEveryKeyringSignedByNames: apt lets Signed-By
+// name several keyrings, which is what a vendor's key rotation instructions
+// produce, and trusts a Release signed by any key in any of them. The deb822
+// parser handed the whole list to one file read, so a working repository
+// was reported as unreadable, and the one-line parser kept only the first
+// keyring. Both carry every keyring now, together in the recipe's key file,
+// so the build trusts what the machine did; a keyring that cannot be read is
+// still a reason to report the repository.
+func TestSourcesForRecipeCarriesEveryKeyringSignedByNames(t *testing.T) {
+	second := slices.Clone(fakeKeyPacket)
+	second[len(second)-1] = 0x01
+	root := buildRoot(t, map[string]string{
+		"etc/apt/keyrings/old.gpg": string(fakeKeyPacket),
+		"etc/apt/keyrings/new.gpg": string(second),
+		"etc/apt/sources.list.d/vendor.sources": "Types: deb\nURIs: https://apt.vendor.example/ubuntu\nSuites: noble\nComponents: main\n" +
+			"Signed-By: /etc/apt/keyrings/old.gpg,/etc/apt/keyrings/new.gpg\n",
+		"etc/apt/sources.list.d/other.list": "deb [signed-by=/etc/apt/keyrings/old.gpg,/etc/apt/keyrings/new.gpg] https://apt.other.example/ubuntu noble main\n",
+	})
+	carried, left := systemRoot(root).sourcesForRecipe("noble")
+	if len(carried) != 2 || len(left) != 0 {
+		t.Fatalf("carried %+v, left %+v; want both repositories", carried, left)
+	}
+	for _, source := range carried {
+		key, err := pgp.ParsePublicKey(source.key)
+		if err != nil || len(key.Fingerprints) != 2 {
+			t.Errorf("%s: key = %+v, %v; want both keyrings' keys in one file", source.source.Name, key, err)
+		}
+		if !strings.Contains(source.from, "old.gpg") || !strings.Contains(source.from, "new.gpg") {
+			t.Errorf("%s: from = %q, want both keyrings named", source.source.Name, source.from)
+		}
+	}
+
+	root = buildRoot(t, map[string]string{
+		"etc/apt/keyrings/old.gpg": string(fakeKeyPacket),
+		"etc/apt/sources.list.d/vendor.sources": "Types: deb\nURIs: https://apt.vendor.example/ubuntu\nSuites: noble\nComponents: main\n" +
+			"Signed-By: /etc/apt/keyrings/old.gpg /etc/apt/keyrings/gone.gpg\n",
+	})
+	carried, left = systemRoot(root).sourcesForRecipe("noble")
+	if len(carried) != 0 || len(left) != 1 || !strings.Contains(left[0].reason, "gone.gpg could not be read") {
+		t.Errorf("carried %+v, left %+v; want the missing keyring reported", carried, left)
 	}
 }
