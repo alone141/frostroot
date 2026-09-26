@@ -1085,3 +1085,28 @@ func TestPythonPickerOffersAndKeepsPyPINames(t *testing.T) {
 		t.Errorf("view should say what was left out:\n%s", view)
 	}
 }
+
+// TestPythonPickerShowsAProjectOnceWhateverTheSpelling: the PyPI index
+// compares names as PEP 503 does and answers with the published spelling,
+// and the picker compared the query with the top row byte for byte, so
+// typing flask listed Flask twice under a count of two, and Space on the
+// twin undid the first. One project is one row.
+func TestPythonPickerShowsAProjectOnceWhateverTheSpelling(t *testing.T) {
+	d := newPythonPickerDriver(t, "")
+	d.typeText("flask")
+	if got := d.rowNames(); !slices.Equal(got, []string{"Flask", "Flask-SQLAlchemy"}) {
+		t.Fatalf("rows = %v, want the project once, in its published spelling", got)
+	}
+	if d.picker.total != len(d.picker.rows) {
+		t.Errorf("%d found above %d rows", d.picker.total, len(d.picker.rows))
+	}
+	d.press(pressSpace)
+	if *d.answer != "Flask" {
+		t.Errorf("answer = %q, want Flask added once", *d.answer)
+	}
+	// A spelling the index does not know is still offered as typed.
+	d.typeText("PyYAML")
+	if got := d.rowNames(); !slices.Equal(got, []string{`"PyYAML"`}) {
+		t.Errorf("rows = %v, want the unknown name offered as typed", got)
+	}
+}

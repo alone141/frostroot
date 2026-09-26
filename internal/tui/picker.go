@@ -581,6 +581,16 @@ func (p *pickerField) refresh() {
 		}
 	}
 	exact := len(p.rows) > 0 && p.rows[0].name == query
+	if !exact && len(p.rows) > 0 && index != nil {
+		// The PyPI index compares names as PEP 503 does and answers with
+		// the published spelling, so flask and Flask are one project. Typed
+		// above its own row, the query would be a twin: two rows for one
+		// project, a count that does not match them, and a Space on the
+		// second undoing the first.
+		if match, isThere := index.Lookup(query); isThere && match.Name == p.rows[0].name {
+			exact = true
+		}
+	}
 	if query == "" || exact || p.checkName(query) != nil {
 		return
 	}
