@@ -1251,7 +1251,14 @@ folded over two lines in the cache, a source deadline served from the cache
 rather than reported, sections counted for section-less packages, names a
 private PyPI index serves that the cache could not give back, and the two
 memos that kept a stale answer), and `tui` passed its 4 checks again with
-that binary, searching the real archive and PyPI.
+that binary, searching the real archive and PyPI. So are the six fixes to
+the form and the picker (the Python field's own name rule, one row per
+project whatever its spelling, one summary lookup per rest of the cursor,
+the summary page cut to the terminal's width, a byte-order mark that is not
+a change, and two spellings of one project refused before the
+confirmation); the golden frames now refuse a line wider than the terminal
+they were recorded at, and `tui` passed its 4 checks once more with that
+binary.
 
 
 ## Documentation
