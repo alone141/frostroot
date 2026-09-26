@@ -837,3 +837,33 @@ func TestCaptureCarriesCertificatesInSubdirectories(t *testing.T) {
 		t.Errorf("left = %+v, want the symlinked directory reported", left)
 	}
 }
+
+// TestModifiedConffilesStayInsideTheRoot: dpkg's status names the files a
+// package owns, and a mounted tree's status was written by another machine.
+// A ".." that climbs out of the tree, or a conffile that is a symlink to a
+// path on this machine, used to be read here and compared, so a hostile
+// status could name this host's files in the report, and a benign link was
+// compared with the wrong machine's copy. Neither is read; an edited file
+// inside the tree still is.
+func TestModifiedConffilesStayInsideTheRoot(t *testing.T) {
+	hostFile := filepath.Join(t.TempDir(), "host.conf")
+	if err := os.WriteFile(hostFile, []byte("this machine's\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	climb := "/etc/" + strings.Repeat("../", 12) + strings.TrimPrefix(hostFile, "/")
+	root := systemRoot(buildRoot(t, map[string]string{
+		"var/lib/dpkg/status": dpkgStanza("hostile", "optional", installed, "Conffiles:",
+			" "+climb+" "+md5Of("something else"),
+			" /etc/linked.conf "+md5Of("something else"),
+			" /etc/edited.conf "+md5Of("shipped\n")),
+		"etc/linked.conf": "-> " + hostFile,
+		"etc/edited.conf": "edited\n",
+	}))
+	packages, ok := root.installedPackages()
+	if !ok {
+		t.Fatal("the status could not be read")
+	}
+	if modified := root.modifiedConffiles(packages); !slices.Equal(modified, []string{"/etc/edited.conf"}) {
+		t.Errorf("modified = %q, want only the edited file inside the root", modified)
+	}
+}
