@@ -521,12 +521,26 @@ func (p *pickerField) unknownHint(name string) string {
 	return name + " is not in the index; it may still come from somewhere else"
 }
 
+// checkName says whether one name is one the field's answer may hold: by
+// the field's own validator, which is the PEP 503 rule for the Python field
+// and apt's for the package fields, and by apt's rule for a field without
+// one. The rule used to be apt's for every field, so on the Python field
+// Flask, PyYAML and flask_sqlalchemy were offered no row, Space did nothing,
+// Enter said that Space would add them, and a pasted list kept only the
+// names that happened to be apt names too.
+func (p *pickerField) checkName(name string) error {
+	if p.validate != nil {
+		return p.validate(name)
+	}
+	return recipe.CheckPackageName(name)
+}
+
 // addSeveral adds every name of a pasted or comma-separated list.
 func (p *pickerField) addSeveral(text string) {
 	var refused []string
 	for _, name := range splitNames(text) {
 		switch {
-		case recipe.CheckPackageName(name) != nil:
+		case p.checkName(name) != nil:
 			refused = append(refused, name)
 		case slices.Contains(p.chosen, name) || slices.Contains(p.inCatalog(), name):
 		default:
@@ -567,7 +581,7 @@ func (p *pickerField) refresh() {
 		}
 	}
 	exact := len(p.rows) > 0 && p.rows[0].name == query
-	if query == "" || exact || recipe.CheckPackageName(query) != nil {
+	if query == "" || exact || p.checkName(query) != nil {
 		return
 	}
 	// What was typed comes first, so that Space after a whole name adds that
