@@ -1,6 +1,7 @@
 package capture
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -38,42 +39,71 @@ const maxCertificateNameLength = 64
 // certificatesForRecipe reads the authorities an organization added to the
 // machine. They live outside /etc, which is why the rest of capture does not
 // see them, and they are exactly what a machine behind a TLS-inspecting
-// proxy needs in its image. A file that does not parse is left for the
-// report rather than written as a certificate.
+// proxy needs in its image. update-ca-certificates trusts every .crt below
+// the directory and follows symlinks, so the whole tree is read, and a
+// certificate in a subdirectory is named after its path. Whatever cannot be
+// carried is left for the report rather than dropped: a file that does not
+// parse, a symlink that leaves the root, which with --root DIR would be
+// this machine's file and not the captured one's, and a symlink to a
+// directory, which is not descended. An authority the machine trusts is
+// carried or named, never neither.
 func (root systemRoot) certificatesForRecipe() (carried []capturedCertificate, left []leftSource) {
-	entries, err := os.ReadDir(root.path(localCertificateDir))
-	if err != nil {
+	base := root.path(localCertificateDir)
+	if _, err := os.Lstat(base); err != nil {
 		return nil, nil
 	}
 	usedNames := map[string]bool{}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".crt") {
-			continue
+	_ = filepath.WalkDir(base, func(path string, entry fs.DirEntry, err error) error {
+		from := root.relativePath(path)
+		if err != nil {
+			left = append(left, leftSource{from, "could not be listed: " + err.Error()})
+			return nil
 		}
-		from := "/" + localCertificateDir + "/" + entry.Name()
-		data, err := os.ReadFile(root.path(localCertificateDir + "/" + entry.Name()))
+		if entry.IsDir() {
+			return nil
+		}
+		relative := strings.TrimPrefix(from, "/")
+		filePath := root.path(relative)
+		if entry.Type()&fs.ModeSymlink != 0 {
+			resolved, inside := root.pathInRoot(relative)
+			if !inside {
+				left = append(left, leftSource{from, "a symlink out of " + string(root) + ", which belongs to this machine rather than the one being captured"})
+				return nil
+			}
+			if info, err := os.Stat(resolved); err == nil && info.IsDir() {
+				left = append(left, leftSource{from, "a symlink to a directory, which is not followed; name its certificates in [certificates] by hand"})
+				return nil
+			}
+			filePath = resolved
+		}
+		if !strings.HasSuffix(entry.Name(), ".crt") {
+			return nil
+		}
+		data, err := os.ReadFile(filePath)
 		if err != nil {
 			left = append(left, leftSource{from, "could not be read: " + err.Error()})
-			continue
+			return nil
 		}
 		certificates, err := pki.ParseCertificates(data)
 		if err != nil {
 			left = append(left, leftSource{from, err.Error()})
-			continue
+			return nil
 		}
-		name := certificateNameFor(entry.Name(), usedNames)
+		name := certificateNameFor(strings.TrimPrefix(from, "/"+localCertificateDir+"/"), usedNames)
 		usedNames[name] = true
 		carried = append(carried, capturedCertificate{
 			path: recipe.CertificatesDirName + "/" + name + ".pem",
 			pem:  pki.Concatenate(certificates),
 			from: from,
 		})
-	}
+		return nil
+	})
 	return carried, left
 }
 
-// certificateNameFor turns a .crt file name into one the recipe accepts,
-// made unique against the names already taken.
+// certificateNameFor turns a .crt file name, or its path below the local
+// certificate directory, into one the recipe accepts, made unique against
+// the names already taken.
 func certificateNameFor(fileName string, usedNames map[string]bool) string {
 	name := strings.TrimSuffix(fileName, ".crt")
 	name = strings.Trim(certificateNameSeparators.ReplaceAllString(name, "-"), "-._")

@@ -783,3 +783,57 @@ func TestCaptureMachinePackagesAreNothingOnAWSLRoot(t *testing.T) {
 		t.Errorf("finding = %+v, want the area present with nothing found", finding)
 	}
 }
+
+// TestCaptureLeavesASymlinkedCertificateOutsideTheRoot: update-ca-certificates
+// follows symlinks, so a link under ca-certificates is an ordinary layout.
+// Capturing a mounted tree, a link whose target is not in that tree resolves
+// on this machine, and its bytes used to be copied into the recipe as the
+// other machine's authority. It is reported instead, and a link that stays
+// inside the tree is read like a file.
+func TestCaptureLeavesASymlinkedCertificateOutsideTheRoot(t *testing.T) {
+	hostAuthority := filepath.Join(t.TempDir(), "host-root.crt")
+	if err := os.WriteFile(hostAuthority, selfSignedPEM(t, "host-root"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := systemRoot(buildRoot(t, map[string]string{
+		"usr/local/share/ca-certificates/from-host.crt": "-> " + hostAuthority,
+		"usr/local/share/ca-certificates/inside.crt":    "-> ../../../share/pki/corp.crt",
+		"usr/share/pki/corp.crt":                        string(selfSignedPEM(t, "corp-root")),
+	}))
+	carried, left := root.certificatesForRecipe()
+	if len(carried) != 1 || carried[0].path != "certs/inside.pem" {
+		t.Errorf("carried %+v, want only the link that stays inside the root", carried)
+	}
+	if len(left) != 1 || !strings.Contains(left[0].description, "from-host.crt") || !strings.Contains(left[0].reason, "symlink out of") {
+		t.Errorf("left = %+v, want the link out of the root reported", left)
+	}
+}
+
+// TestCaptureCarriesCertificatesInSubdirectories: update-ca-certificates
+// trusts every .crt below /usr/local/share/ca-certificates, and a machine
+// keeping its authority at corp/root.crt used to yield nothing carried and
+// nothing reported. The path below the directory names the certificate, and
+// a symlinked directory, which capture does not descend, is reported.
+func TestCaptureCarriesCertificatesInSubdirectories(t *testing.T) {
+	root := systemRoot(buildRoot(t, map[string]string{
+		"usr/local/share/ca-certificates/corp/root.crt":        string(selfSignedPEM(t, "corp-root")),
+		"usr/local/share/ca-certificates/corp/issuing/sub.crt": string(selfSignedPEM(t, "corp-issuing")),
+		"usr/local/share/ca-certificates/more":                 "-> ../../../share/pki",
+		"usr/share/pki/other.crt":                              string(selfSignedPEM(t, "other")),
+	}))
+	carried, left := root.certificatesForRecipe()
+	var paths, origins []string
+	for _, certificate := range carried {
+		paths = append(paths, certificate.path)
+		origins = append(origins, certificate.from)
+	}
+	if !slices.Equal(paths, []string{"certs/corp-issuing-sub.pem", "certs/corp-root.pem"}) {
+		t.Errorf("carried %q, want both certificates named after their paths", paths)
+	}
+	if !slices.Equal(origins, []string{"/usr/local/share/ca-certificates/corp/issuing/sub.crt", "/usr/local/share/ca-certificates/corp/root.crt"}) {
+		t.Errorf("origins = %q", origins)
+	}
+	if len(left) != 1 || !strings.Contains(left[0].description, "/more") || !strings.Contains(left[0].reason, "directory") {
+		t.Errorf("left = %+v, want the symlinked directory reported", left)
+	}
+}
