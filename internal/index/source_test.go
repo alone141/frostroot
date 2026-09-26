@@ -196,14 +196,19 @@ func TestUnionNamesTheRepositoryItCouldNotRead(t *testing.T) {
 func TestSectionsLeaveOutTheOneAStanzaDidNotName(t *testing.T) {
 	// A vendor's Packages stanza often has no Section. An empty one is not
 	// a section to narrow to: the chooser offers "all sections" already, and
-	// a second row of that name would filter by nothing at all.
+	// a second row of that name would filter by nothing at all. Both paths
+	// have to agree: an empty query answers from the sections counted when
+	// the index was built, and a query that matches the section-less
+	// package counts sections as it goes.
 	vendor := newIndex("docker", testNow, []Entry{
 		{Name: "containerd.io", Origin: "docker"},
 		{Name: "docker-ce", Section: "admin", Origin: "docker"},
 	}, func() time.Time { return testNow })
-	for _, section := range vendor.SectionsMatching("") {
-		if section.Name == "" {
-			t.Errorf("sections = %+v, want no row for a package with no section", vendor.SectionsMatching(""))
+	for _, query := range []string{"", "containerd"} {
+		for _, section := range vendor.SectionsMatching(query) {
+			if section.Name == "" {
+				t.Errorf("SectionsMatching(%q) = %+v, want no row for a package with no section", query, vendor.SectionsMatching(query))
+			}
 		}
 	}
 	// The package is still there; it is only the section that is not.
