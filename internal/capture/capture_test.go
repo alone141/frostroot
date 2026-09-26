@@ -381,7 +381,7 @@ func TestParseSourceFiles(t *testing.T) {
 	oneLine := "# comment\ndeb [arch=amd64 signed-by=/k.gpg,/other.gpg] https://ppa.example/ubuntu noble main universe\ndeb-src http://archive.ubuntu.com/ubuntu noble main\ndeb http://plain.example/repo noble main\nbroken\n"
 	got := parseOneLineSources("/etc/apt/sources.list", oneLine)
 	want := []aptSource{
-		{file: "/etc/apt/sources.list", uri: "https://ppa.example/ubuntu", suite: "noble", components: []string{"main", "universe"}, signedBy: "/k.gpg"},
+		{file: "/etc/apt/sources.list", uri: "https://ppa.example/ubuntu", suite: "noble", components: []string{"main", "universe"}, signedBy: "/k.gpg,/other.gpg"},
 		{file: "/etc/apt/sources.list", uri: "http://plain.example/repo", suite: "noble", components: []string{"main"}},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -909,5 +909,48 @@ func TestSourcesForRecipeFoldsATrailingSlash(t *testing.T) {
 	}
 	if !strings.Contains(carried[0].from, "also listed in") {
 		t.Errorf("from = %q, want the folded copy named", carried[0].from)
+	}
+}
+
+// TestSourcesForRecipeCarriesEveryKeyringSignedByNames: apt lets Signed-By
+// name several keyrings, which is what a vendor's key rotation instructions
+// produce, and trusts a Release signed by any key in any of them. The deb822
+// parser handed the whole list to one file read, so a working repository
+// was reported as unreadable, and the one-line parser kept only the first
+// keyring. Both carry every keyring now, together in the recipe's key file,
+// so the build trusts what the machine did; a keyring that cannot be read is
+// still a reason to report the repository.
+func TestSourcesForRecipeCarriesEveryKeyringSignedByNames(t *testing.T) {
+	second := slices.Clone(fakeKeyPacket)
+	second[len(second)-1] = 0x01
+	root := buildRoot(t, map[string]string{
+		"etc/apt/keyrings/old.gpg": string(fakeKeyPacket),
+		"etc/apt/keyrings/new.gpg": string(second),
+		"etc/apt/sources.list.d/vendor.sources": "Types: deb\nURIs: https://apt.vendor.example/ubuntu\nSuites: noble\nComponents: main\n" +
+			"Signed-By: /etc/apt/keyrings/old.gpg,/etc/apt/keyrings/new.gpg\n",
+		"etc/apt/sources.list.d/other.list": "deb [signed-by=/etc/apt/keyrings/old.gpg,/etc/apt/keyrings/new.gpg] https://apt.other.example/ubuntu noble main\n",
+	})
+	carried, left := systemRoot(root).sourcesForRecipe("noble")
+	if len(carried) != 2 || len(left) != 0 {
+		t.Fatalf("carried %+v, left %+v; want both repositories", carried, left)
+	}
+	for _, source := range carried {
+		key, err := pgp.ParsePublicKey(source.key)
+		if err != nil || len(key.Fingerprints) != 2 {
+			t.Errorf("%s: key = %+v, %v; want both keyrings' keys in one file", source.source.Name, key, err)
+		}
+		if !strings.Contains(source.from, "old.gpg") || !strings.Contains(source.from, "new.gpg") {
+			t.Errorf("%s: from = %q, want both keyrings named", source.source.Name, source.from)
+		}
+	}
+
+	root = buildRoot(t, map[string]string{
+		"etc/apt/keyrings/old.gpg": string(fakeKeyPacket),
+		"etc/apt/sources.list.d/vendor.sources": "Types: deb\nURIs: https://apt.vendor.example/ubuntu\nSuites: noble\nComponents: main\n" +
+			"Signed-By: /etc/apt/keyrings/old.gpg /etc/apt/keyrings/gone.gpg\n",
+	})
+	carried, left = systemRoot(root).sourcesForRecipe("noble")
+	if len(carried) != 0 || len(left) != 1 || !strings.Contains(left[0].reason, "gone.gpg could not be read") {
+		t.Errorf("carried %+v, left %+v; want the missing keyring reported", carried, left)
 	}
 }
