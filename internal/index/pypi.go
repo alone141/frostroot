@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -85,10 +86,23 @@ func OpenPyPI(ctx context.Context, options Options) (*PyPIIndex, error) {
 	return fetched, nil
 }
 
-// newPyPIIndex sorts projects by their normalized name and returns the index.
+// newPyPIIndex sorts projects by their normalized name and returns the
+// index. A name the cache could not give back is left out: the cache is a
+// line per name, read back in strictly increasing normalized order, so a
+// name that is not a PEP 503 name, or a second spelling of a name already
+// there, would make the file unreadable and the whole index fetch again on
+// every run. pypi.org publishes neither; a private index may, and no recipe
+// could name such a project anyway.
 func newPyPIIndex(fetched time.Time, projects []Project, now func() time.Time) *PyPIIndex {
-	sort.Slice(projects, func(i, j int) bool { return projects[i].normalized < projects[j].normalized })
-	return &PyPIIndex{projects: projects, fetched: fetched, now: now}
+	kept := make([]Project, 0, len(projects))
+	for _, project := range projects {
+		if recipe.CheckPythonPackageName(project.Name) == nil {
+			kept = append(kept, project)
+		}
+	}
+	sort.SliceStable(kept, func(i, j int) bool { return kept[i].normalized < kept[j].normalized })
+	kept = slices.CompactFunc(kept, func(a, b Project) bool { return a.normalized == b.normalized })
+	return &PyPIIndex{projects: kept, fetched: fetched, now: now}
 }
 
 // Len returns how many projects the index holds.
