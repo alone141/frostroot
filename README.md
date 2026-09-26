@@ -1258,7 +1258,14 @@ the summary page cut to the terminal's width, a byte-order mark that is not
 a change, and two spellings of one project refused before the
 confirmation); the golden frames now refuse a line wider than the terminal
 they were recorded at, and `tui` passed its 4 checks once more with that
-binary.
+binary. The first login was checked by `wsl-boot` with the **v0.13.2 release
+binary**, the one people download: a 24.04 image with `git`, `requests` and a
+`[certificates]` authority built in 487 s, imported as a throwaway
+distribution in 12 s, and at first login the recipe's user, passwordless
+sudo, `systemctl is-system-running` = `running`, DNS, a locale without
+warnings, UTC, `python3` at `/opt/frostroot/venv/bin/python3` with `requests`
+2.34.2 and pip 24.3.1, the authority trusted by the image's store, and apt
+holding no setting of the build's; then the distribution was removed.
 
 
 ## Documentation
