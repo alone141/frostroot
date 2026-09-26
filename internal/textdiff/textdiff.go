@@ -119,9 +119,14 @@ func replaceAll(oldLines, newLines []string) Result {
 	return result
 }
 
-// splitLines splits text into lines, without the newline characters and
-// without a phantom empty line after a final newline.
+// splitLines splits text into lines, without the newline characters,
+// without a phantom empty line after a final newline, and without the
+// byte-order mark an editor such as Notepad puts before the first line of a
+// file saved as "UTF-8 with BOM": recipe.Load reads past it, so a file that
+// differs by nothing else parses to the same recipe, and the diff must say
+// so rather than show two lines a reader cannot tell apart.
 func splitLines(text string) []string {
+	text = strings.TrimPrefix(text, "\xef\xbb\xbf")
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.TrimSuffix(text, "\n")
 	if text == "" {

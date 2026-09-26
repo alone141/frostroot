@@ -994,3 +994,138 @@ func TestPythonFieldIsNotReopenedWhenASourceChanges(t *testing.T) {
 		t.Errorf("the apt index was opened with %+v, want the recipe's one source", opened)
 	}
 }
+
+// pypiLikeIndex is a form.PackageIndex that compares names as the PyPI index
+// does, by PEP 503 normalization, and answers with the published spelling.
+type pypiLikeIndex struct{ projects []string }
+
+func (x pypiLikeIndex) Search(query, _ string, limit int) ([]form.Match, int) {
+	query = recipe.NormalizePythonName(strings.TrimSpace(query))
+	var matches []form.Match
+	for _, project := range x.projects {
+		if normalized := recipe.NormalizePythonName(project); normalized == query || strings.Contains(normalized, query) {
+			matches = append(matches, form.Match{Name: project})
+		}
+	}
+	sort.SliceStable(matches, func(i, j int) bool {
+		return recipe.NormalizePythonName(matches[i].Name) == query && recipe.NormalizePythonName(matches[j].Name) != query
+	})
+	total := len(matches)
+	return matches[:min(limit, total)], total
+}
+
+func (pypiLikeIndex) SectionsMatching(string) []form.SectionCount { return nil }
+
+func (x pypiLikeIndex) Lookup(name string) (form.Match, bool) {
+	for _, project := range x.projects {
+		if recipe.NormalizePythonName(project) == recipe.NormalizePythonName(name) {
+			return form.Match{Name: project}, true
+		}
+	}
+	return form.Match{}, false
+}
+
+func (x pypiLikeIndex) Has(name string) bool {
+	_, isThere := x.Lookup(name)
+	return isThere
+}
+
+func (pypiLikeIndex) Nearest(string, int) []string { return nil }
+func (pypiLikeIndex) Describe() string             { return "PyPI · 3 projects · fetched just now" }
+
+// checkPythonNames is the Python field's rule, as form.Fields gives it.
+func checkPythonNames(text string) error {
+	for _, name := range strings.Fields(text) {
+		if err := recipe.CheckPythonPackageName(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// newPythonPickerDriver focuses a picker on the Python field: PyPI's index
+// and the PEP 503 rule for names.
+func newPythonPickerDriver(t *testing.T, initial string) *pickerDriver {
+	t.Helper()
+	answer := initial
+	field := form.Field{
+		Key: form.KeyPythonPackages, Title: "Python packages", Description: "type to search PyPI",
+		OpenIndex: func(context.Context, form.IndexRequest, func(int64, int64)) (form.PackageIndex, error) {
+			return pypiLikeIndex{projects: []string{"Flask", "Flask-SQLAlchemy", "requests"}}, nil
+		},
+		Validate: checkPythonNames,
+	}
+	picker := newPickerField(context.Background(), field, &answer, func() form.IndexRequest { return form.IndexRequest{Release: "24.04"} }, func() []string { return nil }, unicodeGlyphs)
+	picker.WithWidth(80)
+	d := &pickerDriver{driver: newDriver(t, picker), picker: picker, answer: &answer}
+	d.settle(picker.Focus())
+	return d
+}
+
+// TestPythonPickerOffersAndKeepsPyPINames: the picker applied apt's name
+// rule to every field, so on the Python field Flask, PyYAML and
+// flask_sqlalchemy were offered no row, Space did nothing, Enter said that
+// Space would add them, and a pasted list kept only the names that were apt
+// names too. The field's own rule decides now.
+func TestPythonPickerOffersAndKeepsPyPINames(t *testing.T) {
+	d := newPythonPickerDriver(t, "")
+	d.typeText("PyYAML")
+	if got := d.rowNames(); !slices.Equal(got, []string{`"PyYAML"`}) {
+		t.Fatalf("rows = %v, want the typed name offered", got)
+	}
+	d.press(pressSpace)
+	if *d.answer != "PyYAML" {
+		t.Errorf("answer = %q, want PyYAML added", *d.answer)
+	}
+	d.press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("flask_sqlalchemy Django, requests==2.32 numpy"), Paste: true})
+	if *d.answer != "PyYAML flask_sqlalchemy Django numpy" {
+		t.Errorf("answer = %q, want every PyPI name kept and the version pin left out", *d.answer)
+	}
+	if view := d.picker.View(); !strings.Contains(view, "left out: requests==2.32") {
+		t.Errorf("view should say what was left out:\n%s", view)
+	}
+}
+
+// TestPythonPickerShowsAProjectOnceWhateverTheSpelling: the PyPI index
+// compares names as PEP 503 does and answers with the published spelling,
+// and the picker compared the query with the top row byte for byte, so
+// typing flask listed Flask twice under a count of two, and Space on the
+// twin undid the first. One project is one row.
+func TestPythonPickerShowsAProjectOnceWhateverTheSpelling(t *testing.T) {
+	d := newPythonPickerDriver(t, "")
+	d.typeText("flask")
+	if got := d.rowNames(); !slices.Equal(got, []string{"Flask", "Flask-SQLAlchemy"}) {
+		t.Fatalf("rows = %v, want the project once, in its published spelling", got)
+	}
+	if d.picker.total != len(d.picker.rows) {
+		t.Errorf("%d found above %d rows", d.picker.total, len(d.picker.rows))
+	}
+	d.press(pressSpace)
+	if *d.answer != "Flask" {
+		t.Errorf("answer = %q, want Flask added once", *d.answer)
+	}
+	// A spelling the index does not know is still offered as typed.
+	d.typeText("PyYAML")
+	if got := d.rowNames(); !slices.Equal(got, []string{`"PyYAML"`}) {
+		t.Errorf("rows = %v, want the unknown name offered as typed", got)
+	}
+}
+
+// TestPickerAsksForASummaryOnce: a huh group hands its focused field every
+// message twice. The tick path spends its counter and so answers a doubled
+// tick once; the rest that is due for a summary did not, so every rest of
+// the cursor became two lookups, both missing the cache, against the spec's
+// one request per row.
+func TestPickerAsksForASummaryOnce(t *testing.T) {
+	source := newSummarySource()
+	source.release = make(chan struct{})
+	t.Cleanup(func() { close(source.release) })
+	d := newSummaryDriver(t, source)
+	d.typeText("cmake")
+	due := pickerSummaryDueMsg{tick: d.picker.summaryTick, name: d.picker.highlighted()}
+	_, first := d.picker.Update(due)
+	_, second := d.picker.Update(due)
+	if first == nil || second != nil {
+		t.Errorf("a rest delivered twice was answered %v and %v; want one lookup", first != nil, second != nil)
+	}
+}

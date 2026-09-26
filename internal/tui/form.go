@@ -208,6 +208,7 @@ type summaryModel struct {
 	heading  string
 	warning  string
 	text     string // the preview, whole; the pane shows it cut to its width
+	width    int    // the terminal's, or 0 before it has said
 	glyphs   glyphSet
 	pane     viewport.Model
 	hasPane  bool
@@ -262,8 +263,13 @@ func (s *summaryModel) setPreview(preview Preview, width, height int) {
 
 // resize fits the pane to the terminal, leaving the summary above and the
 // question below their rows, and cuts the lines to the pane's width so that
-// none wraps.
+// none wraps. The summary and the warning are cut when they are drawn, to
+// the width kept here: capture answers with hundreds of packages on one
+// line, and a line that wrapped would take rows this arithmetic did not
+// count, until the heading, the answers and the question had scrolled off
+// the one screen that asks whether to write.
 func (s *summaryModel) resize(width, height int) {
+	s.width = width
 	if !s.hasPane {
 		return
 	}
@@ -306,21 +312,31 @@ func isScrollKey(key tea.KeyMsg) bool {
 	}
 }
 
+// fitted cuts every line of text to the terminal's width, with an ellipsis,
+// the way the pane cuts the preview; before the terminal has said its width
+// nothing is cut.
+func (s *summaryModel) fitted(text string) string {
+	if s.width <= 0 {
+		return text
+	}
+	return fitLines(text, s.width, s.glyphs.ellipsis)
+}
+
 // View renders the page.
 func (s *summaryModel) View() string {
 	var view strings.Builder
 	view.WriteString(titleStyle.Render("Summary"))
 	view.WriteByte('\n')
-	view.WriteString(s.summary)
+	view.WriteString(s.fitted(s.summary))
 	view.WriteByte('\n')
 	if s.warning != "" {
 		view.WriteByte('\n')
-		view.WriteString(warningStyle.Render(s.warning))
+		view.WriteString(warningStyle.Render(s.fitted(s.warning)))
 		view.WriteByte('\n')
 	}
 	if s.heading != "" {
 		view.WriteByte('\n')
-		view.WriteString(s.heading)
+		view.WriteString(s.fitted(s.heading))
 		view.WriteByte('\n')
 	}
 	if s.hasPane {

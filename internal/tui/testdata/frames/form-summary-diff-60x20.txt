@@ -5,7 +5,7 @@ System    UTC, en_US.UTF-8, systemd on
 Sources   Ubuntu's archive only
 Packages  none
 
-4 lines change; your own comments in the file are replaced by the template's:
+4 lines change; your own comments in the file are replaced …
 ╭──────────────────────────────────────────────────────────╮
 │   [image]                                                │
 │ - name = "lab"  # file name of the tarball and name of … │

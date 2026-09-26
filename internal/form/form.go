@@ -330,12 +330,24 @@ func checkPackageList(text string) error {
 }
 
 // checkPythonPackageList reports the first PyPI name in text that a recipe
-// cannot hold.
+// cannot hold, or two names that are one project. recipe.Validate compares
+// names as PEP 503 does, so flask-sqlalchemy beside flask.sqlalchemy was
+// refused after the form's confirmation, with nothing written and the
+// answers gone; here the answer can still be changed.
 func checkPythonPackageList(text string) error {
+	spellings := map[string]string{}
 	for _, packageName := range splitPackageList(text) {
 		if err := recipe.CheckPythonPackageName(packageName); err != nil {
 			return err
 		}
+		normalized := recipe.NormalizePythonName(packageName)
+		if earlier, listed := spellings[normalized]; listed {
+			if earlier == packageName {
+				return fmt.Errorf("%s is listed twice", packageName)
+			}
+			return fmt.Errorf("%s and %s are one PyPI project; keep one of them", earlier, packageName)
+		}
+		spellings[normalized] = packageName
 	}
 	return nil
 }

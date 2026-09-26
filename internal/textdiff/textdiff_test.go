@@ -21,6 +21,15 @@ func TestLines(t *testing.T) {
 			wantString: "  a\n  b\n",
 		},
 		{
+			// Notepad's "UTF-8 with BOM": recipe.Load reads past the mark,
+			// so the file is the same recipe and the diff must not show a
+			// first line that differs by a character no one can see.
+			name:       "byte-order mark",
+			oldText:    "\xef\xbb\xbfa\nb\n",
+			newText:    "a\nb\n",
+			wantString: "  a\n  b\n",
+		},
+		{
 			name:       "a line changed",
 			oldText:    "[image]\nname = \"lab\"\nrelease = \"24.04\"\n",
 			newText:    "[image]\nname = \"cpp-lab\"\nrelease = \"24.04\"\n",
