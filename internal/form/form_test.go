@@ -479,3 +479,27 @@ func TestEditKeepsThePythonIndexURL(t *testing.T) {
 		t.Errorf("python table = %+v, want none once no package is asked for", table)
 	}
 }
+
+// TestPythonPackageListRefusesTwoSpellingsOfOneProject: the recipe compares
+// PyPI names as PEP 503 does, so an answer holding flask-sqlalchemy and
+// flask.sqlalchemy used to pass the field, show no warning, default to
+// Write, and be refused after the confirmation with nothing written. The
+// field refuses it while the answer can still be changed.
+func TestPythonPackageListRefusesTwoSpellingsOfOneProject(t *testing.T) {
+	for text, wantInError := range map[string]string{
+		"flask-sqlalchemy flask.sqlalchemy": "one PyPI project",
+		"requests Requests":                 "one PyPI project",
+		"requests numpy requests":           "listed twice",
+		"requests==2.32":                    "invalid python package name",
+	} {
+		err := checkPythonPackageList(text)
+		if err == nil || !strings.Contains(err.Error(), wantInError) {
+			t.Errorf("checkPythonPackageList(%q) = %v, want an error mentioning %q", text, err, wantInError)
+		}
+	}
+	for _, text := range []string{"", "requests numpy", "Flask-SQLAlchemy flask"} {
+		if err := checkPythonPackageList(text); err != nil {
+			t.Errorf("checkPythonPackageList(%q) = %v, want nil", text, err)
+		}
+	}
+}
