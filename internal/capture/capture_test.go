@@ -887,3 +887,27 @@ func TestParseDeb822SourcesEnabled(t *testing.T) {
 		}
 	}
 }
+
+// TestSourcesForRecipeFoldsATrailingSlash: the same repository in a .list
+// with a trailing slash and a .sources without used to be two sources,
+// docker and docker-2, two key files, and a recipe configuring one
+// repository twice, which validate does not refuse. Everything downstream
+// trims the slash; so does the identity the copies are grouped by.
+func TestSourcesForRecipeFoldsATrailingSlash(t *testing.T) {
+	root := buildRoot(t, map[string]string{
+		"etc/apt/keyrings/docker.asc":        string(pgp.Armor(fakeKeyPacket)),
+		"etc/apt/sources.list.d/docker.list": "deb [signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu/ noble stable\n",
+		"etc/apt/sources.list.d/docker.sources": "Types: deb\nURIs: https://download.docker.com/linux/ubuntu\n" +
+			"Suites: noble\nComponents: stable\nSigned-By: /etc/apt/keyrings/docker.asc\n",
+	})
+	carried, left := systemRoot(root).sourcesForRecipe("noble")
+	if len(carried) != 1 || len(left) != 0 {
+		t.Fatalf("carried %+v, left %+v; want one repository", carried, left)
+	}
+	if carried[0].source.Name != "docker" || carried[0].source.URL != "https://download.docker.com/linux/ubuntu" {
+		t.Errorf("source = %+v", carried[0].source)
+	}
+	if !strings.Contains(carried[0].from, "also listed in") {
+		t.Errorf("from = %q, want the folded copy named", carried[0].from)
+	}
+}

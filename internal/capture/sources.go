@@ -175,14 +175,17 @@ func (root systemRoot) sourcesForRecipe(releaseSuite string) (carried []carriedS
 	// One URI and suite can be listed more than once: a .sources file added
 	// by a vendor's current instructions, beside the .list its older ones
 	// left behind. They are one repository, so they are decided together
-	// rather than the first copy standing for all of them.
+	// rather than the first copy standing for all of them. A trailing slash
+	// on the URI is not a difference: apt fetches the same repository, and
+	// everything downstream trims it, so the identity does too, or the two
+	// copies became docker and docker-2 with two key files.
 	var identities []string
 	copies := map[string][]aptSource{}
 	for _, entry := range root.aptSources() {
 		if isUbuntuArchiveURI(entry.uri) {
 			continue
 		}
-		identity := entry.uri + " " + entry.suite
+		identity := strings.TrimRight(entry.uri, "/") + " " + entry.suite
 		if _, grouped := copies[identity]; !grouped {
 			identities = append(identities, identity)
 		}
