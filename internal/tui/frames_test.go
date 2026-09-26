@@ -6,11 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"frostroot/internal/builder"
 	"frostroot/internal/form"
@@ -53,11 +55,25 @@ func frameOf(view string) string {
 	return strings.TrimRight(strings.Join(lines, "\n"), "\n") + "\n"
 }
 
+// frameSizeSuffix is the terminal size a frame's name ends in.
+var frameSizeSuffix = regexp.MustCompile(`-(\d+)x(\d+)$`)
+
 // assertFrame compares view with the recorded frame name, or records it
-// when the environment says to.
+// when the environment says to. Either way, no line of the view may be
+// wider than the terminal the frame is named for: a line that wraps takes a
+// row the screen did not count, and the frames used to record such lines
+// without anyone noticing.
 func assertFrame(t *testing.T, name, view string) {
 	t.Helper()
 	got := frameOf(view)
+	if size := frameSizeSuffix.FindStringSubmatch(name); size != nil {
+		cols, _ := strconv.Atoi(size[1])
+		for number, line := range strings.Split(strings.TrimRight(got, "\n"), "\n") {
+			if width := lipgloss.Width(line); width > cols {
+				t.Errorf("%s: line %d is %d cells wide on a %d-column terminal: %q", name, number+1, width, cols, line)
+			}
+		}
+	}
 	path := filepath.Join(framesDir, name+".txt")
 	if os.Getenv(updateFramesVariable) != "" {
 		if err := os.MkdirAll(framesDir, 0o755); err != nil {

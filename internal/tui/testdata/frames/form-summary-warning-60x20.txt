@@ -8,7 +8,7 @@ Packages  none
 Not in Ubuntu's noble archive:
   ninja-buld  nearest: ninja-build
   docker-ce
-The recipe has no other source that could provide them, so build will
+The recipe has no other source that could provide them, so …
 stop at "Unable to locate package" unless one is added.
 
 This is what frostroot.toml will say:

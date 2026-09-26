@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"frostroot/internal/form"
 )
@@ -91,5 +92,34 @@ func TestSummaryPaneFitsTheTerminal(t *testing.T) {
 	}
 	if d.model.summary.pane.Width != 56 {
 		t.Errorf("pane width %d on a 60-column terminal, want 56", d.model.summary.pane.Width)
+	}
+}
+
+// TestSummaryPageFitsTheWidth: resize counts the summary and the warning as
+// one row per line, and View wrote them whole, so a capture's answer of
+// hundreds of packages on one line wrapped over rows the arithmetic did not
+// count, and on a 60-column terminal the heading, the answers and the
+// question scrolled off the one screen that asks whether to write. Every
+// line is cut to the width now, as the pane's already were.
+func TestSummaryPageFitsTheWidth(t *testing.T) {
+	values := form.Defaults(noHost)
+	values[form.KeyOtherPackages] = strings.TrimSpace(strings.Repeat("libexample-dev ", 40))
+	warning := "Not in the archive: " + strings.TrimSpace(strings.Repeat("libexample-dev ", 40))
+	preview := func(form.Values) Preview {
+		return Preview{Heading: "This is what frostroot.toml will say:", Text: "[image]\nname = \"lab\"\n", Warning: warning}
+	}
+	d := newFormDriverWithPreview(t, values, preview)
+	d.press(tea.WindowSizeMsg{Width: 60, Height: 20})
+	d.pressEnterUntil(stageSummary)
+	view := frameOf(d.model.View())
+	for number, line := range strings.Split(strings.TrimRight(view, "\n"), "\n") {
+		if width := lipgloss.Width(line); width > 60 {
+			t.Errorf("line %d is %d cells wide on a 60-column terminal: %q", number+1, width, line)
+		}
+	}
+	for _, wantText := range []string{"Summary", "libexample-dev", "Not in the archive", "Write frostroot.toml?"} {
+		if !strings.Contains(view, wantText) {
+			t.Errorf("summary page lacks %q:\n%s", wantText, view)
+		}
 	}
 }
