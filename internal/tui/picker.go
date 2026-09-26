@@ -386,6 +386,10 @@ func (p *pickerField) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.tick != p.summaryTick || !p.focused || p.highlighted() != msg.name {
 			return p, nil // the cursor moved on; that row is not wanted now
 		}
+		// A huh group hands its focused field every message twice, and a
+		// rest that is delivered twice must not become two requests: the
+		// tick is spent, so that the second copy is a rest superseded.
+		p.summaryTick++
 		p.summaryPending = msg.name
 		return p, p.fetchSummary(msg.name)
 	case pickerSummaryMsg:

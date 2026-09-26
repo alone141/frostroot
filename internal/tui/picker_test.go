@@ -1110,3 +1110,22 @@ func TestPythonPickerShowsAProjectOnceWhateverTheSpelling(t *testing.T) {
 		t.Errorf("rows = %v, want the unknown name offered as typed", got)
 	}
 }
+
+// TestPickerAsksForASummaryOnce: a huh group hands its focused field every
+// message twice. The tick path spends its counter and so answers a doubled
+// tick once; the rest that is due for a summary did not, so every rest of
+// the cursor became two lookups, both missing the cache, against the spec's
+// one request per row.
+func TestPickerAsksForASummaryOnce(t *testing.T) {
+	source := newSummarySource()
+	source.release = make(chan struct{})
+	t.Cleanup(func() { close(source.release) })
+	d := newSummaryDriver(t, source)
+	d.typeText("cmake")
+	due := pickerSummaryDueMsg{tick: d.picker.summaryTick, name: d.picker.highlighted()}
+	_, first := d.picker.Update(due)
+	_, second := d.picker.Update(due)
+	if first == nil || second != nil {
+		t.Errorf("a rest delivered twice was answered %v and %v; want one lookup", first != nil, second != nil)
+	}
+}
