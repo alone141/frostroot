@@ -524,3 +524,32 @@ func TestPackageIndexesTryAgainASourceServedFromItsCache(t *testing.T) {
 		t.Errorf("attempts = %d, Describe = %q; want the source tried again and the answer whole", attempts, recovered.Describe())
 	}
 }
+
+// TestPackageIndexesRefreshPyPIAfterAnOfflineLook: KnownPython reads the
+// cache and never fetches, and it stored what it read in the one PyPI memo,
+// so an OpenPython that followed got the cache back whatever --refresh-index
+// asked, and PyPI was not fetched again for the rest of the run. The apt
+// path keeps offline and fetched answers apart; so does PyPI now.
+func TestPackageIndexesRefreshPyPIAfterAnOfflineLook(t *testing.T) {
+	pypi := indextest.ServePyPI(t, pypiProjects, nil)
+	cacheHome := t.TempDir()
+	request := form.IndexRequest{Release: "24.04"}
+	if _, err := openIndexes(t, cacheHome, &indexFlags{pythonIndex: pypi.URL}).OpenPython(context.Background(), request, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	before := pypi.Requests()
+	indexes := openIndexes(t, cacheHome, &indexFlags{pythonIndex: pypi.URL, refresh: true})
+	if indexes.KnownPython() == nil || pypi.Requests() != before {
+		t.Fatalf("KnownPython should read the cache and fetch nothing: nil = %v, %d requests", indexes.KnownPython() == nil, pypi.Requests()-before)
+	}
+	if _, err := indexes.OpenPython(context.Background(), request, nil); err != nil {
+		t.Fatal(err)
+	}
+	if pypi.Requests() == before {
+		t.Error("--refresh-index did not fetch PyPI again after KnownPython had read the cache")
+	}
+	if indexes.KnownPython() == nil {
+		t.Error("KnownPython after the fetch should be the fetched index")
+	}
+}

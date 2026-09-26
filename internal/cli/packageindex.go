@@ -77,7 +77,12 @@ type packageIndexes struct {
 	opened   map[string]form.PackageIndex
 	archives map[string]*index.Index
 	sources  map[string]*index.Index
-	pypi     form.PackageIndex
+	// pypi is the PyPI index a fetch opened, and pypiOffline the one a
+	// read of the cache did, kept apart as the apt answers are: a cache
+	// read before the Python field's own load must not stand in for the
+	// fetch, or --refresh-index would be ignored for the rest of the run.
+	pypi        form.PackageIndex
+	pypiOffline form.PackageIndex
 }
 
 // packageIndexes returns the indexes for this run, or false when the flags
@@ -398,12 +403,16 @@ func (p *packageIndexes) KnownPython() form.PackageIndex {
 
 func (p *packageIndexes) python(ctx context.Context, progress func(int64, int64), offline bool) (form.PackageIndex, error) {
 	p.mutex.Lock()
-	if p.pypi != nil {
-		opened := p.pypi
-		p.mutex.Unlock()
-		return opened, nil
+	// What a fetch opened answers every later question; a read of the
+	// cache answers only later reads of the cache.
+	remembered := p.pypi
+	if remembered == nil && offline {
+		remembered = p.pypiOffline
 	}
 	p.mutex.Unlock()
+	if remembered != nil {
+		return remembered, nil
+	}
 	options := p.pypiOptions
 	options.Progress, options.Offline = progress, offline
 	if offline {
@@ -415,7 +424,11 @@ func (p *packageIndexes) python(ctx context.Context, progress func(int64, int64)
 	}
 	adapted := pypiIndex{index: opened, summaries: p.summaries}
 	p.mutex.Lock()
-	p.pypi = adapted
+	if offline {
+		p.pypiOffline = adapted
+	} else {
+		p.pypi = adapted
+	}
 	p.mutex.Unlock()
 	return adapted, nil
 }
