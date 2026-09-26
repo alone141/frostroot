@@ -523,3 +523,50 @@ func TestOpenKeepsAFoldedFieldOnOneCacheLine(t *testing.T) {
 		t.Errorf("from the cache, Lookup = %+v, %v", entry, found)
 	}
 }
+
+// TestOpenServesTheCacheWhenTheDeadlinePasses: a source gets twenty seconds
+// so that one slow vendor does not hold up the rest, and a deadline ended
+// the fetch the way a cancellation does, with an error, while a readable
+// index sat in the cache directory. A deadline is a fact about the network,
+// so the cache is served and marked missing, as it is when the repository
+// answers nothing at all; a cancellation still ends everything.
+func TestOpenServesTheCacheWhenTheDeadlinePasses(t *testing.T) {
+	served := newArchive(t, ".gz")
+	options := optionsFor(t, served)
+	if _, err := Open(context.Background(), options); err != nil {
+		t.Fatal(err)
+	}
+	// An archive slower than the caller allows. The handler reads intercept
+	// under the archive's mutex, so it is set under it too.
+	served.mutex.Lock()
+	served.intercept = func(http.ResponseWriter, *http.Request) bool {
+		time.Sleep(300 * time.Millisecond)
+		return false
+	}
+	served.mutex.Unlock()
+	options.Refresh = true
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	opened, err := Open(ctx, options)
+	if err != nil {
+		t.Fatalf("Open = %v, want the cache served once the deadline passed", err)
+	}
+	if _, missing := opened.Sources(); !slices.Equal(missing, []string{"archive"}) {
+		t.Errorf("missing = %v, want the archive named as not reached", missing)
+	}
+	if !strings.Contains(opened.Describe(), "not reachable") {
+		t.Errorf("Describe = %q, want it to say the archive was not reached", opened.Describe())
+	}
+
+	// A caller that gave up gets no cache: nothing it asked for is wanted.
+	canceled, cancelNow := context.WithCancel(context.Background())
+	served.mutex.Lock()
+	served.intercept = func(http.ResponseWriter, *http.Request) bool {
+		cancelNow()
+		return false
+	}
+	served.mutex.Unlock()
+	if _, err := Open(canceled, options); !errors.Is(err, context.Canceled) {
+		t.Errorf("Open after cancel = %v, want context.Canceled even with a cache", err)
+	}
+}
