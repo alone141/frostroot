@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# proves: an image frostroot built imports into WSL and boots: the user, passwordless sudo, systemd, DNS, the locale, the timezone, the Python environment on PATH, the recipe's certificate authority trusted, and apt still verifying TLS
-# needs: the network, mmdebstrap, ubuntu-keyring, user namespaces, openssl, and WSL itself: wsl.exe reachable from this distribution
+# proves: an image frostroot built imports into WSL and boots: the user, passwordless sudo, systemd, DNS, the locale, the timezone, the Python environment on PATH, the recipe's certificate authority trusted, and apt still verifying TLS; with E2E_DISTRO=fedora, a Fedora image's user, sudo, systemd, DNS, locale, timezone, machine id, rpm and dnf5
+# needs: the network, user namespaces, openssl, mmdebstrap and ubuntu-keyring or for Fedora mkosi with dnf, rpm, createrepo_c and bubblewrap, and WSL itself: wsl.exe reachable from this distribution
 # takes: about 15 minutes: an online build, an import, a boot
 #
 # The README's release check, which no CI runner can make, because none
@@ -9,7 +9,10 @@
 # the path frostroot's own import hint prints. The image is imported as a
 # throwaway distribution, frostroot-e2e-boot, that is removed again at the
 # end, whatever happened. E2E_FROSTROOT=/path/to/frostroot-linux-amd64
-# puts a release's binary through it instead of the checkout's.
+# puts a release's binary through it instead of the checkout's. A Fedora
+# recipe has no Python packages or [certificates] yet, so a Fedora image is
+# checked for what it has instead: rpm's database, dnf5 verifying TLS, and
+# a machine id of its own, made at its first boot.
 source "$(dirname "$0")/lib.sh"
 
 e2e_begin wsl-boot
@@ -22,11 +25,15 @@ fi
 e2e_build_frostroot
 distro=frostroot-e2e-boot
 lab=$LAB/lab
-tarball=$lab/dist/e2e-boot-ubuntu-$E2E_RELEASE-amd64.tar.gz
-mkdir -p "$lab/certs"
-e2e_certificate "frostroot e2e Corp Root CA" "$LAB/corp.key" "$lab/certs/corp-root.pem" || e2e_abort "openssl failed"
-e2e_recipe "$lab" e2e-boot "$E2E_RELEASE" "git openssl" "requests" '[certificates]
+tarball=$lab/$(e2e_tarball e2e-boot)
+if [ "$E2E_DISTRO" = fedora ]; then
+	e2e_recipe "$lab" e2e-boot "$E2E_RELEASE" "git openssl"
+else
+	mkdir -p "$lab/certs"
+	e2e_certificate "frostroot e2e Corp Root CA" "$LAB/corp.key" "$lab/certs/corp-root.pem" || e2e_abort "openssl failed"
+	e2e_recipe "$lab" e2e-boot "$E2E_RELEASE" "git openssl" "requests" '[certificates]
 include = ["certs/corp-root.pem"]'
+fi
 
 # windows_text strips what wsl.exe prints: UTF-16 with NULs, and CRLF.
 windows_text() { tr -d '\0\r'; }
@@ -88,13 +95,29 @@ sudo=$(in_image sudo -n id -u)
 e2e_check "sudo -n needs no password (uid $sudo)" test "$sudo" = 0
 systemd=$(timeout 180 wsl.exe -d "$distro" -e bash -lc 'systemctl is-system-running --wait' 2>&1 | tr -d '\r' | tail -n 1)
 e2e_check "systemd is running or degraded ($systemd)" is_running_or_degraded "$systemd"
-hosts=$(in_image getent hosts archive.ubuntu.com)
-e2e_check "DNS resolves archive.ubuntu.com" says 'archive\.ubuntu\.com' "$hosts"
+host=archive.ubuntu.com
+if [ "$E2E_DISTRO" = fedora ]; then
+	host=dl.fedoraproject.org
+fi
+hosts=$(in_image getent hosts "$host")
+e2e_check "DNS resolves $host" says "${host//./\\.}" "$hosts"
 locale=$(in_image 'locale 2>&1')
 e2e_check "locale gives no warning" never_says 'warning|cannot set' "$locale"
 e2e_check "and is the recipe's" says '^LANG=en_US\.UTF-8$' "$locale"
 zone=$(in_image date +%Z)
 e2e_check "the timezone is the recipe's ($zone)" test "$zone" = UTC
+if [ "$E2E_DISTRO" = fedora ]; then
+	machineID=$(in_image cat /etc/machine-id)
+	e2e_check "the machine has an id of its own ($machineID)" says '^[0-9a-f]{32}$' "$machineID"
+	rpmSudo=$(in_image rpm -q sudo)
+	e2e_check "rpm's database knows the image's packages ($rpmSudo)" says '^sudo-[0-9]' "$rpmSudo"
+	dnf=$(in_image dnf5 --version)
+	e2e_check "dnf5 runs" says '^dnf5 version [0-9]' "$dnf"
+	repos=$(in_image 'cat /etc/yum.repos.d/*.repo')
+	e2e_check "dnf in the booted image verifies TLS with its own store" never_says 'sslverify|sslcacert' "$repos"
+	e2e_check "and holds no file of the build's" never_says 'frostroot' "$(in_image ls /etc /etc/yum.repos.d)"
+	e2e_end
+fi
 python=$(in_image command -v python3)
 e2e_check "python3 on PATH is the environment's ($python)" test "$python" = /opt/frostroot/venv/bin/python3
 requests=$(in_image "python3 -c 'import requests; print(requests.__version__)'")

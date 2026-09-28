@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# proves: nothing the build trusts only for itself reaches the image: two online builds at one instant over HTTPS, one plain and one with --ca-bundle and --insecure, are the same bytes and name nothing of the build
-# needs: the network (an HTTPS Ubuntu mirror), mmdebstrap, ubuntu-keyring, user namespaces, openssl
-# takes: about 15 minutes: two online builds
+# proves: nothing the build trusts only for itself reaches the image: two online builds at one instant over HTTPS, one plain and one with --ca-bundle and --insecure, are the same bytes and name nothing of the build; for Ubuntu, or Fedora with E2E_DISTRO=fedora
+# needs: the network (an HTTPS Ubuntu mirror, or Fedora's), user namespaces, openssl, and mmdebstrap and ubuntu-keyring, or for Fedora mkosi with dnf, rpm, createrepo_c and bubblewrap
+# takes: about 15 minutes for Ubuntu, 3 for Fedora: two online builds
 #
 # Two online builds of one recipe frozen at one SOURCE_DATE_EPOCH come out
 # the same bytes, which makes them a leak detector: a setting meant only for
@@ -11,7 +11,9 @@
 # verification settings the setup hook writes, so the flags are exercised,
 # not just passed. If the archive publishes between the two builds their
 # locks name other versions, and the scenario says INCONCLUSIVE rather than
-# FAIL. FROSTROOT_E2E_HTTPS_MIRROR picks the mirror.
+# FAIL. FROSTROOT_E2E_HTTPS_MIRROR picks the mirror. A Fedora build reaches
+# Fedora's mirrors over HTTPS through its metalinks, and takes neither a
+# --mirror nor [certificates] yet: dnf reads the bundle and the switch.
 source "$(dirname "$0")/lib.sh"
 
 e2e_begin no-build-leaks
@@ -21,28 +23,40 @@ e2e_build_frostroot
 mirror=${FROSTROOT_E2E_HTTPS_MIRROR:-https://archive.ubuntu.com/ubuntu}
 e2e_certificate "frostroot e2e Corp Root CA" "$LAB/corp.key" "$LAB/corp-root.pem" || e2e_abort "openssl failed"
 e2e_certificate "frostroot e2e Proxy Root CA" "$LAB/proxy.key" "$LAB/proxy-root.pem" || e2e_abort "openssl failed"
+certificates='[certificates]
+include = ["certs/corp-root.pem"]'
+mirrorFlags=(--mirror "$mirror")
+packageDatabase=var/lib/dpkg/status
+if [ "$E2E_DISTRO" = fedora ]; then
+	certificates=""
+	mirrorFlags=()
+	packageDatabase=usr/lib/sysimage/rpm/rpmdb.sqlite
+fi
 for variant in plain flags; do
 	mkdir -p "$LAB/$variant/certs"
 	cp "$LAB/corp-root.pem" "$LAB/$variant/certs/corp-root.pem"
-	e2e_recipe "$LAB/$variant" e2e-leaks "$E2E_RELEASE" "ca-certificates" "" '[certificates]
-include = ["certs/corp-root.pem"]'
+	e2e_recipe "$LAB/$variant" e2e-leaks "$E2E_RELEASE" "ca-certificates" "" "$certificates"
 done
-tarball=dist/e2e-leaks-ubuntu-$E2E_RELEASE-amd64.tar.gz
+tarball=$(e2e_tarball e2e-leaks)
 
 # Any fixed instant will do; this one is 2025-09-19.
 export SOURCE_DATE_EPOCH=1758240000
-e2e_run plain "$LAB/plain" "$FROSTROOT" build --plain --mirror "$mirror"
+e2e_run plain "$LAB/plain" "$FROSTROOT" build --plain "${mirrorFlags[@]}"
 e2e_expect_status 0 plain
-e2e_run flags "$LAB/flags" "$FROSTROOT" build --plain --mirror "$mirror" --ca-bundle "$LAB/proxy-root.pem" --insecure
+e2e_run flags "$LAB/flags" "$FROSTROOT" build --plain "${mirrorFlags[@]}" --ca-bundle "$LAB/proxy-root.pem" --insecure
 e2e_expect_status 0 flags
 unset SOURCE_DATE_EPOCH
 
 e2e_check "the flags' build said what --insecure gives up" e2e_contains "$LAB/flags.err" "warning: --insecure"
 e2e_check "its lock says nothing of --ca-bundle" e2e_lacks "$LAB/flags/frostroot.lock" "proxy-root"
 e2e_check "its lock marks nothing unverified, having no Python packages" e2e_lacks "$LAB/flags/frostroot.lock" "transport"
-e2e_check_no_build_trust "$LAB/flags/$tarball"
+if [ "$E2E_DISTRO" = fedora ]; then
+	e2e_check_no_fedora_build_trust "$LAB/flags/$tarball"
+else
+	e2e_check_no_build_trust "$LAB/flags/$tarball"
+fi
 e2e_unpack "$LAB/flags/$tarball" "$LAB/image"
-e2e_check "the whole image unpacked, dpkg's status and all" test -s "$LAB/image/var/lib/dpkg/status"
+e2e_check "the whole image unpacked, the package database and all" test -s "$LAB/image/$packageDatabase"
 e2e_check "no file anywhere in the image names the build's work root" e2e_tree_lacks "$LAB/image" "$XDG_CACHE_HOME/frostroot"
 
 if ! e2e_same_file "$LAB/plain/frostroot.lock" "$LAB/flags/frostroot.lock"; then

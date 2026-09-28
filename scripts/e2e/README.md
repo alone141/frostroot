@@ -22,16 +22,16 @@ On a Windows checkout, run these through `scripts/wsl.sh` or
 
 | Scenario | Proves | Takes |
 |---|---|---|
-| `offline-identical` | Two offline rebuilds of one lock are byte-identical, the Python environment included, whatever `PYTHON` variables the build host has set, and leave the lock as it was. | ~30 min |
+| `offline-identical` | Two offline rebuilds of one lock are byte-identical, the Python environment included, whatever `PYTHON` variables the build host has set (and for Fedora `MKOSI_DNF`), and leave the lock as it was. | ~30 min, ~5 for Fedora |
 | `certificates` | `[certificates]` reaches the image and the lock. `--ca-bundle` reaches neither. Offline rebuilds are the same bytes with and without it. An offline build refuses a certificate changed under the lock. | ~30 min |
-| `no-build-leaks` | Two online builds frozen at one instant over HTTPS, one plain and one with `--ca-bundle` and `--insecure`, come out the same bytes. No file in the image names the build's work directory. | ~15 min |
+| `no-build-leaks` | Two online builds frozen at one instant over HTTPS, one plain and one with `--ca-bundle` and `--insecure`, come out the same bytes. No file in the image names the build's work directory. | ~15 min, ~3 for Fedora |
 | `insecure` | `build --insecure` warns and marks the Python resolve unverified in the lock. `vendor` and `build --offline` repeat the warning, and a verified `vendor` reports what it checked. | ~25 min |
 | `apt-trust` | The apt that mmdebstrap runs obeys the settings frostroot's setup hook writes, and the cleanup hook removes them. Shown by running mmdebstrap directly with a CA bundle that cannot verify the mirror. | ~10 min |
 | `pip-trust` | The pinned pip refuses a private authority, and accepts it with `--cert` or `--trusted-host`, against a local HTTPS server. | ~1 min |
-| `failed-build` | A misspelled package fails the build with exit 2. apt's own explanation is printed first, and neither a lock nor a tarball is written. | ~2 min |
+| `failed-build` | A misspelled package fails the build with exit 2. apt's own explanation, or dnf5's, is printed first, and neither a lock nor a tarball is written. | ~2 min |
 | `capture-roundtrip` | `capture` of an image frostroot built writes a recipe that validates and asks for the same packages. | ~10 min |
 | `tui` | The full-screen form draws in a pseudo-terminal, searches the real archive and PyPI, and writes what was picked. | ~3 min |
-| `wsl-boot` | An image imports into WSL and boots: the user, sudo, systemd, DNS, locale, timezone, the Python environment, the recipe's certificate authority, and apt still verifying TLS. Needs `wsl.exe`, so it skips anywhere but WSL. `E2E_FROSTROOT=/path/to/binary` puts a release's binary through it. | ~15 min |
+| `wsl-boot` | An image imports into WSL and boots: the user, sudo, systemd, DNS, locale, timezone, the Python environment, the recipe's certificate authority, and apt still verifying TLS; a Fedora image, its machine id, rpm and dnf5 instead of the last three. Needs `wsl.exe`, so it skips anywhere but WSL. `E2E_FROSTROOT=/path/to/binary` puts a release's binary through it. | ~15 min |
 | `harness` | The harness reports a failure when it should, and never removes anything outside its root. | seconds |
 
 AGENTS.md has a list of which change calls for which scenario.
@@ -41,6 +41,12 @@ Every scenario that writes a recipe builds Ubuntu 24.04 unless
 `E2E_RELEASE=26.04 scripts/e2e/run.sh offline-identical`. `apt-trust`
 always bootstraps noble, because what it tests is the build host's apt,
 whatever the image's release.
+
+`E2E_DISTRO=fedora` builds Fedora 44 instead, with mkosi, in
+`offline-identical`, `no-build-leaks`, `failed-build` and `wsl-boot`:
+`E2E_DISTRO=fedora scripts/e2e/run.sh offline-identical`. The scenarios
+that check what only Ubuntu images have so far, `certificates`, `insecure`
+and `capture-roundtrip`, skip.
 
 ## Verdicts
 
