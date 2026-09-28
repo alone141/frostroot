@@ -29,9 +29,10 @@ var recipeTemplate = template.Must(template.New("recipe").Funcs(template.FuncMap
 [image]
 name = {{tomlQuote .Image.Name}}  # file name of the tarball and name of the WSL distro
 {{if .Image.Distro}}distro = {{tomlQuote .Image.Distro}}
-{{end}}# 20.04 | 22.04 | 24.04 | 26.04. 20.04 is past standard support: its
+{{end}}{{if eq .Image.Distro "fedora"}}# 44, the Fedora release frostroot builds.
+{{else}}# 20.04 | 22.04 | 24.04 | 26.04. 20.04 is past standard support: its
 # packages carry known security vulnerabilities that only Ubuntu Pro fixes.
-release = {{tomlQuote .Image.Release}}
+{{end}}release = {{tomlQuote .Image.Release}}
 arch = {{tomlQuote .Image.Arch}}  # the only architecture in v1
 
 [user]
@@ -47,9 +48,11 @@ lang = {{tomlQuote .Locale.Lang}}
 timezone = {{tomlQuote .Locale.Timezone}}  # kept under WSL instead of following Windows
 
 [packages]
-# apt package names, exactly as you would pass them to apt install.
+{{if eq .Image.Distro "fedora"}}# Fedora package names, exactly as you would pass them to dnf install.
+# Dependencies and weak dependencies come along automatically.
+{{else}}# apt package names, exactly as you would pass them to apt install.
 # Dependencies and Recommends come along automatically.
-include = {{tomlQuoteList .Packages.Include}}
+{{end}}include = {{tomlQuoteList .Packages.Include}}
 {{if .Python}}
 [python]
 # PyPI names, installed into the image's virtual environment, which every

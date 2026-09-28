@@ -477,3 +477,28 @@ func TestInitRefusesAnUnknownDistro(t *testing.T) {
 		t.Errorf("a recipe was written: %v", err)
 	}
 }
+
+// TestAFedoraRecipeExplainsItselfAsFedoras: the comments above the release
+// and the packages name Fedora's release and dnf, not Ubuntu's releases,
+// Ubuntu Pro and apt.
+func TestAFedoraRecipeExplainsItselfAsFedoras(t *testing.T) {
+	recipeDir := t.TempDir()
+	app := App{Stdout: io.Discard, Stderr: io.Discard, RecipeDir: recipeDir, Prompt: &scriptedPrompt{}, ReadFile: noHostFile}
+	if exitCode := app.Run([]string{"init", "--distro", "fedora"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d", exitCode)
+	}
+	recipeText, err := os.ReadFile(filepath.Join(recipeDir, "frostroot.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, wantText := range []string{"# 44, the Fedora release frostroot builds.\nrelease = \"44\"", "exactly as you would pass them to dnf install", "weak dependencies"} {
+		if !strings.Contains(string(recipeText), wantText) {
+			t.Errorf("recipe lacks %q:\n%s", wantText, recipeText)
+		}
+	}
+	for _, unwanted := range []string{"20.04", "Ubuntu Pro", "apt install", "Recommends"} {
+		if strings.Contains(string(recipeText), unwanted) {
+			t.Errorf("a Fedora recipe says %q:\n%s", unwanted, recipeText)
+		}
+	}
+}
