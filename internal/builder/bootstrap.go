@@ -58,7 +58,7 @@ func (m *Mmdebstrap) Preflight(spec BootstrapSpec) error {
 		return err
 	}
 	if m.bootstrapMode() == "unshare" && spec.WorkDir != "" {
-		return checkReachableFromUserNamespace(spec.WorkDir)
+		return checkReachableFromUserNamespace("mmdebstrap", spec.WorkDir)
 	}
 	return nil
 }
@@ -75,7 +75,7 @@ func (m *Mmdebstrap) Run(ctx context.Context, spec BootstrapSpec) error {
 		return err
 	}
 	if m.bootstrapMode() == "unshare" {
-		if err := checkReachableFromUserNamespace(spec.WorkDir); err != nil {
+		if err := checkReachableFromUserNamespace("mmdebstrap", spec.WorkDir); err != nil {
 			return err
 		}
 	}
@@ -262,19 +262,20 @@ func temporaryDirFor(spec BootstrapSpec) string {
 	return filepath.Join(spec.WorkDir, "tmp")
 }
 
-// checkReachableFromUserNamespace reports whether mmdebstrap's user namespace
-// can reach dir. In unshare mode the namespace's root is a subordinate uid, so
-// it is "other" to the user's own files: every existing ancestor must be
-// world-executable. Components that do not exist yet are created 0755 by the
-// builder. Home directories are 0750 on current Ubuntu, which is why the
-// default work root is under /var/tmp and not ~/.cache.
-func checkReachableFromUserNamespace(dir string) error {
+// checkReachableFromUserNamespace reports whether the user namespace program
+// (mmdebstrap or mkosi) builds in can reach dir. Unprivileged, the
+// namespace's root is a subordinate uid, so it is "other" to the user's own
+// files: every existing ancestor must be world-executable. Components that
+// do not exist yet are created 0755 by the builder. Home directories are
+// 0750 on current Ubuntu, which is why the default work root is under
+// /var/tmp and not ~/.cache.
+func checkReachableFromUserNamespace(program, dir string) error {
 	for ancestor := filepath.Clean(dir); ; ancestor = filepath.Dir(ancestor) {
 		ancestorInfo, err := os.Stat(ancestor)
 		switch {
 		case err == nil && ancestorInfo.Mode().Perm()&0o001 == 0:
-			return fmt.Errorf("%w: mmdebstrap runs in a user namespace that cannot enter %s (mode %04o), so it cannot use %s; set XDG_CACHE_HOME to a directory whose parents are all world-executable, or unset it to use the default under /var/tmp",
-				ErrBadWorkRoot, ancestor, ancestorInfo.Mode().Perm(), dir)
+			return fmt.Errorf("%w: %s runs in a user namespace that cannot enter %s (mode %04o), so it cannot use %s; set XDG_CACHE_HOME to a directory whose parents are all world-executable, or unset it to use the default under /var/tmp",
+				ErrBadWorkRoot, program, ancestor, ancestorInfo.Mode().Perm(), dir)
 		case err != nil && !errors.Is(err, os.ErrNotExist):
 			return err
 		}

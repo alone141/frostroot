@@ -262,7 +262,7 @@ func (a *App) reportBuildFailure(err error, interrupted bool, archiveURL, keptWo
 		a.reportKeptWorkDir(keptWorkDir)
 		return exitUserError
 	case errors.Is(err, builder.ErrNotLinux), errors.Is(err, builder.ErrNoMmdebstrap),
-		errors.Is(err, builder.ErrNoMount),
+		errors.Is(err, builder.ErrNoMount), errors.Is(err, builder.ErrNoFedoraTool), errors.Is(err, builder.ErrMkosiVersion),
 		errors.Is(err, builder.ErrNoKeyring), errors.Is(err, builder.ErrBadWorkRoot),
 		errors.Is(err, builder.ErrUnwritableOutput), errors.Is(err, builder.ErrNoLock),
 		errors.Is(err, builder.ErrLockMismatch), errors.Is(err, builder.ErrPoolIncomplete),
