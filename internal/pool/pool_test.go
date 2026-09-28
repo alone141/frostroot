@@ -94,6 +94,12 @@ func TestManifestWithSources(t *testing.T) {
 	if got := fallback(fromDocker); got != "" {
 		t.Errorf("Docker has no fallback, got %q", got)
 	}
+	// A lock that names no family is Ubuntu's, archive and fallback alike.
+	unnamed := lock
+	unnamed.Distro = ""
+	if got := FallbackURL(unnamed)(archive); got != fallback(archive) {
+		t.Errorf("archive fallback of a lock that names no family = %q, want %q", got, fallback(archive))
+	}
 
 	lock.Repositories = lock.Repositories[:1]
 	if _, err := Manifest(lock); !errors.Is(err, ErrBadLock) || !strings.Contains(err.Error(), "ppa-git-core-ppa") {
@@ -220,12 +226,16 @@ func TestManifestRefusals(t *testing.T) {
 	oldLock.Packages[0].SHA256, oldLock.Packages[0].Size, oldLock.Packages[0].Filename = "", 0, ""
 	duplicate := lockFor(entryFor("curl", "1"), entryFor("curl", "1"))
 	duplicate.Packages[1].Name = "curl-copy"
+	// Another family's lock names another family's files.
+	otherFamily := lockFor(entryFor("curl", "1"))
+	otherFamily.Distro = "fedora"
 	testCases := []struct {
 		name      string
 		lock      recipe.Lockfile
 		wantError error
 	}{
 		{name: "format version 2", lock: version2, wantError: ErrBadLock},
+		{name: "another family", lock: otherFamily, wantError: ErrBadLock},
 		{name: "frostroot 0.3 lock", lock: oldLock, wantError: ErrNoChecksums},
 		{name: "two packages with one file name", lock: duplicate, wantError: ErrBadLock},
 	}

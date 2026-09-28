@@ -358,7 +358,7 @@ func TestBuildOfflineComparesSourceKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := planOffline(options.RecipeDir, imageRecipe, distro.Ubuntu, release); err != nil {
+	if _, err := planOffline(options.RecipeDir, imageRecipe, release); err != nil {
 		t.Errorf("planOffline with the locked key = %v", err)
 	}
 }

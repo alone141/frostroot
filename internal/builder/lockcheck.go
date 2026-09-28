@@ -73,10 +73,11 @@ func (p *offlinePlan) packageNames() []string {
 }
 
 // planOffline loads the lock in recipeDir and checks that it still describes
-// imageRecipe, of family: same family, same release, same architecture, same
-// requested packages. The user, sudo, locale, timezone and systemd settings
-// may differ; they are provisioned at build time and need no packages.
-func planOffline(recipeDir string, imageRecipe recipe.Recipe, family distro.Family, release distro.Release) (*offlinePlan, error) {
+// imageRecipe, an Ubuntu recipe: same family, same release, same
+// architecture, same requested packages. The user, sudo, locale, timezone
+// and systemd settings may differ; they are provisioned at build time and
+// need no packages.
+func planOffline(recipeDir string, imageRecipe recipe.Recipe, release distro.Release) (*offlinePlan, error) {
 	lockPath := filepath.Join(recipeDir, LockFileName)
 	lock, err := recipe.LoadLock(lockPath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -84,6 +85,13 @@ func planOffline(recipeDir string, imageRecipe recipe.Recipe, family distro.Fami
 	}
 	if err != nil {
 		return nil, err
+	}
+	// A lock of another family names packages, files and repositories that
+	// only that family's build can install, so nothing else in it is read.
+	// A lock that names no family is Ubuntu's, as a recipe that names none
+	// is; one that names a family frostroot does not know is no family's.
+	if lockFamily, err := distro.FamilyOf(lock.Distro); err != nil || lockFamily != distro.Ubuntu {
+		return nil, fmt.Errorf("%w: distro %q in the lock, %q in the recipe; run frostroot build online, then frostroot vendor", ErrLockMismatch, lock.Distro, distro.Ubuntu)
 	}
 	entries, err := pool.Manifest(lock)
 	if errors.Is(err, pool.ErrNoChecksums) {
@@ -102,11 +110,6 @@ func planOffline(recipeDir string, imageRecipe recipe.Recipe, family distro.Fami
 		return nil, fmt.Errorf("%w: it records no sources, so the image's sources.list cannot be written; run frostroot build online, then frostroot vendor", pool.ErrBadLock)
 	}
 	var differences []string
-	// A lock that names no family is Ubuntu's, as a recipe that names none
-	// is; one that names a family frostroot does not know is no family's.
-	if lockFamily, err := distro.FamilyOf(lock.Distro); err != nil || lockFamily != family {
-		differences = append(differences, fmt.Sprintf("distro %q in the lock, %q in the recipe", lock.Distro, family))
-	}
 	if lock.Release != imageRecipe.Image.Release || lock.Suite != release.Suite {
 		differences = append(differences, fmt.Sprintf("release %s in the lock, %s in the recipe", lock.Release, imageRecipe.Image.Release))
 	}

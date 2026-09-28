@@ -279,6 +279,18 @@ func TestVendorRefusals(t *testing.T) {
 			wantInStderr: "written by frostroot 0.3.0 and records no checksums",
 		},
 		{
+			// A newer frostroot's lock of a family this one cannot build
+			// names files this one would fetch as the wrong kind.
+			name: "lock of another family",
+			prepare: func(t *testing.T, fixture *vendorFixture) {
+				t.Helper()
+				fixture.lock.Distro = "fedora"
+				fixture.saveLock(t)
+			},
+			args:         []string{"vendor"},
+			wantInStderr: `unusable frostroot.lock: unknown distro: "fedora" (known: ubuntu)`,
+		},
+		{
 			name:         "bad mirror",
 			prepare:      func(*testing.T, *vendorFixture) {},
 			args:         []string{"vendor", "--mirror", "ftp://x"},
