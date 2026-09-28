@@ -33,8 +33,11 @@ three releases already supported.
 
 ## What is not done
 
-- A 26.04 build host is measured in the spec, not supported by any change
-  here unless the spike found one necessary.
+- Nothing for a 26.04 build host: the spike built, vendored and rebuilt
+  offline from one, and found no change it needs.
+- The preflight check for a build host without `mount`, which the spike
+  found silently degrades an image. It is not 26.04's, and it is a change
+  of its own.
 - The first boot under WSL cannot run in the spike's container: `wsl-boot`
   needs `wsl.exe`. It is the owner's check on Windows before the release,
   as the README asks of every release.
@@ -73,7 +76,10 @@ three releases already supported.
    coreutils, chrony), the scope line (v0.14), the Documentation table (this
    spec and plan, and the v0.12 source-search spec and v0.13 `--insecure`
    plan it lacked), the Go version under Install (go.mod asks for 1.27.1,
-   the README said 1.24), and version 0.14.0. The Verification paragraph is
+   the README said 1.24), what "the promise does not cross mmdebstrap
+   versions" means in practice (a 24.04 and a 26.04 build host rebuild one
+   lock to images that differ in two debconf backups and an empty
+   directory), and version 0.14.0. The Verification paragraph is
    written after the checks below have run, not before. `docs: Ubuntu
    26.04, version 0.14.0`.
 7. **Real checks.** With the branch's binary: `offline-identical`,
