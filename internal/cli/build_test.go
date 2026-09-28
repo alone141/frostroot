@@ -274,6 +274,20 @@ func TestBuildFedoraRecipeOnAHostThatKeepsMkosiOutIsTheUsersToFix(t *testing.T) 
 	}
 }
 
+// TestBuildFedoraRecipeInsecureSaysWhatStillHolds: what --insecure leaves
+// checked is Fedora's key, not Ubuntu's signatures.
+func TestBuildFedoraRecipeInsecureSaysWhatStillHolds(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, newRecipeDir(t, "fedora.toml"), &fakeBootstrapper{}, &stdout, &stderr)
+	app.Builder = &builder.Builder{Fedora: &fakeFedoraBootstrapper{}}
+	if exitCode := app.Run([]string{"build", "--plain", "--insecure"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d; stderr:\n%s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "warning: --insecure") || !strings.Contains(stderr.String(), "the Fedora release's own signing key") || strings.Contains(stderr.String(), ".deb") {
+		t.Errorf("stderr does not say what --insecure leaves checked on Fedora:\n%s", stderr.String())
+	}
+}
+
 func TestBuildFedoraRecipeRefusesMirror(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	app := newBuildApp(t, newRecipeDir(t, "fedora.toml"), &fakeBootstrapper{}, &stdout, &stderr)

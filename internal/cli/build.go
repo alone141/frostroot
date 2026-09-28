@@ -197,7 +197,7 @@ func (a *App) runFedoraBuild(imageRecipe recipe.Recipe, flags fedoraBuildFlags) 
 		return exitUserError
 	}
 	if flags.insecure {
-		a.warnInsecure(insecureBuildDetail)
+		a.warnInsecure(insecureFedoraBuildDetail)
 	}
 	ctx, stopSignalHandling := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stopSignalHandling()
