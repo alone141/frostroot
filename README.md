@@ -1359,6 +1359,7 @@ unprivileged user on 3d9eeee. The first login of a 26.04 image,
 | [`--insecure` plan](docs/superpowers/plans/2026-09-24-frostroot-insecure.md) | v0.13: the flag that skips TLS verification, what it gives up and where people are told, and the six tasks it was built from. |
 | [Ubuntu 26.04 spec](docs/superpowers/specs/2026-09-28-frostroot-resolute.md) | v0.14: what 26.04 changes, and the spike that built it end to end, on a 24.04 host and a 26.04 one, before any code changed. |
 | [Ubuntu 26.04 plan](docs/superpowers/plans/2026-09-28-frostroot-resolute.md) | The seven tasks v0.14 was built from. |
+| [Fedora spec](docs/superpowers/specs/2026-09-28-frostroot-fedora.md) | **Draft, awaiting approval.** Fedora 44 through mkosi with a Fedora tools tree: the spike, what it found about byte identity and unprivileged builds, the proposed seam and the decisions left open. |
 | [TUI plan, second round](docs/superpowers/plans/2026-09-18-frostroot-tui-2.md) | What a walk through the interface found, the six tasks v0.9 was built from, and the tasks of v0.10's package picker. |
 | [Implementation plan](docs/superpowers/plans/2026-09-15-frostroot-v1.md) | The 13 tasks v1 was built from, with the spike's amendments. |
 | [TUI plan](docs/superpowers/plans/2026-09-17-frostroot-tui.md) | The seven tasks v0.2 was built from. |
