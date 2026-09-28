@@ -46,7 +46,17 @@ func skipUnlessMmdebstrapAvailable(t *testing.T) {
 // root. Takes a few minutes and a few hundred MB of downloads:
 //
 //	go test -tags=integration -run TestIntegration -v -timeout 30m ./internal/builder/
-func TestIntegrationNobleTiny(t *testing.T) {
+func TestIntegrationNobleTiny(t *testing.T) { testTinyImage(t, "24.04", "noble") }
+
+// TestIntegrationResoluteTiny is the same build and inspection on Ubuntu
+// 26.04, whose sudo is sudo-rs, whose coreutils are mostly the Rust rewrite
+// and whose apt is 3.2: the tools the provisioning runs inside the image.
+func TestIntegrationResoluteTiny(t *testing.T) { testTinyImage(t, "26.04", "resolute") }
+
+// testTinyImage builds a real image of release, whose apt code name is
+// suite, and inspects the tarball.
+func testTinyImage(t *testing.T, release, suite string) {
+	t.Helper()
 	skipUnlessMmdebstrapAvailable(t)
 
 	// Not t.TempDir: its parent is 0700, and in unshare mode mmdebstrap's user
@@ -62,7 +72,7 @@ func TestIntegrationNobleTiny(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(cacheHome) })
 
 	imageRecipe := recipe.Recipe{
-		Image:  recipe.Image{Name: "tiny", Release: "24.04", Arch: "amd64"},
+		Image:  recipe.Image{Name: "tiny", Release: release, Arch: "amd64"},
 		User:   recipe.User{Name: "student", Sudo: true},
 		WSL:    recipe.WSL{Systemd: true, DefaultUser: "student"},
 		Locale: recipe.Locale{Lang: "en_US.UTF-8", Timezone: "Asia/Tokyo"},
@@ -111,7 +121,7 @@ func TestIntegrationNobleTiny(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(lock.Sources) != 3 || !strings.HasSuffix(lock.Sources[1], "noble-updates main restricted universe multiverse") || !strings.HasSuffix(lock.Sources[2], "noble-security main restricted universe multiverse") {
+		if len(lock.Sources) != 3 || !strings.HasSuffix(lock.Sources[1], suite+"-updates main restricted universe multiverse") || !strings.HasSuffix(lock.Sources[2], suite+"-security main restricted universe multiverse") {
 			t.Errorf("Sources = %q, want the three pockets", lock.Sources)
 		}
 		if len(lock.Packages) < 150 {

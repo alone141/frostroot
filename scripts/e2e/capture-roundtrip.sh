@@ -13,8 +13,8 @@ e2e_begin capture-roundtrip
 e2e_require_bootstrap
 e2e_build_frostroot
 lab=$LAB/lab
-tarball=$lab/dist/e2e-capture-ubuntu-24.04-amd64.tar.gz
-e2e_recipe "$lab" e2e-capture 24.04 "git jq"
+tarball=$lab/dist/e2e-capture-ubuntu-$E2E_RELEASE-amd64.tar.gz
+e2e_recipe "$lab" e2e-capture "$E2E_RELEASE" "git jq"
 
 e2e_run build "$lab" "$FROSTROOT" build --plain
 e2e_expect_status 0 build
@@ -31,7 +31,7 @@ e2e_check "capture wrote a recipe" test -s "$recipe"
 e2e_check "and its report of what a recipe cannot carry" test -s "$LAB/captured/frostroot-capture.md"
 e2e_check "the recipe asks for git" e2e_matches "$recipe" '^include = \[.*"git"'
 e2e_check "and for jq" e2e_matches "$recipe" '^include = \[.*"jq"'
-e2e_check "for the same release" e2e_has_line "$recipe" 'release = "24.04"'
+e2e_check "for the same release" e2e_has_line "$recipe" "release = \"$E2E_RELEASE\""
 e2e_check "and for the same user" e2e_has_line "$recipe" 'name = "student"'
 
 e2e_run validate "$LAB/captured" "$FROSTROOT" validate

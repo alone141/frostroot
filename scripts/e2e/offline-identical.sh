@@ -11,18 +11,16 @@
 # The second rebuild runs with PYTHONPYCACHEPREFIX set, as a build host
 # might have it: the hook inherits the build user's environment, and that
 # variable once sent every compiled cache to a directory named after the
-# host, inside the image. E2E_RELEASE picks the Ubuntu release, 24.04 by
-# default.
+# host, inside the image.
 source "$(dirname "$0")/lib.sh"
 
 e2e_begin offline-identical
 e2e_require_bootstrap
 e2e_build_frostroot
-release=${E2E_RELEASE:-24.04}
 lab=$LAB/lab
 lock=$lab/frostroot.lock
-tarball=$lab/dist/e2e-offline-ubuntu-$release-amd64.tar.gz
-e2e_recipe "$lab" e2e-offline "$release" "git" "requests"
+tarball=$lab/dist/e2e-offline-ubuntu-$E2E_RELEASE-amd64.tar.gz
+e2e_recipe "$lab" e2e-offline "$E2E_RELEASE" "git" "requests"
 
 e2e_run build "$lab" "$FROSTROOT" build --plain
 e2e_expect_status 0 build

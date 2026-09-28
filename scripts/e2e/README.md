@@ -36,6 +36,12 @@ On a Windows checkout, run these through `scripts/wsl.sh` or
 
 AGENTS.md has a list of which change calls for which scenario.
 
+Every scenario that writes a recipe builds Ubuntu 24.04 unless
+`E2E_RELEASE` names another release:
+`E2E_RELEASE=26.04 scripts/e2e/run.sh offline-identical`. `apt-trust`
+always bootstraps noble, because what it tests is the build host's apt,
+whatever the image's release.
+
 ## Verdicts
 
 A scenario prints `ok` or `FAIL` for each check, then one of:
@@ -87,7 +93,7 @@ source "$(dirname "$0")/lib.sh"
 e2e_begin NAME
 e2e_require_bootstrap                  # SKIP unless a real build can run here
 e2e_build_frostroot                    # this checkout's binary, as $FROSTROOT
-e2e_recipe "$LAB/lab" e2e-name 24.04 "git" "requests"
+e2e_recipe "$LAB/lab" e2e-name "$E2E_RELEASE" "git" "requests"
 
 e2e_run build "$LAB/lab" "$FROSTROOT" build --plain
 e2e_expect_status 0 build              # ends the scenario if it is not 0
@@ -99,6 +105,9 @@ e2e_end
 
 - `e2e_build_frostroot` builds the checkout's binary into the lab as
   `$FROSTROOT`, or copies in the one `E2E_FROSTROOT` names.
+- `$E2E_RELEASE` is the Ubuntu release to build, 24.04 unless the caller
+  set it. A scenario that writes a recipe passes it to `e2e_recipe` and
+  names its tarball with it.
 - `e2e_run LABEL DIR COMMAND...` runs a command, with its output in
   `$LAB/LABEL.out` and `$LAB/LABEL.err`, and its exit status in
   `$e2eStatus`. Standard input is `/dev/null` unless `E2E_STDIN` names a

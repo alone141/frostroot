@@ -17,13 +17,13 @@ e2e_require openssl
 e2e_build_frostroot
 lab=$LAB/lab
 lock=$lab/frostroot.lock
-tarball=$lab/dist/e2e-certs-ubuntu-24.04-amd64.tar.gz
+tarball=$lab/dist/e2e-certs-ubuntu-$E2E_RELEASE-amd64.tar.gz
 mkdir -p "$lab/certs"
 e2e_certificate "frostroot e2e Corp Root CA" "$LAB/corp.key" "$lab/certs/corp-root.pem" ||
 	e2e_abort "openssl could not make the recipe's authority"
 e2e_certificate "frostroot e2e Proxy Root CA" "$LAB/proxy.key" "$LAB/proxy-root.pem" ||
 	e2e_abort "openssl could not make the build's authority"
-e2e_recipe "$lab" e2e-certs 24.04 "ca-certificates openssl" "requests" '[certificates]
+e2e_recipe "$lab" e2e-certs "$E2E_RELEASE" "ca-certificates openssl" "requests" '[certificates]
 include = ["certs/corp-root.pem"]'
 
 e2e_run build "$lab" "$FROSTROOT" build --plain --ca-bundle "$LAB/proxy-root.pem"

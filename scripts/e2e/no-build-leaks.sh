@@ -24,10 +24,10 @@ e2e_certificate "frostroot e2e Proxy Root CA" "$LAB/proxy.key" "$LAB/proxy-root.
 for variant in plain flags; do
 	mkdir -p "$LAB/$variant/certs"
 	cp "$LAB/corp-root.pem" "$LAB/$variant/certs/corp-root.pem"
-	e2e_recipe "$LAB/$variant" e2e-leaks 24.04 "ca-certificates" "" '[certificates]
+	e2e_recipe "$LAB/$variant" e2e-leaks "$E2E_RELEASE" "ca-certificates" "" '[certificates]
 include = ["certs/corp-root.pem"]'
 done
-tarball=dist/e2e-leaks-ubuntu-24.04-amd64.tar.gz
+tarball=dist/e2e-leaks-ubuntu-$E2E_RELEASE-amd64.tar.gz
 
 # Any fixed instant will do; this one is 2025-09-19.
 export SOURCE_DATE_EPOCH=1758240000
