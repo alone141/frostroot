@@ -188,15 +188,29 @@ in CI, and the documentation.
 
 ## Found along the way
 
-These are not 26.04's. The first is left for its own change.
+These are not 26.04's. The first was left for its own change, and that
+change went into 0.14.0 before the tag.
 
 - **A build host without `mount`.** The first 26.04 build host was a
   minimal root without it. mmdebstrap printed `cannot execute mount`,
   went on without `/proc`, `/sys` and `/dev` in the chroot, and the image
   came out without systemd's catalog, its tmpfiles directories and a real
   `hwdb.bin`, while frostroot reported success. A real installation ships
-  `mount`; a stripped container used as a build host might not. A
-  preflight check is issue #102, a change of its own.
+  `mount`; a stripped container used as a build host might not. Issue
+  #102.
+
+  Fixing it showed that a missing `mount` is one of four reasons
+  mmdebstrap gives for installing unmounted, in 1.4.3 and 1.5.7 alike: as
+  root it also refuses without `CAP_SYS_ADMIN` in the effective or the
+  bounding set, or when `unshare --mount` fails, as for root in a
+  container that was not given the capability, a likelier build host
+  than one without `mount`. Built that way from a 24.04 host, a 24.04 image
+  lacked the eleven entries systemd-tmpfiles makes and had
+  `/etc/credstore` at 0755, and the build exited 0 after 97 s. So there
+  are two checks: Preflight requires `mount` on PATH, in root and unshare
+  mode, and a watch on mmdebstrap's output stops the build at the first
+  of those warnings, which mmdebstrap prints before it fetches anything,
+  and fails it with exit 1. The same build now ends in 0.27 s.
 - **The GitHub CLI key's comment.** `internal/sources/catalog.go` said
   GitHub signs with its 2022 key; the repository signs with the 2026 key,
   and the 2022 key expired on 2026-09-05. Both are pinned, so nothing
