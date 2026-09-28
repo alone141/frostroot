@@ -1077,8 +1077,14 @@ environment and its `profile.d` line are in the tarball, that nothing the
 Python step used was left in the image, and that two offline rebuilds have
 one SHA-256. A fourth gives mmdebstrap a `mount` that does not run, and
 requires the build to stop before any package is downloaded and fail as
-the user's to fix. They need Linux, mmdebstrap, ubuntu-keyring, network, and
-user namespaces or root, and take about twenty minutes.
+the user's to fix. Two more build Fedora 44 with mkosi: one inspects the
+tarball as the Ubuntu ones do, and the lock, which records dnf5's reason and
+repository for every package and the tools tree's packages too; the other
+vendors a build from Fedora's server, rebuilds it offline twice, and
+requires one SHA-256, the lock's reasons in the image, and no dnf5 log.
+They need Linux, mmdebstrap, ubuntu-keyring, mkosi 20.2 with dnf, rpm,
+createrepo_c and bubblewrap, network, and user namespaces or root, and take
+about twenty-five minutes.
 
 The [end-to-end scenarios](scripts/e2e/README.md) go further, and each ends
 in a verdict of its own. They check that two offline rebuilds with Python

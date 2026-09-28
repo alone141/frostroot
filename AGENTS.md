@@ -27,7 +27,7 @@ The README's "Layout" section maps the packages.
 | Run every check before a push | `scripts/check.sh` | gofmt, vet with and without the integration tag, `go test -race`, the Windows build, golangci-lint. About 2 minutes. CI runs the same script. |
 | Test one package, or one test | `scripts/check.sh --only test -- -run TestName ./internal/cli/` | Arguments after `--` go to `go test`. |
 | Check for known vulnerabilities | `scripts/check.sh --only vuln` | Runs govulncheck against the toolchain go.mod pins. Needs the network. |
-| Run the integration tests as CI does | `scripts/integration.sh` | Real mmdebstrap. About 6 minutes in CI and much longer on a slow link; `FROSTROOT_INTEGRATION_TIMEOUT=90m` raises the 40m limit. Fails if a required test skipped or went missing. |
+| Run the integration tests as CI does | `scripts/integration.sh` | Real mmdebstrap and real mkosi. About 12 minutes in CI and much longer on a slow link; `FROSTROOT_INTEGRATION_TIMEOUT=90m` raises the 40m limit. Fails if a required test skipped or went missing. |
 | Prove a test pins a fix | `scripts/mutate.sh --revert COMMIT` | Reverts the commit's non-test code, keeps its tests, and runs them. Exit 0 means the tests caught it. |
 | Break one line and run the tests | `scripts/mutate.sh --sed FILE 'SED'` | Restores the file however the run ends. |
 | Run real-build scenarios | `scripts/e2e/run.sh`, then `scripts/e2e/run.sh NAME` | No arguments lists them. Each scenario checks its own results. See [scripts/e2e/README.md](scripts/e2e/README.md). |
@@ -100,9 +100,10 @@ Hand-typed alternatives break in ways that are easy to miss:
   the last `--customize-hook`. Never use `--aptopt` for them: mmdebstrap
   ships every `--aptopt` in the image. See `aptTrustSetupHook` in
   `internal/builder/bootstrap.go`.
-- Only mmdebstrap writes the tarball. Go code never tars, walks or deletes
-  a root filesystem, because ownership, hardlinks and capabilities would
-  come out wrong. `internal/export` only names and places the tarball.
+- Only mmdebstrap or mkosi writes the tarball. Go code never tars, walks
+  or deletes a root filesystem, because ownership, hardlinks and
+  capabilities would come out wrong. `internal/export` only names and
+  places the tarball, and mkosi removes the Fedora tools tree it made.
 - Two offline builds of one lock are byte-identical. Online builds and
   offline builds are not promised to match. An offline build takes
   everything from the lock and never writes it: the frozen instant, the deb
@@ -199,9 +200,9 @@ Hand-typed alternatives break in ways that are easy to miss:
   mmdebstrap. Use `t.TempDir()`, and inject the environment through
   `Getenv`.
 - Integration tests carry the `integration` build tag, are named
-  `TestIntegration*`, and call `skipUnlessMmdebstrapAvailable`.
-  `scripts/integration.sh` requires seven of them by name, so renaming one
-  means editing that list.
+  `TestIntegration*`, and call `skipUnlessMmdebstrapAvailable`, or for
+  Fedora `skipUnlessFedoraToolsAvailable`. `scripts/integration.sh`
+  requires nine of them by name, so renaming one means editing that list.
 - A fake implements the real interface and lives in the test file that uses
   it. `builder` and `cli` each have their own `fakeBootstrapper`.
 - New hook text is run through a real `sh`, with hostile paths.

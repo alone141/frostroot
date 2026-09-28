@@ -1,22 +1,24 @@
 #!/usr/bin/env bash
 # The integration tests, run the way CI's integration job runs them: every
-# package that has one, real mmdebstrap and apt, and two checks on the log
-# that a green summary alone cannot give.
+# package that has one, real mmdebstrap and apt, real mkosi and dnf, and two
+# checks on the log that a green summary alone cannot give.
 #
 # usage: scripts/integration.sh [GO-TEST-ARGS...]
 #
-#   With no arguments every integration test runs (five real bootstraps and
-#   the real index of every release: 10 to 15 minutes), and the run fails
-#   unless each test CI requires was seen to pass. Arguments replace ./...,
-#   e.g. -run TestIntegrationPython ./internal/builder/; a subset cannot
-#   prove the list, so only the skip check applies then.
+#   With no arguments every integration test runs (five real Ubuntu
+#   bootstraps, four real Fedora builds, two of them offline, and the real
+#   index of every release: 15 to 20 minutes), and the run fails unless each
+#   test CI requires was seen to pass. Arguments replace ./..., e.g.
+#   -run TestIntegrationPython ./internal/builder/; a subset cannot prove the
+#   list, so only the skip check applies then.
 #
-# Needs Linux, mmdebstrap, ubuntu-keyring, the network, and user namespaces
-# or root. The log goes to $FROSTROOT_INTEGRATION_LOG, by default
+# Needs Linux, mmdebstrap, ubuntu-keyring, mkosi 20.2 with dnf, rpm,
+# createrepo_c and bubblewrap (Ubuntu 24.04's), the network, and user
+# namespaces or root. The log goes to $FROSTROOT_INTEGRATION_LOG, by default
 # /var/tmp/frostroot-integration-<uid>.log. $FROSTROOT_INTEGRATION_TIMEOUT
 # is go test's -timeout, 40m by default: plenty on a CI runner, which takes
-# about six minutes, and not always on a slow link or a busy machine, where
-# one bootstrap has taken twenty.
+# about twelve minutes, and not always on a slow link or a busy machine,
+# where one bootstrap has taken twenty.
 set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 2
@@ -36,11 +38,14 @@ requiredTests=(
 	TestIntegrationCatalogExistsInEveryRelease
 	TestIntegrationOpenEveryRelease
 	TestIntegrationHostThatCannotMountFailsFast
+	TestIntegrationFedoraTiny
+	TestIntegrationFedoraOfflineRebuild
 )
 
-# skipUnlessMmdebstrapAvailable skips when one of these is missing, and a
-# skip reads exactly like a pass in the summary, so the prerequisites are
-# checked here first and the log is searched for the skip messages after.
+# skipUnlessMmdebstrapAvailable and skipUnlessFedoraToolsAvailable skip when
+# one of these is missing, and a skip reads exactly like a pass in the
+# summary, so the prerequisites are checked here first and the log is
+# searched for the skip messages after.
 if ! command -v go > /dev/null 2>&1; then
 	echo "scripts/integration.sh: go is not on PATH; on Windows run it through scripts/wsl.sh" >&2
 	exit 2
@@ -51,6 +56,12 @@ command -v mmdebstrap > /dev/null || {
 }
 test -e /usr/share/keyrings/ubuntu-archive-keyring.gpg || {
 	echo "the Ubuntu archive keyring is not installed: sudo apt install ubuntu-keyring"
+	exit 1
+}
+# Fedora's preflight names anything else missing, and its version, in the
+# skip message the log is searched for.
+command -v mkosi > /dev/null || {
+	echo "mkosi is not installed: sudo apt install mkosi dnf rpm createrepo-c bubblewrap uidmap"
 	exit 1
 }
 
@@ -69,11 +80,12 @@ timeout=${FROSTROOT_INTEGRATION_TIMEOUT:-40m}
 go test -tags=integration -timeout "$timeout" -v "${testArgs[@]}" 2>&1 | tee "$log"
 status=${PIPESTATUS[0]}
 
-# Only the three reasons skipUnlessMmdebstrapAvailable gives, not any skip:
+# Only the reasons skipUnlessMmdebstrapAvailable and
+# skipUnlessFedoraToolsAvailable give, not any skip:
 # TestIntegrationUnreachableWorkRootFailsFast skips as root on purpose,
 # because root mode has no user namespace to make unreachable, and that is a
 # fact about the host rather than a run that did nothing.
-skipReasons="needs Linux|mmdebstrap not installed|ubuntu-keyring not installed"
+skipReasons="needs Linux|mmdebstrap not installed|ubuntu-keyring not installed|Fedora's build tools are not available"
 if grep -qE -- "$skipReasons" "$log"; then
 	echo "The integration tests skipped for want of a prerequisite:"
 	grep -E -- "$skipReasons" "$log"

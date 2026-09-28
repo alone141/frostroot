@@ -30,16 +30,21 @@ jobs:
     # vetted them, so the claim this project is built on — that an offline
     # rebuild is byte-identical — was checked by code nothing ran.
     name: Integration (real bootstrap)
-    runs-on: ubuntu-latest
+    # Ubuntu 24.04 by name, not ubuntu-latest: a Fedora build drives mkosi
+    # 20.2, the version 24.04 ships and the only one frostroot knows, and
+    # WSL's Ubuntu 24.04 is the host frostroot is built for.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
-      - name: Install mmdebstrap
+      # mkosi makes Fedora images with a tools tree the host's dnf makes;
+      # rpm, createrepo_c and the uid maps are what the build runs besides.
+      - name: Install mmdebstrap and mkosi
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends mmdebstrap ubuntu-keyring
+          sudo apt-get install -y --no-install-recommends mmdebstrap ubuntu-keyring mkosi dnf rpm createrepo-c bubblewrap uidmap
       # Every package's integration tests, and two checks a green summary
       # alone cannot give: that none of them skipped for want of a
       # prerequisite, and that each test the script names ran to a pass. The
