@@ -30,7 +30,7 @@ On a Windows checkout, run these through `scripts/wsl.sh` or
 | `pip-trust` | The pinned pip refuses a private authority, and accepts it with `--cert` or `--trusted-host`, against a local HTTPS server. | ~1 min |
 | `failed-build` | A misspelled package fails the build with exit 2. apt's own explanation, or dnf5's, is printed first, and neither a lock nor a tarball is written. | ~2 min |
 | `capture-roundtrip` | `capture` of an image frostroot built writes a recipe that validates and asks for the same packages. | ~10 min |
-| `tui` | The full-screen form draws in a pseudo-terminal, searches the real archive and PyPI, and writes what was picked. | ~3 min |
+| `tui` | The full-screen form draws in a pseudo-terminal, searches the real archive and PyPI, and writes what was picked; for Fedora, moves the distribution to Fedora with the arrow key, searches Fedora's repositories, and writes a Fedora recipe. | ~3 min |
 | `wsl-boot` | An image imports into WSL and boots: the user, sudo, systemd, DNS, locale, timezone, the Python environment, the recipe's certificate authority, and apt still verifying TLS; a Fedora image, its machine id, rpm and dnf5 instead of the last three. Needs `wsl.exe`, so it skips anywhere but WSL. `E2E_FROSTROOT=/path/to/binary` puts a release's binary through it. | ~15 min |
 | `harness` | The harness reports a failure when it should, and never removes anything outside its root. | seconds |
 
@@ -44,9 +44,10 @@ whatever the image's release.
 
 `E2E_DISTRO=fedora` builds Fedora 44 instead, with mkosi, in
 `offline-identical`, `no-build-leaks`, `failed-build` and `wsl-boot`:
-`E2E_DISTRO=fedora scripts/e2e/run.sh offline-identical`. The scenarios
-that check what only Ubuntu images have so far, `certificates`, `insecure`
-and `capture-roundtrip`, skip.
+`E2E_DISTRO=fedora scripts/e2e/run.sh offline-identical`; `tui` then
+chooses Fedora in the form. The scenarios that check what only Ubuntu
+images have so far, `certificates`, `insecure` and `capture-roundtrip`,
+skip.
 
 ## Verdicts
 
