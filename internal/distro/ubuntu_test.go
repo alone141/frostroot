@@ -9,15 +9,17 @@ import (
 
 func TestLookupSupportedReleases(t *testing.T) {
 	testCases := []struct {
-		version       string
-		wantSuite     string
-		wantEndOfLife bool
+		version                     string
+		wantSuite                   string
+		wantEndOfLife               bool
+		wantExternallyManagedPython bool
 	}{
 		// The Task 0 spike found every focal pocket returning 404 on
 		// old-releases: an LTS release under ESM stays on the archive.
 		{version: "20.04", wantSuite: "focal", wantEndOfLife: true},
 		{version: "22.04", wantSuite: "jammy", wantEndOfLife: false},
-		{version: "24.04", wantSuite: "noble", wantEndOfLife: false},
+		{version: "24.04", wantSuite: "noble", wantEndOfLife: false, wantExternallyManagedPython: true},
+		{version: "26.04", wantSuite: "resolute", wantEndOfLife: false, wantExternallyManagedPython: true},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.version, func(t *testing.T) {
@@ -34,8 +36,19 @@ func TestLookupSupportedReleases(t *testing.T) {
 			if release.EndOfLife != testCase.wantEndOfLife {
 				t.Errorf("EndOfLife = %v, want %v", release.EndOfLife, testCase.wantEndOfLife)
 			}
+			if release.ExternallyManagedPython != testCase.wantExternallyManagedPython {
+				t.Errorf("ExternallyManagedPython = %v, want %v", release.ExternallyManagedPython, testCase.wantExternallyManagedPython)
+			}
 			if !slices.Equal(release.Components, []string{"main", "restricted", "universe", "multiverse"}) {
 				t.Errorf("Components = %q, want main and universe", release.Components)
+			}
+			wantSourceLines := []string{
+				"deb http://archive.ubuntu.com/ubuntu " + testCase.wantSuite + " main restricted universe multiverse",
+				"deb http://archive.ubuntu.com/ubuntu " + testCase.wantSuite + "-updates main restricted universe multiverse",
+				"deb http://archive.ubuntu.com/ubuntu " + testCase.wantSuite + "-security main restricted universe multiverse",
+			}
+			if got := release.SourceLines(""); !slices.Equal(got, wantSourceLines) {
+				t.Errorf("SourceLines(\"\") =\n%q\nwant\n%q", got, wantSourceLines)
 			}
 		})
 	}
@@ -154,7 +167,7 @@ func TestLookupReportsReleaseBeforeArch(t *testing.T) {
 }
 
 func TestSupportedVersions(t *testing.T) {
-	want := []string{"20.04", "22.04", "24.04"}
+	want := []string{"20.04", "22.04", "24.04", "26.04"}
 	if got := SupportedVersions(); !slices.Equal(got, want) {
 		t.Fatalf("SupportedVersions() = %q, want %q", got, want)
 	}

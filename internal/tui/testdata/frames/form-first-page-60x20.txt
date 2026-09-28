@@ -6,7 +6,7 @@ Image
   Ubuntu release
     Ubuntu 22.04 LTS (jammy)
   > Ubuntu 24.04 LTS (noble)
-
+    Ubuntu 26.04 LTS (resolute)
 
 
 
