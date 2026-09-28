@@ -200,7 +200,7 @@ Hand-typed alternatives break in ways that are easy to miss:
   `Getenv`.
 - Integration tests carry the `integration` build tag, are named
   `TestIntegration*`, and call `skipUnlessMmdebstrapAvailable`.
-  `scripts/integration.sh` requires six of them by name, so renaming one
+  `scripts/integration.sh` requires seven of them by name, so renaming one
   means editing that list.
 - A fake implements the real interface and lives in the test file that uses
   it. `builder` and `cli` each have their own `fakeBootstrapper`.

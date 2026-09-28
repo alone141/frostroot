@@ -35,6 +35,7 @@ requiredTests=(
 	TestIntegrationPython
 	TestIntegrationCatalogExistsInEveryRelease
 	TestIntegrationOpenEveryRelease
+	TestIntegrationHostThatCannotMountFailsFast
 )
 
 # skipUnlessMmdebstrapAvailable skips when one of these is missing, and a
