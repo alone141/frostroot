@@ -192,7 +192,7 @@ func TestVendorDownloadsAndResumes(t *testing.T) {
 			t.Errorf("stdout lacks %q:\n%s", wantText, stdout.String())
 		}
 	}
-	for _, wantLine := range []string{"frostroot: vendoring 2 packages · ", "frostroot: Read frostroot.lock\n", "frostroot: Check vendor/debs\n", "frostroot: Download packages\n", "frostroot:   100%  "} {
+	for _, wantLine := range []string{"frostroot: vendoring 2 packages · ", "frostroot: Read frostroot.lock\n", "frostroot: Check the vendored files\n", "frostroot: Download packages\n", "frostroot:   100%  "} {
 		if !strings.Contains(stderr.String(), wantLine) {
 			t.Errorf("stderr lacks %q:\n%s", wantLine, stderr.String())
 		}

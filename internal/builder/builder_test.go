@@ -1148,7 +1148,7 @@ func TestBuildOfflineRefusesBeforeAnyWork(t *testing.T) {
 				return sampleRecipe()
 			},
 			wantError: ErrPoolIncomplete,
-			wantText:  "git_1%3a2.34.1-1ubuntu1.11_amd64.deb (missing); run frostroot vendor",
+			wantText:  "the vendored files are incomplete: git_1%3a2.34.1-1ubuntu1.11_amd64.deb (missing) in vendor/debs; run frostroot vendor",
 		},
 		{
 			name: "pool corrupt",

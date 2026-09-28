@@ -323,8 +323,9 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	return result, nil
 }
 
-// verifyPool checks vendor/debs against the lock, as a phase with a files
-// bar, before any work directory exists.
+// verifyPool checks vendor/debs, or a Fedora lock's vendor/rpms, and
+// vendor/wheels against the lock, as a phase with a files bar, before any
+// work directory exists.
 func verifyPool(offline *offlinePlan, progress Progress) error {
 	progress.Report(ProgressEvent{Phase: PhaseVerifyVendored, Kind: EventPhaseStarted})
 	status, err := pool.Verify(offline.poolDir, offline.entries, func(checked, total int) {
@@ -334,7 +335,7 @@ func verifyPool(offline *offlinePlan, progress Progress) error {
 		return fmt.Errorf("checking %s: %w", offline.poolDir, err)
 	}
 	if !status.Complete() {
-		return fmt.Errorf("%w: %s; run frostroot vendor", ErrPoolIncomplete, status.Describe(maxNamedPoolProblems))
+		return fmt.Errorf("%w: %s in %s; run frostroot vendor", ErrPoolIncomplete, status.Describe(maxNamedPoolProblems), pool.DirName(offline.lock))
 	}
 	if len(offline.wheelEntries) > 0 {
 		wheelStatus, err := pool.Verify(offline.wheelPoolDir, offline.wheelEntries, nil)

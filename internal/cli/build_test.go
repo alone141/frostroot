@@ -174,6 +174,88 @@ func TestBuildFedoraRecipe(t *testing.T) {
 	}
 }
 
+// newFedoraOfflineRecipeDir builds the Fedora fixture online with the fake,
+// in C.UTF-8, which needs no langpack, then vendors what the lock names, as
+// frostroot vendor would.
+func newFedoraOfflineRecipeDir(t *testing.T) string {
+	t.Helper()
+	recipeDir := newRecipeDir(t, "fedora.toml")
+	recipePath := filepath.Join(recipeDir, "frostroot.toml")
+	recipeText, err := os.ReadFile(recipePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatedText := strings.Replace(string(recipeText), `lang = "tr_TR.UTF-8"`, `lang = "C.UTF-8"`, 1)
+	if updatedText == string(recipeText) {
+		t.Fatal("fixture has no locale line to replace")
+	}
+	if err := os.WriteFile(recipePath, []byte(updatedText), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, recipeDir, &fakeBootstrapper{}, &stdout, &stderr)
+	app.Builder = &builder.Builder{Fedora: &fakeFedoraBootstrapper{}}
+	if exitCode := app.Run([]string{"build", "--plain"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d; stderr:\n%s", exitCode, stderr.String())
+	}
+	vendorDir := filepath.Join(recipeDir, "vendor", "rpms")
+	if err := os.MkdirAll(vendorDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{"git-2.55.0-1.fc44.x86_64.rpm": "git", "dnf5-5.4.6.0-1.fc44.x86_64.rpm": "dnf5"} {
+		if err := os.WriteFile(filepath.Join(vendorDir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return recipeDir
+}
+
+func TestBuildFedoraRecipeOffline(t *testing.T) {
+	recipeDir := newFedoraOfflineRecipeDir(t)
+	lockBefore, err := os.ReadFile(filepath.Join(recipeDir, "frostroot.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, recipeDir, &fakeBootstrapper{}, &stdout, &stderr)
+	fedora := &fakeFedoraBootstrapper{}
+	app.Builder = &builder.Builder{Fedora: fedora}
+	if exitCode := app.Run([]string{"build", "--plain", "--offline"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d; stderr:\n%s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Wrote dist/fedora-lab-fedora-44-amd64.tar.gz (0 MB), rebuilt from frostroot.lock: 1 package, every one as locked.") {
+		t.Errorf("stdout does not say what was rebuilt:\n%s", stdout.String())
+	}
+	for _, wantLine := range []string{"frostroot: building fedora-lab · Fedora 44 (amd64) · vendor/rpms\n", "frostroot: Check the vendored files against frostroot.lock\n", "frostroot: Prepare the local package repository\n", "frostroot: Check the image against frostroot.lock\n"} {
+		if !strings.Contains(stderr.String(), wantLine) {
+			t.Errorf("stderr lacks %q:\n%s", wantLine, stderr.String())
+		}
+	}
+	if strings.Contains(stderr.String(), "Write frostroot.lock") || strings.Contains(stderr.String(), "Download packages") {
+		t.Errorf("an offline build neither downloads nor writes the lock:\n%s", stderr.String())
+	}
+	if lockAfter, err := os.ReadFile(filepath.Join(recipeDir, "frostroot.lock")); err != nil || string(lockAfter) != string(lockBefore) {
+		t.Errorf("the lock must not change: %v", err)
+	}
+}
+
+func TestBuildFedoraRecipeOfflineNeedsItsVendoredFiles(t *testing.T) {
+	recipeDir := newFedoraOfflineRecipeDir(t)
+	if err := os.Remove(filepath.Join(recipeDir, "vendor", "rpms", "dnf5-5.4.6.0-1.fc44.x86_64.rpm")); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, recipeDir, &fakeBootstrapper{}, &stdout, &stderr)
+	fedora := &fakeFedoraBootstrapper{}
+	app.Builder = &builder.Builder{Fedora: fedora}
+	if exitCode := app.Run([]string{"build", "--plain", "--offline"}); exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d; stderr:\n%s", exitCode, exitUserError, stderr.String())
+	}
+	if fedora.ran || !strings.Contains(stderr.String(), "the vendored files are incomplete: dnf5-5.4.6.0-1.fc44.x86_64.rpm (missing) in vendor/rpms; run frostroot vendor") {
+		t.Errorf("ran = %v; stderr:\n%s", fedora.ran, stderr.String())
+	}
+}
+
 func TestBuildFedoraRecipeRefusesMirror(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	app := newBuildApp(t, newRecipeDir(t, "fedora.toml"), &fakeBootstrapper{}, &stdout, &stderr)
@@ -361,7 +443,7 @@ func TestBuildOffline(t *testing.T) {
 	if strings.Contains(stderr.String(), "warning") {
 		t.Errorf("a lock with an instant deserves no warning:\n%s", stderr.String())
 	}
-	for _, wantLine := range []string{"frostroot: building cpp-lab · Ubuntu 22.04 (jammy, amd64) · vendor/debs\n", "frostroot: Check vendor/debs against frostroot.lock\n", "frostroot: Prepare the local package repository\n", "frostroot: Check the image against frostroot.lock\n"} {
+	for _, wantLine := range []string{"frostroot: building cpp-lab · Ubuntu 22.04 (jammy, amd64) · vendor/debs\n", "frostroot: Check the vendored files against frostroot.lock\n", "frostroot: Prepare the local package repository\n", "frostroot: Check the image against frostroot.lock\n"} {
 		if !strings.Contains(stderr.String(), wantLine) {
 			t.Errorf("stderr lacks %q:\n%s", wantLine, stderr.String())
 		}

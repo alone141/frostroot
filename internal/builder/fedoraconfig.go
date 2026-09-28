@@ -108,7 +108,7 @@ func renderFedoraRepos(repositories fedoraRepositories) (string, error) {
 type fedoraMkosiConf struct {
 	release   distro.FedoraRelease
 	image     bool     // the image, as an uncompressed tar; otherwise the tools tree, a directory
-	packages  []string // validated names, one per line
+	packages  []string // validated names, or offline name-version.arch, one per line
 	recommend bool     // install weak dependencies
 }
 

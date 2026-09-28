@@ -35,11 +35,11 @@ func BuildScreen(imageName, release, suite, arch, source string, phases []builde
 }
 
 // FedoraBuildScreen is BuildScreen for a Fedora recipe, which mkosi builds
-// from Fedora's mirrors.
-func FedoraBuildScreen(imageName, release, arch string, phases []builder.Phase) Screen {
+// from source: Fedora's mirrors, or offline vendor/rpms.
+func FedoraBuildScreen(imageName, release, arch, source string, phases []builder.Phase) Screen {
 	return Screen{
 		Title:    "frostroot build",
-		Subtitle: fmt.Sprintf("%s · Fedora %s (%s) · Fedora's mirrors", imageName, release, arch),
+		Subtitle: fmt.Sprintf("%s · Fedora %s (%s) · %s", imageName, release, arch, source),
 		Phases:   phases,
 		LogTitle: "mkosi",
 	}

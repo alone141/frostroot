@@ -76,7 +76,7 @@ func TestProgressModelShowsOnlyItsOwnPhases(t *testing.T) {
 	d.press(eventMsg(builder.ProgressEvent{Phase: builder.PhaseVendorCheck, Kind: builder.EventProgress, Done: 120, Total: 351, Unit: builder.UnitFiles}))
 	d.press(event(builder.PhaseInstallEssential, builder.EventPhaseStarted))
 	view := model.View()
-	for _, wantText := range []string{"frostroot vendor", "351 packages · 308 MB", "Read frostroot.lock", "Check vendor/debs", "120 / 351 files", " 34%", "Download packages", "Remove packages not in the lock", "downloads"} {
+	for _, wantText := range []string{"frostroot vendor", "351 packages · 308 MB", "Read frostroot.lock", "Check the vendored files", "120 / 351 files", " 34%", "Download packages", "Remove packages not in the lock", "downloads"} {
 		if !strings.Contains(view, wantText) {
 			t.Errorf("view lacks %q:\n%s", wantText, view)
 		}

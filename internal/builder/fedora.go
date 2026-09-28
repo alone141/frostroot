@@ -40,6 +40,7 @@ type fedoraBuild struct {
 	options      Options
 	progress     Progress
 	release      distro.FedoraRelease
+	offline      *offlinePlan // nil online
 
 	// Set by preflight.
 	instant  frozenInstant
@@ -50,7 +51,8 @@ type fedoraBuild struct {
 	installed []fedoraInstalled
 }
 
-// newFedoraBuild resolves the release. Online only so far.
+// newFedoraBuild resolves the release and, for an offline build, the plan
+// it rebuilds from.
 func newFedoraBuild(bootstrapper FedoraBootstrapper, imageRecipe recipe.Recipe, options Options, progress Progress) (*fedoraBuild, *offlinePlan, error) {
 	release, err := distro.LookupFedora(imageRecipe.Image.Release, imageRecipe.Image.Arch)
 	if err != nil {
@@ -58,9 +60,6 @@ func newFedoraBuild(bootstrapper FedoraBootstrapper, imageRecipe recipe.Recipe, 
 	}
 	if options.MirrorURL != "" {
 		return nil, nil, fmt.Errorf("%w: --mirror replaces Ubuntu's archive; a Fedora build finds Fedora's mirrors through its metalinks", ErrFedoraOption)
-	}
-	if options.Offline {
-		return nil, nil, fmt.Errorf("%w: an offline Fedora build is not supported yet", ErrFedoraOption)
 	}
 	if bootstrapper == nil {
 		return nil, nil, errors.New("this frostroot was built without a Fedora bootstrapper")
@@ -72,7 +71,12 @@ func newFedoraBuild(bootstrapper FedoraBootstrapper, imageRecipe recipe.Recipe, 
 		progress:     progress,
 		release:      release,
 	}
-	return build, nil, nil
+	if options.Offline {
+		if build.offline, err = planFedoraOffline(options.RecipeDir, imageRecipe, release); err != nil {
+			return nil, nil, err
+		}
+	}
+	return build, build.offline, nil
 }
 
 func (f *fedoraBuild) preflight(ctx context.Context, workRoot string, instant frozenInstant) error {
@@ -94,14 +98,42 @@ func (f *fedoraBuild) bootstrap(ctx context.Context, workDir string) (string, er
 		TarballPath:     filepath.Join(workDir, "image.tar.gz"),
 		Progress:        f.progress,
 	}
-	repositories := fedoraRepositories{release: f.release, insecure: f.options.Insecure}
-	if len(f.options.ExtraTrustPEM) > 0 {
-		repositories.caBundle = "/" + fedoraTrustDir + "/ca-bundle.pem"
+	tools := fedoraContent{
+		repositories: fedoraRepositories{release: f.release, insecure: f.options.Insecure},
+		packages:     fedoraToolsPackages,
 	}
-	if err := f.writeTools(spec, repositories); err != nil {
+	image := fedoraContent{
+		repositories: fedoraRepositories{release: f.release, insecure: f.options.Insecure},
+		packages:     FedoraPackagesToInstall(f.imageRecipe),
+	}
+	if len(f.options.ExtraTrustPEM) > 0 {
+		tools.repositories.caBundle = "/" + fedoraTrustDir + "/ca-bundle.pem"
+		image.repositories.caBundle = tools.repositories.caBundle
+	}
+	if f.offline != nil {
+		// Every locked package, by name and version, from local
+		// repositories that hold exactly the lock's files, into a cache of
+		// the build's own; nothing is fetched, so nothing is trusted but
+		// the key.
+		spec.Offline = true
+		spec.CacheDir = filepath.Join(workDir, fedoraOfflineCacheName)
+		spec.LocalMirror = filepath.Join(workDir, fedoraLocalMirrorName)
+		dirs, toolsLocal, imageLocal, err := stageFedoraRepositories(f.offline, f.release, spec.LocalMirror, f.progress)
+		if err != nil {
+			return "", err
+		}
+		spec.LocalRepositories = dirs
+		tools = fedoraContent{repositories: fedoraRepositories{release: f.release, local: toolsLocal}, packages: fedoraPackageSpecs(f.offline.lock.Tools)}
+		image = fedoraContent{
+			repositories: fedoraRepositories{release: f.release, local: imageLocal},
+			packages:     fedoraPackageSpecs(f.offline.lock.Packages),
+			reasons:      renderFedoraReasons(f.offline.lock.Packages),
+		}
+	}
+	if err := f.writeTools(spec, tools); err != nil {
 		return "", err
 	}
-	if err := f.writeImage(spec, repositories); err != nil {
+	if err := f.writeImage(spec, image); err != nil {
 		return "", err
 	}
 	if err := f.bootstrapper.Run(ctx, spec); err != nil {
@@ -115,30 +147,40 @@ func (f *fedoraBuild) bootstrap(ctx context.Context, workDir string) (string, er
 	return spec.TarballPath, nil
 }
 
+// fedoraContent is what one of mkosi's two builds installs, and from where.
+type fedoraContent struct {
+	repositories fedoraRepositories
+	packages     []string
+	// reasons is dnf5's packages.toml as the lock records it, which an
+	// offline image build puts back; "" online.
+	reasons string
+}
+
 // writeTools writes mkosi's configuration for the tools tree.
-func (f *fedoraBuild) writeTools(spec FedoraSpec, repositories fedoraRepositories) error {
-	if err := f.writePackageManagerTree(filepath.Join(spec.ToolsConfigDir, fedoraPackageManagerTree), repositories, false); err != nil {
+func (f *fedoraBuild) writeTools(spec FedoraSpec, tools fedoraContent) error {
+	if err := f.writePackageManagerTree(filepath.Join(spec.ToolsConfigDir, fedoraPackageManagerTree), tools.repositories, false); err != nil {
 		return err
 	}
-	conf := renderFedoraMkosiConf(fedoraMkosiConf{release: f.release, packages: fedoraToolsPackages})
+	conf := renderFedoraMkosiConf(fedoraMkosiConf{release: f.release, packages: tools.packages})
 	if err := writeFedoraFile(filepath.Join(spec.ToolsConfigDir, "mkosi.conf"), []byte(conf), 0o644); err != nil {
 		return err
 	}
 	return writeFedoraFile(filepath.Join(spec.ToolsConfigDir, fedoraFinalizeName), []byte(fedoraToolsFinalize), 0o755)
 }
 
-// writeImage writes mkosi's configuration for the image, and the files its
-// post-installation script installs.
-func (f *fedoraBuild) writeImage(spec FedoraSpec, repositories fedoraRepositories) error {
-	if err := f.writePackageManagerTree(filepath.Join(spec.ImageConfigDir, fedoraPackageManagerTree), repositories, true); err != nil {
+// writeImage writes mkosi's configuration for the image, the files its
+// post-installation script installs and, offline, the reasons its finalize
+// script puts back.
+func (f *fedoraBuild) writeImage(spec FedoraSpec, image fedoraContent) error {
+	if err := f.writePackageManagerTree(filepath.Join(spec.ImageConfigDir, fedoraPackageManagerTree), image.repositories, true); err != nil {
 		return err
 	}
-	conf := renderFedoraMkosiConf(fedoraMkosiConf{release: f.release, image: true, recommend: true, packages: FedoraPackagesToInstall(f.imageRecipe)})
+	conf := renderFedoraMkosiConf(fedoraMkosiConf{release: f.release, image: true, recommend: true, packages: image.packages})
 	provision, err := RenderFedoraProvisionScript(f.imageRecipe)
 	if err != nil {
 		return err
 	}
-	finalize, err := renderFedoraImageFinalize(f.release, false)
+	finalize, err := renderFedoraImageFinalize(f.release, image.reasons != "")
 	if err != nil {
 		return err
 	}
@@ -150,6 +192,9 @@ func (f *fedoraBuild) writeImage(spec FedoraSpec, repositories fedoraRepositorie
 	}
 	if sudoers := RenderSudoers(f.imageRecipe); sudoers != "" {
 		files["sudoers"] = sudoers
+	}
+	if image.reasons != "" {
+		files[fedoraReasonsFile] = image.reasons
 	}
 	for name, content := range files {
 		mode := os.FileMode(0o644)
@@ -239,8 +284,43 @@ func mkdirAllReadable(dir string) error {
 	return nil
 }
 
+// checkAgainstLock fails when the rebuilt image, or the tools tree that made
+// it, holds other packages than the lock, or took one from another
+// repository.
 func (f *fedoraBuild) checkAgainstLock() (packageCounts, error) {
-	return packageCounts{}, errors.New("an offline Fedora build is not supported yet")
+	lock := f.offline.lock
+	installed := make([]recipe.LockPackage, 0, len(f.installed))
+	for _, listed := range f.installed {
+		installed = append(installed, listed.lockPackage())
+	}
+	if err := compareWithLock(lock, installed); err != nil {
+		return packageCounts{}, err
+	}
+	repositoryOf := map[packageKey]string{}
+	for _, locked := range lock.Packages {
+		repositoryOf[keyOf(locked)] = locked.Source
+	}
+	var elsewhere []string
+	for _, rebuilt := range installed {
+		if locked := repositoryOf[keyOf(rebuilt)]; rebuilt.Source != locked {
+			elsewhere = append(elsewhere, fmt.Sprintf("%s from %s, locked from %s", keyOf(rebuilt), rebuilt.Source, locked))
+		}
+	}
+	if len(elsewhere) > 0 {
+		return packageCounts{}, fmt.Errorf("%w: installed from another repository: %s", ErrImageDiffersFromLock, strings.Join(elsewhere, ", "))
+	}
+	toolsListed, err := readFedoraToolsInstalled(f.spec.ToolsRecordPath)
+	if err != nil {
+		return packageCounts{}, err
+	}
+	tools := make([]recipe.LockPackage, 0, len(toolsListed))
+	for _, listed := range toolsListed {
+		tools = append(tools, listed.lockPackage())
+	}
+	if details := packageSetDifferences(lock.Tools, tools, "the tools tree"); len(details) > 0 {
+		return packageCounts{}, fmt.Errorf("%w: %s", ErrImageDiffersFromLock, strings.Join(details, "; "))
+	}
+	return packageCounts{installed: len(installed)}, nil
 }
 
 func (f *fedoraBuild) composeLock() (recipe.Lockfile, packageCounts, error) {

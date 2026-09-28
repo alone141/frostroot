@@ -81,7 +81,9 @@ type FedoraSpec struct {
 	WorkDir        string // the build directory; during Preflight, the work root
 	ToolsConfigDir string // mkosi's configuration for the tools tree
 	ImageConfigDir string // mkosi's configuration for the image
-	CacheDir       string // mkosi's package cache, kept under the work root between builds
+	// CacheDir is mkosi's package cache: online, kept under the work root
+	// between builds; offline, the build's own, removed with the tools tree.
+	CacheDir       string
 	ToolsOutputDir string // where mkosi writes the tools tree, which is removed when the build ends
 	// ToolsRecordPath is where the record of the tools tree's packages is
 	// left: mkosi's clean removes everything in its output directory.
@@ -92,6 +94,13 @@ type FedoraSpec struct {
 	SourceDateEpoch int64
 	TarballPath     string   // where the gzip-compressed image goes
 	Progress        Progress // receives phases and output lines; nil discards them
+	// Offline builds install from LocalRepositories, the vendored packages
+	// staged one directory per repository, which Run indexes first. mkosi
+	// binds LocalMirror, the directory that holds them all, into its
+	// sandbox, where the repository files find them.
+	Offline           bool
+	LocalMirror       string
+	LocalRepositories []string
 }
 
 // Preflight checks the host before any work is done: every program a
@@ -185,10 +194,10 @@ func lastLine(text string) string {
 const MkosiLogFileName = "mkosi.log"
 
 // Run makes the tools tree, then the image, then compresses it with gzip -n
-// into spec.TarballPath. Every program's output goes to MkosiLogFileName and
-// is parsed into phases for spec.Progress; the end of it is repeated in the
-// error, because mkosi's and dnf's own messages are the best explanation of
-// a failure.
+// into spec.TarballPath; offline, it indexes the local repositories first.
+// Every program's output goes to MkosiLogFileName and is parsed into phases
+// for spec.Progress; the end of it is repeated in the error, because mkosi's
+// and dnf's own messages are the best explanation of a failure.
 func (m *Mkosi) Run(ctx context.Context, spec FedoraSpec) (runErr error) {
 	for _, dir := range []string{spec.CacheDir, spec.ToolsOutputDir, spec.ImageOutputDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -207,7 +216,7 @@ func (m *Mkosi) Run(ctx context.Context, spec FedoraSpec) (runErr error) {
 	}()
 	progress := progressOrDiscard(spec.Progress)
 	progress.Report(ProgressEvent{Kind: EventLogFile, Line: logPath})
-	parser := &mkosiProgress{progress: progress, phase: PhaseMakeToolsTree}
+	parser := &mkosiProgress{progress: progress, phases: FedoraPhases(spec.Offline), phase: PhaseMakeToolsTree}
 	tail := newTailBuffer(errorTailBytes)
 	lines := &lineSplitter{emit: parser.line}
 	output := io.MultiWriter(logFile, tail, lines)
@@ -219,35 +228,52 @@ func (m *Mkosi) Run(ctx context.Context, spec FedoraSpec) (runErr error) {
 	// maps, so the user cannot remove it, and frostroot does not delete a
 	// root filesystem itself: mkosi removes it, in its own user namespace,
 	// however the build ends. It is no evidence of a failure; the log is.
+	// An offline build's package cache is its own, and belongs to them
+	// too: -ff removes it with the tree.
 	defer func() {
-		cleanErr := m.mkosi(context.WithoutCancel(ctx), output, []string{
-			"--directory=" + spec.ToolsConfigDir,
-			"--output-dir=" + spec.ToolsOutputDir,
-			"-f", "clean",
-		})
+		clean := []string{"--directory=" + spec.ToolsConfigDir, "--output-dir=" + spec.ToolsOutputDir, "-f", "clean"}
+		if spec.Offline {
+			clean = []string{"--directory=" + spec.ToolsConfigDir, "--output-dir=" + spec.ToolsOutputDir, "--cache-dir=" + spec.CacheDir, "-ff", "clean"}
+		}
+		cleanErr := m.mkosi(context.WithoutCancel(ctx), output, clean)
 		if cleanErr != nil && runErr == nil {
 			runErr = fmt.Errorf("removing the tools tree: %w", cleanErr)
 		}
 	}()
 
 	progress.Report(ProgressEvent{Phase: PhaseMakeToolsTree, Kind: EventPhaseStarted})
-	if err := m.mkosi(ctx, output, []string{
+	// Offline, mkosi binds the local mirror into its sandbox, where the
+	// repository files point, and nothing else of the host's.
+	var localMirror []string
+	if spec.Offline {
+		localMirror = []string{"--local-mirror=" + spec.LocalMirror}
+		for _, dir := range spec.LocalRepositories {
+			if err := m.createrepo(ctx, output, dir); err != nil {
+				return fail("createrepo_c could not index "+dir, err)
+			}
+		}
+	}
+	if err := m.mkosi(ctx, output, slices.Concat([]string{
 		"--directory=" + spec.ToolsConfigDir,
 		"--package-manager-tree=" + filepath.Join(spec.ToolsConfigDir, fedoraPackageManagerTree),
 		"--cache-dir=" + spec.CacheDir,
 		"--output-dir=" + spec.ToolsOutputDir,
 		"--finalize-script=" + filepath.Join(spec.ToolsConfigDir, fedoraFinalizeName),
-		"--force", "build",
-	}); err != nil {
+	}, localMirror, []string{"--force", "build"})); err != nil {
 		return fail("mkosi could not make the tools tree", err)
 	}
 	if err := os.Rename(filepath.Join(spec.ToolsOutputDir, fedoraToolsInstalledFile), spec.ToolsRecordPath); err != nil {
 		return fail("the tools tree's build recorded no packages", err)
 	}
 	progress.Report(ProgressEvent{Phase: PhaseMakeToolsTree, Kind: EventPhaseFinished})
-	parser.advance(PhaseDownload)
+	// Offline there is nothing to download: the packages are local.
+	if spec.Offline {
+		parser.advance(PhaseInstallRequested)
+	} else {
+		parser.advance(PhaseDownload)
+	}
 
-	if err := m.mkosi(ctx, output, []string{
+	if err := m.mkosi(ctx, output, slices.Concat([]string{
 		"--directory=" + spec.ImageConfigDir,
 		"--tools-tree=" + filepath.Join(spec.ToolsOutputDir, mkosiToolsOutput),
 		"--package-manager-tree=" + filepath.Join(spec.ImageConfigDir, fedoraPackageManagerTree),
@@ -256,8 +282,7 @@ func (m *Mkosi) Run(ctx context.Context, spec FedoraSpec) (runErr error) {
 		"--source-date-epoch=" + strconv.FormatInt(spec.SourceDateEpoch, 10),
 		"--postinst-script=" + filepath.Join(spec.ImageConfigDir, fedoraProvisionName),
 		"--finalize-script=" + filepath.Join(spec.ImageConfigDir, fedoraFinalizeName),
-		"--force", "build",
-	}); err != nil {
+	}, localMirror, []string{"--force", "build"})); err != nil {
 		return fail("mkosi could not make the image", err)
 	}
 	lines.flush()
@@ -292,12 +317,24 @@ func (m *Mkosi) mkosi(ctx context.Context, output io.Writer, args []string) erro
 	return runCommand(ctx, "sh", append([]string{"-c", `umask 022 && exec mkosi "$@"`, "mkosi"}, args...), nil, output, output)
 }
 
+// createrepo gives a local repository its index with the host's
+// createrepo_c, with umask 022 too: mkosi's sandbox reads the index as a
+// subordinate uid.
+func (m *Mkosi) createrepo(ctx context.Context, output io.Writer, dir string) error {
+	runCommand := m.RunCommand
+	if runCommand == nil {
+		runCommand = runInterruptibly
+	}
+	return runCommand(ctx, "sh", []string{"-c", `umask 022 && exec createrepo_c "$@"`, "createrepo_c", "--quiet", "--", dir}, nil, output, output)
+}
+
 // mkosiProgress turns mkosi's output into phases. mkosi marks each of its
 // steps with a line that starts with ‣; a phase starts at the step that
 // begins it and finishes when a later phase starts. Phases only move
 // forward: mkosi installs twice, filesystem alone first.
 type mkosiProgress struct {
 	progress Progress
+	phases   []Phase // the build's, in order
 	phase    Phase
 	started  bool
 }
@@ -340,9 +377,10 @@ func (p *mkosiProgress) advance(phase Phase) {
 	}
 }
 
-// after reports whether phase comes after the running one in FedoraPhases.
+// after reports whether phase comes after the running one in the build's
+// phases.
 func (p *mkosiProgress) after(phase Phase) bool {
-	order := append(FedoraPhases(), phaseCount)
+	order := append(slices.Clone(p.phases), phaseCount)
 	return slices.Index(order, phase) > slices.Index(order, p.phase)
 }
 

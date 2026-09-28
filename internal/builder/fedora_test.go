@@ -43,6 +43,7 @@ func (p fakeRPM) fileName() string {
 // in the package cache, and the tarball.
 type fakeFedoraBootstrapper struct {
 	image, tools  []fakeRPM
+	tarball       string // what the tarball holds; "" for "fedora tarball"
 	preflightErr  error
 	runErr        error
 	preflightSpec FedoraSpec
@@ -88,11 +89,15 @@ func (f *fakeFedoraBootstrapper) Run(_ context.Context, spec FedoraSpec) error {
 			return err
 		}
 	}
+	tarball := f.tarball
+	if tarball == "" {
+		tarball = "fedora tarball"
+	}
 	for path, content := range map[string]string{
 		filepath.Join(spec.ImageOutputDir, fedoraInstalledFile): installed.String(),
 		filepath.Join(spec.ImageOutputDir, fedoraLocationsFile): locations.String(),
 		spec.ToolsRecordPath: tools.String(),
-		spec.TarballPath:     "fedora tarball",
+		spec.TarballPath:     tarball,
 	} {
 		if err := write(path, content); err != nil {
 			return err
@@ -256,23 +261,16 @@ func TestBuildFedoraGivesDnfTheCABundle(t *testing.T) {
 	}
 }
 
-func TestBuildFedoraRefusesWhatItCannotDo(t *testing.T) {
-	for name, adjust := range map[string]func(*Options){
-		"mirror":  func(options *Options) { options.MirrorURL = "http://mirror.example/ubuntu" },
-		"offline": func(options *Options) { options.Offline = true },
-	} {
-		t.Run(name, func(t *testing.T) {
-			options, _ := newTestOptions(t)
-			adjust(&options)
-			bootstrapper := newFakeFedoraBootstrapper()
-			result, err := (&Builder{Fedora: bootstrapper}).Build(context.Background(), sampleFedoraRecipe(), options)
-			if !errors.Is(err, ErrFedoraOption) {
-				t.Fatalf("Build error = %v, want ErrFedoraOption", err)
-			}
-			if bootstrapper.ran || result.WorkDir != "" {
-				t.Errorf("ran = %v, Result = %+v; want nothing done", bootstrapper.ran, result)
-			}
-		})
+func TestBuildFedoraRefusesAMirror(t *testing.T) {
+	options, _ := newTestOptions(t)
+	options.MirrorURL = "http://mirror.example/ubuntu"
+	bootstrapper := newFakeFedoraBootstrapper()
+	result, err := (&Builder{Fedora: bootstrapper}).Build(context.Background(), sampleFedoraRecipe(), options)
+	if !errors.Is(err, ErrFedoraOption) {
+		t.Fatalf("Build error = %v, want ErrFedoraOption", err)
+	}
+	if bootstrapper.ran || result.WorkDir != "" {
+		t.Errorf("ran = %v, Result = %+v; want nothing done", bootstrapper.ran, result)
 	}
 }
 

@@ -274,3 +274,69 @@ func TestMkosiRunFailureCarriesMkosisOwnWords(t *testing.T) {
 		t.Errorf("FirstErrorLine = %+v, %v; want dnf's own explanation", line, found)
 	}
 }
+
+// TestMkosiRunOfflineIndexesTheLocalRepositoriesFirst: the host's
+// createrepo_c indexes each local repository before any tools tree exists,
+// both of mkosi's builds bind the local mirror, nothing is downloaded, and
+// the build's own package cache goes with the tools tree.
+func TestMkosiRunOfflineIndexesTheLocalRepositoriesFirst(t *testing.T) {
+	workDir := t.TempDir()
+	spec := FedoraSpec{
+		WorkDir:           workDir,
+		ToolsConfigDir:    filepath.Join(workDir, "mkosi-tools"),
+		ImageConfigDir:    filepath.Join(workDir, "mkosi-image"),
+		CacheDir:          filepath.Join(workDir, "package-cache"),
+		ToolsOutputDir:    filepath.Join(workDir, "tools"),
+		ToolsRecordPath:   filepath.Join(workDir, "tools.installed"),
+		ImageOutputDir:    filepath.Join(workDir, "image"),
+		SourceDateEpoch:   1790600000,
+		TarballPath:       filepath.Join(workDir, "image.tar.gz"),
+		Offline:           true,
+		LocalMirror:       filepath.Join(workDir, "repos"),
+		LocalRepositories: []string{filepath.Join(workDir, "repos", "tools", "fedora"), filepath.Join(workDir, "repos", "image", "fedora")},
+	}
+	var phases []string
+	spec.Progress = ProgressFunc(func(event ProgressEvent) {
+		if event.Kind == EventPhaseStarted {
+			phases = append(phases, event.Phase.Title())
+		}
+	})
+	var commands [][]string
+	run := func(_ context.Context, program string, args, _ []string, stdout, _ io.Writer) error {
+		commands = append(commands, append([]string{program}, args...))
+		if program == "sh" && slices.Contains(args, "--directory="+spec.ToolsConfigDir) && slices.Contains(args, "build") {
+			if err := os.MkdirAll(spec.ToolsOutputDir, 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(spec.ToolsOutputDir, "tools.installed"), []byte("dnf5|0|5.4.6.0|1.fc44|x86_64|x\n"), 0o644)
+		}
+		if program == "sh" && slices.Contains(args, "--directory="+spec.ImageConfigDir) {
+			_, _ = io.WriteString(stdout, "Running transaction\n‣  Running postinstall script /x…\n‣  Creating tar archive /y…\n")
+		}
+		return nil
+	}
+	if err := (&Mkosi{RunCommand: run}).Run(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if len(commands) != 6 {
+		t.Fatalf("ran %d commands, want createrepo_c twice, mkosi twice, gzip, and mkosi's clean:\n%q", len(commands), commands)
+	}
+	for index, dir := range spec.LocalRepositories {
+		want := []string{"sh", "-c", `umask 022 && exec createrepo_c "$@"`, "createrepo_c", "--quiet", "--", dir}
+		if !slices.Equal(commands[index], want) {
+			t.Errorf("command %d =\n%q\nwant\n%q", index, commands[index], want)
+		}
+	}
+	for _, build := range [][]string{commands[2], commands[3]} {
+		if !slices.Contains(build, "--local-mirror="+spec.LocalMirror) || !slices.Contains(build, "--cache-dir="+spec.CacheDir) {
+			t.Errorf("mkosi build = %q, want the local mirror bound and the build's own cache", build)
+		}
+	}
+	wantClean := []string{"sh", "-c", `umask 022 && exec mkosi "$@"`, "mkosi", "--directory=" + spec.ToolsConfigDir, "--output-dir=" + spec.ToolsOutputDir, "--cache-dir=" + spec.CacheDir, "-ff", "clean"}
+	if !slices.Equal(commands[5], wantClean) {
+		t.Errorf("last command =\n%q\nwant mkosi removing the tools tree and the build's cache\n%q", commands[5], wantClean)
+	}
+	if want := []string{"Make the tools tree", "Install requested packages", "Provision user, locale and timezone", "Create tarball"}; !slices.Equal(phases, want) {
+		t.Errorf("phases started = %q, want %q", phases, want)
+	}
+}

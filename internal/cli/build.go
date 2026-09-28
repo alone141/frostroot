@@ -31,8 +31,10 @@ var archiveUnreachableMessages = []string{
 
 const buildUsageText = `usage: frostroot build [--mirror URL | --offline] [--ca-bundle FILE | --insecure] [--keep-work] [--plain]
 
-Build frostroot.lock and dist/<name>-ubuntu-<release>-amd64.tar.gz from frostroot.toml.
-Needs Linux, mmdebstrap, network, and user namespaces or root. Never prompts.
+Build frostroot.lock and dist/<name>-<distro>-<release>-amd64.tar.gz from frostroot.toml.
+Needs Linux, network, and user namespaces or root: mmdebstrap for Ubuntu, and
+for Fedora mkosi 20.2, dnf, rpm, createrepo_c and bubblewrap, which make a
+Fedora tools tree that then makes the image. Never prompts.
 mmdebstrap mounts /proc, /sys and /dev in the image as it installs, which takes
 mount and, as root, CAP_SYS_ADMIN: a container has it only when started with
 it. A host where it cannot is refused (exit 1) rather than given an incomplete
@@ -54,10 +56,12 @@ decides what is resolved, and the lock records that it was resolved
 unverified. Nothing of the flag reaches the image; apt inside it verifies as
 before.
 
-With --offline, rebuild the image from frostroot.lock and vendor/debs (see
-frostroot vendor) without the archive: the same packages at the same versions,
-verified against the lock, frozen at the lock's instant, so that every offline
-build of one lock produces the same bytes. The lock is read, not written.
+With --offline, rebuild the image from frostroot.lock and vendor/debs, or
+vendor/rpms for Fedora (see frostroot vendor), without the network: the same
+packages at the same versions, verified against the lock, frozen at the lock's
+instant, so that every offline build of one lock produces the same bytes. A
+Fedora rebuild makes its tools tree from the lock too. The lock is read, not
+written.
 
 `
 
@@ -68,10 +72,14 @@ const progressEventBuffer = 256
 // vendorDebsDisplayName is how the offline source is shown.
 const vendorDebsDisplayName = "vendor/debs"
 
+// fedoraMirrorsDisplayName is how a Fedora build's online source is shown:
+// its metalinks choose the mirrors.
+const fedoraMirrorsDisplayName = "Fedora's mirrors"
+
 func (a *App) runBuild(args []string) int {
 	flags := a.newFlagSet("build", buildUsageText)
 	mirrorURL := flags.String("mirror", "", "archive base `URL` to use for all three pockets instead of http://archive.ubuntu.com/ubuntu")
-	offline := flags.Bool("offline", false, "rebuild from frostroot.lock and vendor/debs, without the archive")
+	offline := flags.Bool("offline", false, "rebuild from frostroot.lock and vendor/, without the network")
 	caBundlePath := flags.String("ca-bundle", "", "PEM `FILE` of certificate authorities to trust while fetching, for a network that inspects TLS")
 	insecure := flags.Bool("insecure", false, insecureFlagUsage)
 	keepWork := flags.Bool("keep-work", false, "keep the work directory after a successful build")
@@ -80,7 +88,7 @@ func (a *App) runBuild(args []string) int {
 		return exitCode
 	}
 	if *mirrorURL != "" && *offline {
-		a.stderrf("frostroot: --mirror and --offline exclude each other: an offline build installs from %s\n", vendorDebsDisplayName)
+		a.stderrf("frostroot: --mirror and --offline exclude each other: an offline build installs from what frostroot vendor fetched\n")
 		return exitUserError
 	}
 	if *insecure && *offline {
@@ -181,7 +189,8 @@ type fedoraBuildFlags struct {
 }
 
 // runFedoraBuild builds a Fedora recipe: mkosi instead of mmdebstrap, and
-// Fedora's mirrors, found through its metalinks, instead of an archive URL.
+// Fedora's mirrors, found through its metalinks, instead of an archive URL;
+// or offline, vendor/rpms.
 func (a *App) runFedoraBuild(imageRecipe recipe.Recipe, flags fedoraBuildFlags) int {
 	if flags.mirrorURL != "" {
 		a.stderrf("frostroot: --mirror replaces Ubuntu's archive; a Fedora build finds Fedora's mirrors through its metalinks\n")
@@ -205,7 +214,11 @@ func (a *App) runFedoraBuild(imageRecipe recipe.Recipe, flags fedoraBuildFlags) 
 		ExtraTrustPEM: extraTrust,
 		Insecure:      flags.insecure,
 	}
-	screen := tui.FedoraBuildScreen(imageRecipe.Image.Name, imageRecipe.Image.Release, imageRecipe.Image.Arch, builder.FedoraPhases())
+	source := fedoraMirrorsDisplayName
+	if flags.offline {
+		source = pool.RPMsDirName
+	}
+	screen := tui.FedoraBuildScreen(imageRecipe.Image.Name, imageRecipe.Image.Release, imageRecipe.Image.Arch, source, builder.FedoraPhases(flags.offline))
 	// No archive URL: the hint about an unreachable archive and --mirror is
 	// Ubuntu's.
 	if a.useFullScreen(flags.plain) {
