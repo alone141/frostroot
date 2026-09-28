@@ -616,3 +616,51 @@ func TestPackageIndexesRefreshPyPIAfterAnOfflineLook(t *testing.T) {
 		t.Error("KnownPython after the fetch should be the fetched index")
 	}
 }
+
+// TestThePreviewReadsOnlyTheIndexesItNeeds: the last page's warning reads
+// an index only when the recipe has names for it to judge. It runs as the
+// page opens, and reading PyPI's cache for a Fedora recipe, which has no
+// Python packages, held the page up for seconds, long enough for the Enter
+// meant for the next page to confirm the write.
+func TestThePreviewReadsOnlyTheIndexesItNeeds(t *testing.T) {
+	app := (&App{Getenv: environmentWith(map[string]string{"XDG_CACHE_HOME": t.TempDir()})}).withDefaults()
+	indexes, ok := app.packageIndexes(&indexFlags{})
+	if !ok {
+		t.Fatal("packageIndexes refused plain flags")
+	}
+	var opened []string
+	indexes.open = func(context.Context, index.Options) (*index.Index, error) {
+		opened = append(opened, "archive")
+		return nil, index.ErrUnavailable
+	}
+	indexes.openFedora = func(context.Context, index.Options, distro.FedoraRelease) (*index.Index, error) {
+		opened = append(opened, "fedora")
+		return nil, index.ErrUnavailable
+	}
+	indexes.openPyPI = func(context.Context, index.Options) (*index.PyPIIndex, error) {
+		opened = append(opened, "pypi")
+		return nil, index.ErrUnavailable
+	}
+	preview := recipePreview(filepath.Join(t.TempDir(), recipeFileName), indexes)
+
+	fedora := form.ForFamily(form.Defaults(form.Host{}), distro.Fedora)
+	fedora[form.KeyPythonPackages] = "requests" // an Ubuntu answer carried into the switch
+	preview(fedora)
+	if len(opened) != 0 {
+		t.Errorf("a Fedora recipe with no packages read %q", opened)
+	}
+	fedora[form.KeyOtherPackages] = "jq"
+	preview(fedora)
+	if !slices.Equal(opened, []string{"fedora"}) {
+		t.Errorf("a Fedora recipe with a package read %q, want Fedora's index alone", opened)
+	}
+
+	opened = nil
+	ubuntu := form.Defaults(form.Host{})
+	ubuntu[form.KeyOtherPackages] = "jq"
+	ubuntu[form.KeyPythonPackages] = "requests"
+	preview(ubuntu)
+	if !slices.Equal(opened, []string{"archive", "pypi"}) {
+		t.Errorf("an Ubuntu recipe with both read %q, want the archive and PyPI", opened)
+	}
+}

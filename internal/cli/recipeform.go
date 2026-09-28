@@ -177,11 +177,22 @@ func recipePreview(recipePath string, indexes *packageIndexes) tui.PreviewFunc {
 		}
 		return tui.Preview{Heading: heading, Text: difference.String()}
 	}
-	// Whatever the file will say, names no index has are
-	// worth a word before it is written.
+	// Whatever the file will say, names no index has are worth a word
+	// before it is written. An index is read only when the recipe has names
+	// for it to judge: this runs as the last page opens, and reading PyPI's
+	// cache for a Fedora recipe, which has no Python packages, held that
+	// page up for seconds.
 	return func(values form.Values) tui.Preview {
 		preview := describe(values)
-		preview.Warning = form.Warnings(values, indexes.Known(form.IndexRequestFor(values)), indexes.KnownPython())
+		imageRecipe := form.ToRecipe(values)
+		var apt, python form.PackageIndex
+		if len(imageRecipe.Packages.Include) > 0 {
+			apt = indexes.Known(form.IndexRequestFor(values))
+		}
+		if len(imageRecipe.PythonPackages()) > 0 {
+			python = indexes.KnownPython()
+		}
+		preview.Warning = form.Warnings(values, apt, python)
 		return preview
 	}
 }
