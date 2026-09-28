@@ -1,11 +1,14 @@
 # frostroot v0.15: Fedora
 
 Date: 2026-09-28
-Status: **draft for the project owner's approval.** The owner asked for
-Fedora ("do fedora") after the pros and cons of #8 were laid out, and the
-spike below ran on 2026-09-28 without changing frostroot's code. Nothing is
-built until the owner approves the design and answers the decisions at the
-end.
+Status: **approved by the project owner in conversation on 2026-09-28.**
+The owner asked for Fedora ("do fedora") after the pros and cons of #8
+were laid out; the spike below ran the same day without changing
+frostroot's code; and the owner then answered the decisions at the end:
+lab images for WSL, mkosi with a Fedora tools tree, byte-identical offline
+rebuilds from the first version, Fedora in the form from the first
+version, and the seam first, as a pull request of its own. The tasks are in
+[`2026-09-28-frostroot-fedora.md`](../plans/2026-09-28-frostroot-fedora.md).
 Extends: [`2026-09-14-frostroot-design.md`](2026-09-14-frostroot-design.md)
 (the extension point "Fedora / other families"),
 [`2026-09-17-frostroot-vendor.md`](2026-09-17-frostroot-vendor.md) (the lock
@@ -49,12 +52,15 @@ by drawing that line.
 - Every Ubuntu recipe, lock and image stays exactly as it is: a recipe
   without `distro` is Ubuntu, and every offline rebuild of an existing lock
   produces the same bytes as before.
+- `init` and `edit` offer Fedora: the form chooses the distribution before
+  the release, suggests Fedora packages from a catalog of its own, and
+  searches Fedora's package index as it searches Ubuntu's.
 
 ## Non-goals, for the first Fedora version
 
 - Third-party repositories (COPR, RPM Fusion), `[python]`,
-  `[certificates]`, `capture`, the package picker and the form's Fedora
-  catalogs. Each is a follow-up once the base holds.
+  `[certificates]` and `capture`. Each is a follow-up once the base holds;
+  the form leaves out their pages for a Fedora recipe.
 - Other rpm distributions: Alma, Rocky, CentOS Stream, RHEL.
 - A Fedora build host. The host stays Ubuntu, usually in WSL.
 - Architectures other than amd64 (Fedora's `x86_64`).
@@ -217,6 +223,35 @@ in `wheel` with passwordless sudo, and `[locale] lang` installs
 mapping in `FromRecipe` and `ToRecipe`, and a line in the template;
 AGENTS.md's rule holds.
 
+### The form
+
+The owner chose to offer Fedora in `init` and `edit` from the first
+version, so a Fedora image never needs its recipe written by hand.
+
+- **The distribution comes first**, then its releases: Ubuntu's four, and
+  Fedora's that the table knows (44 at first). A new recipe still starts on
+  Ubuntu's newest release.
+- **A Fedora package catalog**, as the Ubuntu one: the names a lab asks
+  for, as Fedora spells them (`gcc` and `make` rather than
+  `build-essential`, `python3` without `python3-venv`), each checked to
+  exist in every Fedora release the table knows, as
+  `TestIntegrationCatalogExistsInEveryRelease` does for Ubuntu.
+- **The picker searches Fedora's index.** Fedora 44 publishes its package
+  list as `repodata/…-primary.xml.zst`, 15.7 MB compressed and 185 MB
+  open, and `repomd.xml` declares both sizes, so the read is bounded before
+  and after decompression as the apt index is. It is reduced to names and
+  summaries and cached, per release and repository. `internal/index` then
+  imports zstd, which AGENTS.md's package boundaries have to say.
+  `repomd.xml` is not signed; the index only suggests names, as it does
+  today, and `internal/builder` still never imports it.
+- **The pages a Fedora recipe cannot use are left out**: third-party
+  sources, Python and certificates, until each has a Fedora version.
+- **The plain interface keeps its questions in their order**, because
+  people pipe answers into it. A new first question would shift every
+  answer after it, so `init --plain` takes the distribution as a flag,
+  `--distro fedora`, and asks nothing new; the full-screen form has the
+  field.
+
 ### The lock
 
 `version = 1` stays, and every new field is optional and `omitempty`. A
@@ -265,23 +300,21 @@ first task of the implementation measures it.
 - **Two families double the verification** every release: each scenario
   runs for both.
 
-## Decisions for the owner
+## Decisions (answered by the owner on 2026-09-28)
 
-1. **What the Fedora images are for.** The spike assumed Fedora lab images
-   on WSL; groundwork for Alma or Rocky would change which releases come
-   first.
-2. **mkosi as Fedora's bootstrapper and tarball writer**, with the rule
-   "only mmdebstrap or mkosi writes the tarball". Recommended; approach B
-   by hand would mean frostroot owning the mounts, the users and the tar
-   that mkosi already gets right.
-3. **Byte-identical offline rebuilds from the first Fedora version.**
-   Assumed yes: the spike found five removable files between two builds.
-4. **The first version's scope**: packages, user, locale, timezone,
-   `wsl.conf`, the lock, `vendor` and `build --offline`, and whether `init`
-   and `edit` offer Fedora in it or Fedora recipes are written by hand at
-   first.
-5. **The order**: the seam as its own pull request, with no change to any
-   Ubuntu output, then Fedora.
-
-With these answered, the task list goes into
-`docs/superpowers/plans/2026-09-28-frostroot-fedora.md` before any code.
+1. **What the Fedora images are for: lab images for WSL**, the use
+   frostroot has for Ubuntu. Fedora 44 first.
+2. **mkosi with a Fedora tools tree builds them and writes the tarball**,
+   and the rule becomes "only mmdebstrap or mkosi writes the tarball".
+   Approach B by hand would have meant frostroot owning the mounts, the
+   users and the tar that mkosi already gets right.
+3. **Offline rebuilds are byte-identical from the first Fedora version.**
+   The spike found five removable files between two builds; the offline
+   path is the first thing the implementation measures.
+4. **The form offers Fedora from the first version** (see "The form"),
+   beside packages, the user, locale, timezone, `wsl.conf`, the lock,
+   `vendor` and `build --offline`. It is the larger of the two choices
+   offered: a Fedora catalog to keep, a second index format with zstd in
+   `internal/index`, and more frames to record and read.
+5. **The seam first**, as a pull request of its own that changes no byte
+   of any Ubuntu image, then Fedora.
