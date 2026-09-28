@@ -166,12 +166,13 @@ and what you get when you run frostroot as yourself) or **root** (`sudo
 frostroot build`). It needs network access; consuming the tarball does not.
 
 Either way, mmdebstrap mounts `/proc`, `/sys` and `/dev` in the image while
-it installs. That takes `mount`, which every Ubuntu installation has, and,
-as root, the `CAP_SYS_ADMIN` capability, which a container has only when it
-is started with it (`docker run --privileged`, for one). Without them
-mmdebstrap would install anyway and systemd's setup would quietly come out
-incomplete, so frostroot refuses such a host with exit 1: before anything
-starts when `mount` is missing, and within a second of starting otherwise.
+it installs. That takes `mount`, which a standard Ubuntu installation has,
+and, as root, the `CAP_SYS_ADMIN` capability, which a container has only
+when it is started with it (`docker run --privileged`, for one). Without
+them mmdebstrap would install anyway and systemd's setup would quietly come
+out incomplete, so frostroot refuses such a host with exit 1: before
+anything starts when `mount` is missing, and within a second of starting
+otherwise.
 
 ## Quick start
 
@@ -1311,8 +1312,28 @@ form's new default, writing `release = "26.04"`. The container they ran in
 re-signs every TLS connection it makes, PyPI's included, so the online
 builds of `offline-identical` and `certificates` were given its authority
 with `--ca-bundle`, as such a network needs; the other scenarios ran as
-committed. The first login of a 26.04 image, `wsl-boot` with
-`E2E_RELEASE=26.04`, needs Windows and is still to run.
+committed. Issue #102, which the spike found, went into the same version.
+On the 24.04 build host (mmdebstrap 1.4.3), a root build of a 24.04 recipe
+with `CAP_SYS_ADMIN` dropped by `setpriv`, as in a container that was not
+given it, exited 0 after 97 s from `master` at 147d846; against the same
+recipe built with the capability, its image lacked the eleven entries
+systemd-tmpfiles makes, and held `/etc/credstore` and
+`/etc/credstore.encrypted` at 0755 and `/var/log/journal` owned by root.
+The branch's binary (998219d) stopped that build after 0.27 s with exit 1,
+quoting mmdebstrap's warning, kept the work directory and wrote neither a
+lock nor a tarball; with `mount` off PATH it refused with exit 1 before
+any work directory existed. Each fix is pinned by a test that fails with
+it broken, run with `scripts/mutate.sh` and recorded in the commits, and
+the new `TestIntegrationHostThatCannotMountFailsFast` stopped a real
+mmdebstrap in 0.3 s as root and as an unprivileged user, and failed after
+93 s with the watch broken. `scripts/check.sh` ran every step,
+`failed-build` passed its 7 checks, and `scripts/integration.sh` as root
+passed every required test but `TestIntegrationPython`, whose pip refused
+PyPI's certificate because the container re-signs it; a `[python]` build
+given the container's authority with `--ca-bundle` succeeded in 114 s, and
+CI, where nothing re-signs, ran all seven required tests to a pass as an
+unprivileged user on 3d9eeee. The first login of a 26.04 image,
+`wsl-boot` with `E2E_RELEASE=26.04`, needs Windows and is still to run.
 
 
 ## Documentation
