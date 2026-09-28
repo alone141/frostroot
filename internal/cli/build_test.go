@@ -127,10 +127,13 @@ func newBuildApp(t *testing.T, recipeDir string, bootstrapper builder.Bootstrapp
 // fakeFedoraBootstrapper writes what a Fedora build's mkosi and scripts
 // would, for one package: the records, the file dnf kept, and the tarball.
 type fakeFedoraBootstrapper struct {
-	ran bool
+	ran          bool
+	preflightErr error
 }
 
-func (f *fakeFedoraBootstrapper) Preflight(context.Context, builder.FedoraSpec) error { return nil }
+func (f *fakeFedoraBootstrapper) Preflight(context.Context, builder.FedoraSpec) error {
+	return f.preflightErr
+}
 
 func (f *fakeFedoraBootstrapper) Run(_ context.Context, spec builder.FedoraSpec) error {
 	f.ran = true
@@ -252,6 +255,21 @@ func TestBuildFedoraRecipeOfflineNeedsItsVendoredFiles(t *testing.T) {
 		t.Fatalf("exit code = %d, want %d; stderr:\n%s", exitCode, exitUserError, stderr.String())
 	}
 	if fedora.ran || !strings.Contains(stderr.String(), "the vendored files are incomplete: dnf5-5.4.6.0-1.fc44.x86_64.rpm (missing) in vendor/rpms; run frostroot vendor") {
+		t.Errorf("ran = %v; stderr:\n%s", fedora.ran, stderr.String())
+	}
+}
+
+// TestBuildFedoraRecipeOnAHostThatKeepsMkosiOutIsTheUsersToFix: a kernel
+// that keeps mkosi out of its user namespace is fixed with sudo or sysctl.
+func TestBuildFedoraRecipeOnAHostThatKeepsMkosiOutIsTheUsersToFix(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, newRecipeDir(t, "fedora.toml"), &fakeBootstrapper{}, &stdout, &stderr)
+	fedora := &fakeFedoraBootstrapper{preflightErr: fmt.Errorf("%w: build as root", builder.ErrUserNamespacesRestricted)}
+	app.Builder = &builder.Builder{Fedora: fedora}
+	if exitCode := app.Run([]string{"build", "--plain"}); exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d; stderr:\n%s", exitCode, exitUserError, stderr.String())
+	}
+	if fedora.ran || !strings.Contains(stderr.String(), "keeps mkosi out of its user namespace: build as root") {
 		t.Errorf("ran = %v; stderr:\n%s", fedora.ran, stderr.String())
 	}
 }

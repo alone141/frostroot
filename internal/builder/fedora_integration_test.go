@@ -46,20 +46,19 @@ func newFedoraWorkRoot(t *testing.T) string {
 }
 
 // removeFedoraWorkRoot removes a test's work root. The package cache an
-// unprivileged mkosi fills belongs to the subordinate ids, so what they own
-// is removed first in a user namespace that maps them to its root, which
-// cannot remove their top directories from the user's; then the rest, as
-// the user.
+// unprivileged mkosi fills belongs to the subordinate ids, which only a user
+// namespace that maps them and the user can remove, as scripts/e2e/lib.sh
+// does.
 func removeFedoraWorkRoot(t *testing.T, dir string) {
 	t.Helper()
-	if os.Getuid() != 0 {
-		// Its failure is expected, on those top directories, and the
-		// second step says whether anything is really left.
-		output, err := exec.Command("unshare", "--map-auto", "--setuid", "0", "rm", "-rf", "--", dir).CombinedOutput()
-		t.Logf("removing what the subordinate ids own in %s: %v %s", dir, err, output)
+	if os.Getuid() == 0 {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Errorf("removing %s: %v", dir, err)
+		}
+		return
 	}
-	if err := os.RemoveAll(dir); err != nil {
-		t.Errorf("removing %s: %v", dir, err)
+	if output, err := exec.Command("unshare", "--map-auto", "--map-root-user", "rm", "-rf", "--", dir).CombinedOutput(); err != nil {
+		t.Errorf("removing %s: %v: %s", dir, err, output)
 	}
 }
 

@@ -18,6 +18,9 @@ type fakeHost struct {
 	installed map[string]bool
 	results   map[string]fakeResult // by program name
 	ran       []string
+	// restriction is what the kernel says of unprivileged user
+	// namespaces; "" for a kernel that has no such switch.
+	restriction string
 }
 
 type fakeResult struct {
@@ -54,8 +57,41 @@ func (h *fakeHost) run(_ context.Context, program string, args, _ []string, stdo
 	return result.err
 }
 
+func (h *fakeHost) readFile(name string) ([]byte, error) {
+	if name != userNamespaceRestriction || h.restriction == "" {
+		return nil, os.ErrNotExist
+	}
+	return []byte(h.restriction + "\n"), nil
+}
+
 func (h *fakeHost) mkosi(uid int) *Mkosi {
-	return &Mkosi{RunCommand: h.run, LookPath: h.lookPath, CurrentUID: func() int { return uid }}
+	return &Mkosi{RunCommand: h.run, LookPath: h.lookPath, ReadFile: h.readFile, CurrentUID: func() int { return uid }}
+}
+
+// TestMkosiPreflightRefusesAHostThatKeepsMkosiOutOfItsNamespace: Ubuntu's
+// kernels let only programs with an AppArmor profile of their own use the
+// user namespaces they make, and mkosi has none, so an unprivileged build
+// would die in a traceback. Root needs no namespace, and a kernel that
+// lifts the restriction, or has none, is fine.
+func TestMkosiPreflightRefusesAHostThatKeepsMkosiOutOfItsNamespace(t *testing.T) {
+	host := newFakeHost()
+	host.restriction = "1"
+	err := host.mkosi(1000).Preflight(context.Background(), FedoraSpec{})
+	if !errors.Is(err, ErrUserNamespacesRestricted) {
+		t.Fatalf("Preflight = %v, want ErrUserNamespacesRestricted", err)
+	}
+	for _, want := range []string{"sudo frostroot build", "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Preflight = %v, want it to say %q", err, want)
+		}
+	}
+	if err := host.mkosi(0).Preflight(context.Background(), FedoraSpec{}); err != nil {
+		t.Errorf("Preflight as root = %v, want nil", err)
+	}
+	host.restriction = "0"
+	if err := host.mkosi(1000).Preflight(context.Background(), FedoraSpec{}); err != nil {
+		t.Errorf("Preflight with the restriction lifted = %v, want nil", err)
+	}
 }
 
 func TestMkosiPreflightAcceptsAReadyHost(t *testing.T) {

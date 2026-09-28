@@ -45,6 +45,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends mmdebstrap ubuntu-keyring mkosi dnf rpm createrepo-c bubblewrap uidmap
+      # mkosi uses the user namespace it makes, which Ubuntu's kernels allow
+      # only a program with an AppArmor profile of its own: mmdebstrap has
+      # one, and mkosi has none. WSL's kernel, Microsoft's, has no such
+      # switch, and frostroot refuses a host that has it on, so the runner
+      # is made like WSL.
+      - name: Let mkosi use its user namespace, as under WSL
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # Every package's integration tests, and two checks a green summary
       # alone cannot give: that none of them skipped for want of a
       # prerequisite, and that each test the script names ran to a pass. The

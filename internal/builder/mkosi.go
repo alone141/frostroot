@@ -27,7 +27,16 @@ var (
 	// ErrFedoraOption means the build was given an option a Fedora build
 	// cannot use.
 	ErrFedoraOption = errors.New("not for a Fedora build")
+	// ErrUserNamespacesRestricted means the host keeps an unprivileged
+	// mkosi out of the user namespace it makes.
+	ErrUserNamespacesRestricted = errors.New("this host keeps mkosi out of its user namespace")
 )
+
+// userNamespaceRestriction is where Ubuntu's kernels say whether AppArmor
+// keeps a program that has no profile of its own from using the user
+// namespaces it makes: 1 since Ubuntu 23.10. mmdebstrap has such a profile,
+// and mkosi does not. WSL runs Microsoft's kernel, which has no such switch.
+const userNamespaceRestriction = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns"
 
 // KnownMkosiVersions are the mkosi versions frostroot drives, oldest first:
 // Ubuntu 24.04's, which the Fedora spike measured.
@@ -71,6 +80,7 @@ type Mkosi struct {
 	RunCommand CommandRunner                // defaults to runInterruptibly
 	CurrentUID func() int                   // defaults to os.Getuid
 	LookPath   func(string) (string, error) // defaults to exec.LookPath
+	ReadFile   func(string) ([]byte, error) // defaults to os.ReadFile
 }
 
 // FedoraSpec is everything the Mkosi bootstrapper needs to build one image.
@@ -105,8 +115,9 @@ type FedoraSpec struct {
 
 // Preflight checks the host before any work is done: every program a
 // Fedora build runs, named all at once with the line that installs them,
-// the mkosi version, a dnf that runs, and a work root that mkosi's user
-// namespace can enter. spec.WorkDir need not exist yet.
+// the mkosi version, a dnf that runs, and, unprivileged, a kernel that lets
+// mkosi use its user namespace and a work root that namespace can enter.
+// spec.WorkDir need not exist yet.
 func (m *Mkosi) Preflight(ctx context.Context, spec FedoraSpec) error {
 	lookPath := m.LookPath
 	if lookPath == nil {
@@ -140,7 +151,19 @@ func (m *Mkosi) Preflight(ctx context.Context, spec FedoraSpec) error {
 	if _, err := m.output(ctx, "dnf", "--version"); err != nil {
 		return fmt.Errorf("%w: dnf is installed but does not run: %w", ErrNoFedoraTool, err)
 	}
-	if !m.privileged() && spec.WorkDir != "" {
+	if m.privileged() {
+		return nil
+	}
+	readFile := m.ReadFile
+	if readFile == nil {
+		readFile = os.ReadFile
+	}
+	// mkosi would fail inside its namespace, with a traceback.
+	if restricted, err := readFile(userNamespaceRestriction); err == nil && strings.TrimSpace(string(restricted)) == "1" {
+		return fmt.Errorf("%w: AppArmor lets only a program with a profile of its own use the user namespace it makes (kernel.apparmor_restrict_unprivileged_userns = 1), and mkosi has none; build as root with sudo frostroot build, or lift the restriction: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
+			ErrUserNamespacesRestricted)
+	}
+	if spec.WorkDir != "" {
 		return checkReachableFromUserNamespace("mkosi", spec.WorkDir)
 	}
 	return nil
