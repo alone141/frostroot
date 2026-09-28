@@ -74,9 +74,11 @@ func Validate(imageRecipe Recipe) []string {
 		}
 	}
 	addProblem(CheckImageName(imageRecipe.Image.Name))
-	if _, err := distro.Lookup(imageRecipe.Image.Release, imageRecipe.Image.Arch); err != nil {
-		for _, lookupErr := range splitJoinedError(err) {
-			addProblem(lookupErr)
+	if family, err := distro.FamilyOf(imageRecipe.Image.Distro); err != nil {
+		addProblem(err)
+	} else if err := distro.Check(family, imageRecipe.Image.Release, imageRecipe.Image.Arch); err != nil {
+		for _, checkErr := range splitJoinedError(err) {
+			addProblem(checkErr)
 		}
 	}
 	userName := imageRecipe.User.Name

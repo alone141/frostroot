@@ -54,5 +54,5 @@ func unknownFamilyError(name string) error {
 	for _, family := range Families() {
 		known = append(known, string(family))
 	}
-	return fmt.Errorf("%w %q (known: %s)", ErrUnknownFamily, name, strings.Join(known, ", "))
+	return fmt.Errorf("%w: %q (known: %s)", ErrUnknownFamily, name, strings.Join(known, ", "))
 }

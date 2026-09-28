@@ -111,6 +111,7 @@ func FromRecipe(imageRecipe recipe.Recipe) Values {
 		keyOriginalRelease:      imageRecipe.Image.Release,
 		keyOriginalCertificates: exoticCertificates,
 		keyPythonIndexURL:       imageRecipe.PythonIndexURL(),
+		keyDistro:               imageRecipe.Image.Distro,
 	}
 }
 
@@ -120,7 +121,7 @@ func FromRecipe(imageRecipe recipe.Recipe) Values {
 func ToRecipe(values Values) recipe.Recipe {
 	userName := values.String(KeyUserName)
 	return recipe.Recipe{
-		Image: recipe.Image{Name: values.String(KeyImageName), Release: values.String(KeyRelease), Arch: distro.SupportedArch},
+		Image: recipe.Image{Name: values.String(KeyImageName), Distro: values.String(keyDistro), Release: values.String(KeyRelease), Arch: distro.SupportedArch},
 		User:  recipe.User{Name: userName, Sudo: values.Bool(KeySudo)},
 		WSL:   recipe.WSL{Systemd: values.Bool(KeySystemd), DefaultUser: userName},
 		Locale: recipe.Locale{

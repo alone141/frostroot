@@ -14,6 +14,7 @@ import (
 
 	"frostroot/internal/deb"
 	"frostroot/internal/deb/debtest"
+	"frostroot/internal/distro"
 	"frostroot/internal/pool"
 	"frostroot/internal/recipe"
 )
@@ -1076,6 +1077,22 @@ func TestBuildOfflineRefusesBeforeAnyWork(t *testing.T) {
 			wantText:  "release 22.04 in the lock, 24.04 in the recipe",
 		},
 		{
+			// A lock of another family names packages, files and a
+			// repository that only that family's builder can install.
+			name: "lock of another family",
+			prepare: func(t *testing.T, options Options) recipe.Recipe {
+				t.Helper()
+				lock := writeVendoredLock(t, options)
+				lock.Distro = "fedora"
+				if err := recipe.SaveLock(filepath.Join(options.RecipeDir, LockFileName), lock); err != nil {
+					t.Fatal(err)
+				}
+				return sampleRecipe()
+			},
+			wantError: ErrLockMismatch,
+			wantText:  `distro "fedora" in the lock, "ubuntu" in the recipe`,
+		},
+		{
 			name: "recipe packages changed",
 			prepare: func(t *testing.T, options Options) recipe.Recipe {
 				t.Helper()
@@ -1190,6 +1207,70 @@ func TestBuildOfflineUserChangesAreAllowed(t *testing.T) {
 	if _, err := (&Builder{Bootstrapper: &offlineFakeBootstrapper{}}).Build(context.Background(), imageRecipe, options); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestBuildOfflineTakesAnUnnamedFamilyAsUbuntu: every recipe written before
+// there was a second family names none, and every lock says "ubuntu". Either
+// way round, the two still describe the same image.
+func TestBuildOfflineTakesAnUnnamedFamilyAsUbuntu(t *testing.T) {
+	testCases := []struct {
+		name, recipeDistro, lockDistro string
+	}{
+		{name: "recipe names ubuntu, lock says ubuntu", recipeDistro: "ubuntu", lockDistro: "ubuntu"},
+		{name: "recipe names none, lock names none", recipeDistro: "", lockDistro: ""},
+		{name: "recipe names ubuntu, lock names none", recipeDistro: "ubuntu", lockDistro: ""},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			options, _ := newTestOptions(t)
+			lock := writeVendoredLock(t, options)
+			lock.Distro = testCase.lockDistro
+			if err := recipe.SaveLock(filepath.Join(options.RecipeDir, LockFileName), lock); err != nil {
+				t.Fatal(err)
+			}
+			options.Offline = true
+			imageRecipe := sampleRecipe()
+			imageRecipe.Image.Distro = testCase.recipeDistro
+			if _, err := (&Builder{Bootstrapper: &offlineFakeBootstrapper{}}).Build(context.Background(), imageRecipe, options); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// TestBuildLockNamesTheRecipeFamily: the lock says which family built it,
+// named or not in the recipe, so that a rebuild can refuse another's.
+func TestBuildLockNamesTheRecipeFamily(t *testing.T) {
+	for _, recipeDistro := range []string{"", "ubuntu"} {
+		options, _ := newTestOptions(t)
+		imageRecipe := sampleRecipe()
+		imageRecipe.Image.Distro = recipeDistro
+		if _, err := (&Builder{Bootstrapper: &fakeBootstrapper{}}).Build(context.Background(), imageRecipe, options); err != nil {
+			t.Fatal(err)
+		}
+		lock, err := recipe.LoadLock(filepath.Join(options.RecipeDir, LockFileName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if lock.Distro != "ubuntu" {
+			t.Errorf("recipe distro %q: lock distro = %q, want ubuntu", recipeDistro, lock.Distro)
+		}
+	}
+}
+
+func TestBuildRefusesAnUnknownFamily(t *testing.T) {
+	options, _ := newTestOptions(t)
+	imageRecipe := sampleRecipe()
+	imageRecipe.Image.Distro = "debian"
+	bootstrapper := &fakeBootstrapper{}
+	result, err := (&Builder{Bootstrapper: bootstrapper}).Build(context.Background(), imageRecipe, options)
+	if !errors.Is(err, distro.ErrUnknownFamily) {
+		t.Fatalf("Build error = %v, want distro.ErrUnknownFamily", err)
+	}
+	if bootstrapper.runCount != 0 || result.WorkDir != "" {
+		t.Errorf("runs = %d, Result = %+v; want no bootstrap and no work directory", bootstrapper.runCount, result)
+	}
+	assertNoBuildOutput(t, options)
 }
 
 func TestCompareWithLock(t *testing.T) {

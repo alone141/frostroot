@@ -73,10 +73,10 @@ func (p *offlinePlan) packageNames() []string {
 }
 
 // planOffline loads the lock in recipeDir and checks that it still describes
-// imageRecipe: same release, same architecture, same requested packages.
-// The user, sudo, locale, timezone and systemd settings may differ; they are
-// provisioned at build time and need no packages.
-func planOffline(recipeDir string, imageRecipe recipe.Recipe, release distro.Release) (*offlinePlan, error) {
+// imageRecipe, of family: same family, same release, same architecture, same
+// requested packages. The user, sudo, locale, timezone and systemd settings
+// may differ; they are provisioned at build time and need no packages.
+func planOffline(recipeDir string, imageRecipe recipe.Recipe, family distro.Family, release distro.Release) (*offlinePlan, error) {
 	lockPath := filepath.Join(recipeDir, LockFileName)
 	lock, err := recipe.LoadLock(lockPath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -102,6 +102,11 @@ func planOffline(recipeDir string, imageRecipe recipe.Recipe, release distro.Rel
 		return nil, fmt.Errorf("%w: it records no sources, so the image's sources.list cannot be written; run frostroot build online, then frostroot vendor", pool.ErrBadLock)
 	}
 	var differences []string
+	// A lock that names no family is Ubuntu's, as a recipe that names none
+	// is; one that names a family frostroot does not know is no family's.
+	if lockFamily, err := distro.FamilyOf(lock.Distro); err != nil || lockFamily != family {
+		differences = append(differences, fmt.Sprintf("distro %q in the lock, %q in the recipe", lock.Distro, family))
+	}
 	if lock.Release != imageRecipe.Image.Release || lock.Suite != release.Suite {
 		differences = append(differences, fmt.Sprintf("release %s in the lock, %s in the recipe", lock.Release, imageRecipe.Image.Release))
 	}

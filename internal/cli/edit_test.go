@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -34,6 +36,26 @@ func TestEditKeepsAnUnchangedRecipe(t *testing.T) {
 	want.WSL.DefaultUser = recipe.DefaultUser(original)
 	if got := loadWrittenRecipe(t, recipeDir); !reflect.DeepEqual(got, want) {
 		t.Errorf("edit changed a recipe nobody touched:\n got %+v\nwant %+v", got, want)
+	}
+}
+
+// TestEditKeepsTheRecipeFamily: the form asks for no family yet, so edit
+// carries [image] distro through, and a recipe that names none gains none.
+func TestEditKeepsTheRecipeFamily(t *testing.T) {
+	for fixture, wantDistroLine := range map[string]bool{"distro.toml": true, "valid.toml": false} {
+		t.Run(fixture, func(t *testing.T) {
+			recipeDir := newRecipeDir(t, fixture)
+			if exitCode, _, stderr, _ := runEditWithAnswers(recipeDir, nil); exitCode != exitSuccess {
+				t.Fatalf("exit code = %d, stderr %s", exitCode, stderr)
+			}
+			content, err := os.ReadFile(filepath.Join(recipeDir, "frostroot.toml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(string(content), "\ndistro = \"ubuntu\"\n"); got != wantDistroLine {
+				t.Errorf("distro line written = %v, want %v:\n%s", got, wantDistroLine, content)
+			}
+		})
 	}
 }
 

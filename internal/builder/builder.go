@@ -171,6 +171,10 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if getenv == nil {
 		getenv = os.Getenv
 	}
+	family, err := distro.FamilyOf(imageRecipe.Image.Distro)
+	if err != nil {
+		return Result{}, err
+	}
 	release, err := distro.Lookup(imageRecipe.Image.Release, imageRecipe.Image.Arch)
 	if err != nil {
 		return Result{}, err
@@ -184,7 +188,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		if options.MirrorURL != "" {
 			return Result{}, errors.New("an offline build takes no mirror: it installs from vendor/debs")
 		}
-		if offline, err = planOffline(options.RecipeDir, imageRecipe, release); err != nil {
+		if offline, err = planOffline(options.RecipeDir, imageRecipe, family, release); err != nil {
 			return Result{}, err
 		}
 	}
@@ -392,7 +396,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		}
 		lock := recipe.Lockfile{
 			Version:          1,
-			Distro:           "ubuntu",
+			Distro:           string(family),
 			Release:          imageRecipe.Image.Release,
 			Suite:            release.Suite,
 			Arch:             imageRecipe.Image.Arch,

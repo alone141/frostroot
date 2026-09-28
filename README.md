@@ -315,6 +315,7 @@ them again before their week is up.
 | Field | Rules | `init` default |
 |---|---|---|
 | `image.name` | letters, digits, `.` `_` `-`; names the tarball and the WSL distro | `lab` |
+| `image.distro` | `ubuntu`, the only family so far; may be omitted, which means `ubuntu` | omitted |
 | `image.release` | `20.04`, `22.04`, `24.04` or `26.04` | `26.04`, the newest |
 | `image.arch` | `amd64` | `amd64` |
 | `user.name` | lowercase, digits, `_` `-`, 1 to 32 characters, not `root` | `student` |
