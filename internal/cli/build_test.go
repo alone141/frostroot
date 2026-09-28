@@ -533,6 +533,7 @@ func TestBuildUnwritableOutputIsUserError(t *testing.T) {
 func TestBuildPreflightFailuresAreUserErrors(t *testing.T) {
 	preflightErrors := []error{
 		fmt.Errorf("%w; install it with: sudo apt install mmdebstrap", builder.ErrNoMmdebstrap),
+		fmt.Errorf("%w; install it with: sudo apt install mount", builder.ErrNoMount),
 		fmt.Errorf("%w at /usr/share/keyrings/ubuntu-archive-keyring.gpg", builder.ErrNoKeyring),
 	}
 	for _, preflightErr := range preflightErrors {

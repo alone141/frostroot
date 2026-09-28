@@ -35,6 +35,9 @@ var (
 	ErrNotLinux = errors.New("frostroot build requires Linux")
 	// ErrNoMmdebstrap means mmdebstrap is not installed.
 	ErrNoMmdebstrap = errors.New("mmdebstrap not found on PATH")
+	// ErrNoMount means mount is not installed, which mmdebstrap needs to
+	// mount /proc, /sys and /dev in the image while it installs.
+	ErrNoMount = errors.New("mount not found on PATH")
 	// ErrNoKeyring means the Ubuntu archive keyring is not installed.
 	ErrNoKeyring = errors.New("keyring for the Ubuntu archive not found")
 	// ErrBadWorkRoot means the directory builds work in cannot be used.

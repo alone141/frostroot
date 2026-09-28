@@ -45,6 +45,15 @@ func (m *Mmdebstrap) Preflight(spec BootstrapSpec) error {
 	if _, err := lookPath("mmdebstrap"); err != nil {
 		return fmt.Errorf("%w; install it with: sudo apt install mmdebstrap", ErrNoMmdebstrap)
 	}
+	// In root and unshare mode alike, mmdebstrap without mount only warns
+	// and installs with nothing mounted at /proc, /sys and /dev. The
+	// maintainer scripts that need them then fail without failing the
+	// build, and the image lacks what they would have made: a 26.04 image
+	// built that way had a stub hwdb.bin, no systemd catalog and none of
+	// systemd-tmpfiles' directories.
+	if _, err := lookPath("mount"); err != nil {
+		return fmt.Errorf("%w; mmdebstrap needs it to mount /proc, /sys and /dev in the image; install it with: sudo apt install mount", ErrNoMount)
+	}
 	if err := checkKeyring(spec); err != nil {
 		return err
 	}
