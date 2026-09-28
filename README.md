@@ -1381,8 +1381,8 @@ internal/sources/   the catalog of third-party repositories, PPAs, and fetching 
 internal/pgp/       OpenPGP public keys: armor, the fingerprint of every primary key; nothing else
 internal/tui/       the full-screen form with its package picker, and the progress screen (the only package using the Charm libraries)
 internal/recipe/    frostroot.toml and frostroot.lock: types, strict parsing, validation
-internal/distro/    Ubuntu releases, archive URL, components, the three pocket lines
-internal/builder/   orchestration, mmdebstrap runner and progress parser, provisioning, the Python step, dpkg status, lock checksums, offline builds
+internal/distro/    the families frostroot builds, and Ubuntu's releases, archive URL, components, the three pocket lines
+internal/builder/   orchestration and what depends on the family; for Ubuntu, the mmdebstrap runner and progress parser, provisioning, the Python step, dpkg status, lock checksums, offline builds
 internal/pool/      the vendored pools: manifests from the lock, verify, fetch, prune, stage as a flat repository or a directory of wheels
 internal/deb/       Debian formats: control stanzas, Packages indexes, .deb control files, flat repository index
 internal/export/    tarball naming and atomic placement
