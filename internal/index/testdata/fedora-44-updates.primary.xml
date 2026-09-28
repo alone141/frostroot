@@ -1,0 +1,200 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata xmlns="http://linux.duke.edu/metadata/common" xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="4">
+<package type="rpm">
+  <name>git</name>
+  <arch>x86_64</arch>
+  <version epoch="0" ver="2.55.0" rel="1.fc44"/>
+  <checksum type="sha256" pkgid="YES">e6dc583ab2a545dea11573ff604df0fadcc0688e07d867591ec1b6ed14b94e0b</checksum>
+  <summary>Fast Version Control System</summary>
+  <description>Git is a fast, scalable, distributed revision control system with an
+unusually rich command set that provides both high-level operations
+and full access to internals.
+
+The git rpm installs common set of tools which are usually using with
+small amount of dependencies. To install all git packages, including
+tools for integrating with other SCMs, install the git-all meta-package.</description>
+  <packager>Fedora Project</packager>
+  <url>https://git-scm.com/</url>
+  <time file="1782847173" build="1782818351"/>
+  <size package="42124" installed="59063" archive="60424"/>
+  <location href="Packages/g/git-2.55.0-1.fc44.x86_64.rpm"/>
+  <format>
+    <rpm:license>BSD-3-Clause AND GPL-2.0-only AND GPL-2.0-or-later AND LGPL-2.1-or-later AND MIT</rpm:license>
+    <rpm:vendor>Fedora Project</rpm:vendor>
+    <rpm:group>Unspecified</rpm:group>
+    <rpm:buildhost>buildhw-x86-09.rdu3.fedoraproject.org</rpm:buildhost>
+    <rpm:sourcerpm>git-2.55.0-1.fc44.src.rpm</rpm:sourcerpm>
+    <rpm:header-range start="4504" end="11489"/>
+    <rpm:provides>
+      <rpm:entry name="git" flags="EQ" epoch="0" ver="2.55.0" rel="1.fc44"/>
+      <rpm:entry name="git(x86-64)" flags="EQ" epoch="0" ver="2.55.0" rel="1.fc44"/>
+    </rpm:provides>
+    <rpm:requires>
+      <rpm:entry name="/usr/bin/perl"/>
+      <rpm:entry name="/usr/bin/sh"/>
+      <rpm:entry name="git-core" flags="EQ" epoch="0" ver="2.55.0" rel="1.fc44"/>
+    </rpm:requires>
+  </format>
+</package>
+<package type="rpm">
+  <name>glibc</name>
+  <arch>i686</arch>
+  <version epoch="0" ver="2.43" rel="8.fc44"/>
+  <checksum type="sha256" pkgid="YES">d2971eef47b2dfddc97fcef3706f129f29970553914096091a430a8386f6f76c</checksum>
+  <summary>The GNU libc libraries</summary>
+  <description>The glibc package contains standard libraries which are used by
+multiple programs on the system. In order to save disk space and
+memory, as well as to make upgrading easier, common system code is
+kept in one place and shared between programs. This particular package
+contains the most important sets of shared libraries: the standard C
+library and the standard math library. Without these two libraries, a
+Linux system will not function.</description>
+  <packager>Fedora Project</packager>
+  <url>http://www.gnu.org/software/glibc/</url>
+  <time file="1785824367" build="1785817649"/>
+  <size package="2282613" installed="5997518" archive="6014044"/>
+  <location href="Packages/g/glibc-2.43-8.fc44.i686.rpm"/>
+  <format>
+    <rpm:license>LGPL-2.1-or-later AND SunPro AND LGPL-2.1-or-later WITH GCC-exception-2.0 AND BSD-3-Clause AND GPL-2.0-or-later AND LGPL-2.1-or-later WITH GNU-compiler-exception AND GPL-2.0-only AND ISC AND LicenseRef-Fedora-Public-Domain AND HPND AND CMU-Mach AND LGPL-2.0-or-later AND Unicode-3.0 AND GFDL-1.1-or-later AND GPL-1.0-or-later AND FSFUL AND MIT AND Inner-Net-2.0 AND X11 AND GPL-2.0-or-later WITH GCC-exception-2.0 AND GFDL-1.3-only AND GFDL-1.1-only AND GPL-3.0-or-later AND GPL-3.0-or-later WITH Autoconf-exception-generic-3.0 AND GPL-3.0-or-later WITH Texinfo-exception</rpm:license>
+    <rpm:vendor>Fedora Project</rpm:vendor>
+    <rpm:group>Unspecified</rpm:group>
+    <rpm:buildhost>buildvm-x86-19.rdu3.fedoraproject.org</rpm:buildhost>
+    <rpm:sourcerpm>glibc-2.43-8.fc44.src.rpm</rpm:sourcerpm>
+    <rpm:header-range start="11792" end="126089"/>
+    <rpm:provides>
+      <rpm:entry name="/lib/ld-linux.so.2"/>
+      <rpm:entry name="/sbin/ldconfig"/>
+      <rpm:entry name="/usr/sbin/ldconfig"/>
+    </rpm:provides>
+    <rpm:requires>
+      <rpm:entry name="(glibc-gconv-extra(x86-32) = 2.43-8.fc44 if redhat-rpm-config)"/>
+      <rpm:entry name="filesystem"/>
+      <rpm:entry name="filesystem" pre="1"/>
+    </rpm:requires>
+    <rpm:conflicts>
+      <rpm:entry name="glibc32" flags="LE" epoch="0" ver="2.43" rel="8.fc44"/>
+      <rpm:entry name="kernel" flags="LT" epoch="0" ver="3.2"/>
+      <rpm:entry name="prelink" flags="LT" epoch="0" ver="0.4.2"/>
+    </rpm:conflicts>
+    <rpm:obsoletes>
+      <rpm:entry name="glibc-profile" flags="LT" epoch="0" ver="2.4"/>
+      <rpm:entry name="glibc32" flags="LE" epoch="0" ver="2.43" rel="8.fc44"/>
+      <rpm:entry name="nscd" flags="LT" epoch="0" ver="2.35"/>
+    </rpm:obsoletes>
+    <rpm:suggests>
+      <rpm:entry name="glibc-minimal-langpack" flags="EQ" epoch="0" ver="2.43" rel="8.fc44"/>
+    </rpm:suggests>
+    <rpm:recommends>
+      <rpm:entry name="(nss_db(x86-32) if nss_db(x86-64))"/>
+      <rpm:entry name="(nss_hesiod(x86-32) if nss_hesiod(x86-64))"/>
+      <rpm:entry name="glibc-gconv-extra(x86-32)" flags="EQ" epoch="0" ver="2.43" rel="8.fc44"/>
+    </rpm:recommends>
+    <file type="ghost">/etc/gai.conf</file>
+    <file type="ghost">/etc/ld.so.cache</file>
+    <file>/etc/ld.so.conf</file>
+  </format>
+</package>
+<package type="rpm">
+  <name>glibc</name>
+  <arch>x86_64</arch>
+  <version epoch="0" ver="2.43" rel="8.fc44"/>
+  <checksum type="sha256" pkgid="YES">84f0af455b8f541ead8ae4b74c220563babd9980dbd308226b90a22d6144ea14</checksum>
+  <summary>The GNU libc libraries</summary>
+  <description>The glibc package contains standard libraries which are used by
+multiple programs on the system. In order to save disk space and
+memory, as well as to make upgrading easier, common system code is
+kept in one place and shared between programs. This particular package
+contains the most important sets of shared libraries: the standard C
+library and the standard math library. Without these two libraries, a
+Linux system will not function.</description>
+  <packager>Fedora Project</packager>
+  <url>http://www.gnu.org/software/glibc/</url>
+  <time file="1785824373" build="1785817647"/>
+  <size package="2483277" installed="7260479" archive="7275748"/>
+  <location href="Packages/g/glibc-2.43-8.fc44.x86_64.rpm"/>
+  <format>
+    <rpm:license>LGPL-2.1-or-later AND SunPro AND LGPL-2.1-or-later WITH GCC-exception-2.0 AND BSD-3-Clause AND GPL-2.0-or-later AND LGPL-2.1-or-later WITH GNU-compiler-exception AND GPL-2.0-only AND ISC AND LicenseRef-Fedora-Public-Domain AND HPND AND CMU-Mach AND LGPL-2.0-or-later AND Unicode-3.0 AND GFDL-1.1-or-later AND GPL-1.0-or-later AND FSFUL AND MIT AND Inner-Net-2.0 AND X11 AND GPL-2.0-or-later WITH GCC-exception-2.0 AND GFDL-1.3-only AND GFDL-1.1-only AND GPL-3.0-or-later AND GPL-3.0-or-later WITH Autoconf-exception-generic-3.0 AND GPL-3.0-or-later WITH Texinfo-exception</rpm:license>
+    <rpm:vendor>Fedora Project</rpm:vendor>
+    <rpm:group>Unspecified</rpm:group>
+    <rpm:buildhost>buildvm-x86-20.rdu3.fedoraproject.org</rpm:buildhost>
+    <rpm:sourcerpm>glibc-2.43-8.fc44.src.rpm</rpm:sourcerpm>
+    <rpm:header-range start="11144" end="124441"/>
+    <rpm:provides>
+      <rpm:entry name="/lib64/ld-linux-x86-64.so.2"/>
+      <rpm:entry name="/sbin/ldconfig"/>
+      <rpm:entry name="/usr/sbin/ldconfig"/>
+    </rpm:provides>
+    <rpm:requires>
+      <rpm:entry name="(glibc-gconv-extra(x86-64) = 2.43-8.fc44 if redhat-rpm-config)"/>
+      <rpm:entry name="filesystem"/>
+      <rpm:entry name="filesystem" pre="1"/>
+    </rpm:requires>
+    <rpm:conflicts>
+      <rpm:entry name="kernel" flags="LT" epoch="0" ver="3.2"/>
+      <rpm:entry name="prelink" flags="LT" epoch="0" ver="0.4.2"/>
+    </rpm:conflicts>
+    <rpm:obsoletes>
+      <rpm:entry name="glibc-profile" flags="LT" epoch="0" ver="2.4"/>
+      <rpm:entry name="nscd" flags="LT" epoch="0" ver="2.35"/>
+    </rpm:obsoletes>
+    <rpm:suggests>
+      <rpm:entry name="glibc-minimal-langpack" flags="EQ" epoch="0" ver="2.43" rel="8.fc44"/>
+    </rpm:suggests>
+    <rpm:recommends>
+      <rpm:entry name="glibc-gconv-extra(x86-64)" flags="EQ" epoch="0" ver="2.43" rel="8.fc44"/>
+    </rpm:recommends>
+    <file type="ghost">/etc/gai.conf</file>
+    <file type="ghost">/etc/ld.so.cache</file>
+    <file>/etc/ld.so.conf</file>
+  </format>
+</package>
+<package type="rpm">
+  <name>vim-enhanced</name>
+  <arch>x86_64</arch>
+  <version epoch="2" ver="9.2.1129" rel="1.fc44"/>
+  <checksum type="sha256" pkgid="YES">ced43c611b1c6df6ed7354835533eb36b94bb483677dd811f7550b6cd0535400</checksum>
+  <summary>A version of the VIM editor which includes recent enhancements</summary>
+  <description>VIM (VIsual editor iMproved) is an updated and improved version of the
+vi editor.  Vi was the first real screen-based editor for UNIX, and is
+still very popular.  VIM improves on vi by adding new features:
+multiple windows, multi-level undo, block highlighting and more.  The
+vim-enhanced package contains a version of VIM with extra, recently
+introduced features like Python and Perl interpreters.
+
+Install the vim-enhanced package if you'd like to use a version of the
+VIM editor which includes recently added enhancements like
+interpreters for the Python and Perl scripting languages.  You'll also
+need to install the vim-common package.</description>
+  <packager>Fedora Project</packager>
+  <url>https://www.vim.org/</url>
+  <time file="1790352801" build="1790321356"/>
+  <size package="2254180" installed="4734531" archive="4736056"/>
+  <location href="Packages/v/vim-enhanced-9.2.1129-1.fc44.x86_64.rpm"/>
+  <format>
+    <rpm:license>Vim AND LGPL-2.1-or-later AND MIT AND GPL-1.0-only AND (GPL-2.0-only OR Vim) AND Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND GPL-2.0-or-later AND GPL-3.0-or-later AND OPUBL-1.0 AND Apache-2.0 WITH Swift-exception</rpm:license>
+    <rpm:vendor>Fedora Project</rpm:vendor>
+    <rpm:group>Unspecified</rpm:group>
+    <rpm:buildhost>buildhw-x86-05.rdu3.fedoraproject.org</rpm:buildhost>
+    <rpm:sourcerpm>vim-9.2.1129-1.fc44.src.rpm</rpm:sourcerpm>
+    <rpm:header-range start="4504" end="16237"/>
+    <rpm:provides>
+      <rpm:entry name="/usr/bin/mergetool"/>
+      <rpm:entry name="/usr/bin/vim"/>
+      <rpm:entry name="bundled(libvterm)"/>
+    </rpm:provides>
+    <rpm:requires>
+      <rpm:entry name="/usr/bin/sh"/>
+      <rpm:entry name="libacl.so.1()(64bit)"/>
+      <rpm:entry name="libacl.so.1(ACL_1.0)(64bit)"/>
+    </rpm:requires>
+    <rpm:suggests>
+      <rpm:entry name="lua-libs"/>
+      <rpm:entry name="perl-devel"/>
+      <rpm:entry name="python3"/>
+    </rpm:suggests>
+    <file>/etc/profile.d/vim.sh</file>
+    <file>/usr/bin/rvim</file>
+    <file>/usr/bin/vim</file>
+  </format>
+</package>
+</metadata>

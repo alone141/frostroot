@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz"
 
 	"frostroot/internal/distro"
@@ -107,6 +108,17 @@ func compress(t *testing.T, extension string, text []byte) []byte {
 		}
 	case ".gz":
 		writer := gzip.NewWriter(&buffer)
+		if _, err := writer.Write(text); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+	case ".zst":
+		writer, err := zstd.NewWriter(&buffer)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if _, err := writer.Write(text); err != nil {
 			t.Fatal(err)
 		}

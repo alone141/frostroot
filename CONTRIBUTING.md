@@ -151,8 +151,9 @@ the caller handles it immediately.
     file in a `control.tar` member compressed with gzip, xz or zstd,
     depending on the Ubuntu release. So `internal/deb` imports
     `github.com/klauspost/compress/zstd` and `github.com/ulikunitz/xz`.
-    `internal/index` also imports xz, because the archive publishes its
-    `Packages` files as `.xz`. Nothing else imports either.
+    `internal/index` imports both as well: the archive publishes its
+    `Packages` files as `.xz`, and Fedora its primary metadata as `.zst`.
+    Nothing else imports either.
   - TOML: `github.com/pelletier/go-toml/v2`, imported by `internal/recipe`
     and nowhere else, since that package alone owns `frostroot.toml` and
     `frostroot.lock`.

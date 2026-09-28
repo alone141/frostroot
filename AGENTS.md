@@ -192,8 +192,8 @@ Hand-typed alternatives break in ways that are easy to miss:
 **Package boundaries**
 
 - The Charm libraries are imported only in `tui`.
-- zstd and xz are imported in `deb`; xz is also imported in `index` for
-  `Packages.xz`.
+- zstd and xz are imported in `deb` and in `index`: the index reads
+  `Packages.xz`, and Fedora's `primary.xml.zst`.
 - go-toml is imported only in `recipe`.
 - `builder` doesn't import `index`, and `pool` doesn't import `builder`.
 - `deb`, `pgp`, `pki`, `distro`, `export` and `textdiff` import no other

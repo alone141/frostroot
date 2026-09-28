@@ -81,7 +81,14 @@ func fetch(ctx context.Context, options Options, what target) ([]Entry, error) {
 		transport.ResponseHeaderTimeout = responseHeaderTimeout
 		client = &http.Client{Transport: transport}
 	}
-	fetcher := &fetcher{ctx: ctx, client: client, baseURL: what.baseURL, components: what.components, progress: options.Progress}
+	maxBodyBytes := options.MaxBodyBytes
+	if maxBodyBytes <= 0 {
+		maxBodyBytes = DefaultMaxBodyBytes
+	}
+	fetcher := &fetcher{ctx: ctx, client: client, baseURL: what.baseURL, components: what.components, progress: options.Progress, maxBodyBytes: maxBodyBytes}
+	if len(what.rpmRepositories) > 0 {
+		return fetcher.fedora(what.rpmRepositories)
+	}
 
 	var plans []pocketPlan
 	for position, pocket := range what.pockets {
@@ -141,6 +148,9 @@ type fetcher struct {
 	totalBytes  int64
 	doneBytes   int64
 	pocketBytes int64 // of doneBytes, what the pocket being fetched added
+	// maxBodyBytes bounds what a file declares no size for: Fedora's
+	// primary metadata when repomd.xml gives no open-size.
+	maxBodyBytes int64
 }
 
 // get opens url. The caller closes the body.
