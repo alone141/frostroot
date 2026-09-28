@@ -2,8 +2,9 @@
 
 **Freeze an Ubuntu root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
 
-> **Status: v0.13.2.** `init`, `edit`, `capture`, `validate`, `build`,
-> `vendor` and `build --offline` work, a recipe can add third-party apt
+> **Status: v0.14.0.** `init`, `edit`, `capture`, `validate`, `build`,
+> `vendor` and `build --offline` work for Ubuntu 20.04, 22.04, 24.04 and
+> 26.04, a recipe can add third-party apt
 > sources (PPAs, Docker, Node.js, VS Code...), Python packages from PyPI and
 > certificate authorities for a network that inspects TLS, and two offline
 > rebuilds of one lock produce the same bytes. In a terminal,
@@ -17,8 +18,10 @@
 > this README was run for real: images for Ubuntu 20.04, 22.04 and 24.04 were
 > built with `frostroot build`, imported with `wsl --import` on Windows 11,
 > and logged into; a lock was vendored and rebuilt offline twice, to one
-> `sha256sum`; and a 24.04 image with `requests` and `numpy` imported both
-> from its own environment on the first login. See
+> `sha256sum`; a 24.04 image with `requests` and `numpy` imported both
+> from its own environment on the first login; and 26.04 images went through
+> every end-to-end scenario that runs without Windows, their first login
+> being the check still to make before the release. See
 > [Verification](#verification).
 
 ---
@@ -40,7 +43,7 @@ You write about fifteen lines of TOML, or let `frostroot init` write them:
 ```toml
 [image]
 name = "cpp-lab"
-release = "22.04"     # 20.04 | 22.04 | 24.04
+release = "22.04"     # 20.04 | 22.04 | 24.04 | 26.04
 arch = "amd64"
 
 [user]
@@ -150,7 +153,7 @@ sudo apt install mmdebstrap        # also pulls uidmap
 ```
 
 The binary is static and runs on any distribution, including Ubuntu 20.04.
-Or from source, with Go 1.24 or newer:
+Or from source, with Go 1.27.1 or newer, the version `go.mod` names:
 
 ```sh
 go build -o frostroot ./cmd/frostroot
@@ -303,7 +306,7 @@ them again before their week is up.
 | Field | Rules | `init` default |
 |---|---|---|
 | `image.name` | letters, digits, `.` `_` `-`; names the tarball and the WSL distro | `lab` |
-| `image.release` | `20.04`, `22.04` or `24.04` | `24.04` |
+| `image.release` | `20.04`, `22.04`, `24.04` or `26.04` | `26.04`, the newest |
 | `image.arch` | `amd64` | `amd64` |
 | `user.name` | lowercase, digits, `_` `-`, 1 to 32 characters, not `root` | `student` |
 | `user.sudo` | `true` gives passwordless sudo; `false` gives none | `true` |
@@ -504,8 +507,8 @@ CA certificates; see the note on networks that inspect TLS.
 The package catalog `init` offers is a convenience, not a recipe feature: the
 recipe holds plain apt names, whether they came from the catalog or were
 typed. The catalog lives in `internal/form/catalog.go`; adding a package is
-adding a line, and an integration test checks that every entry exists in all
-three releases.
+adding a line, and an integration test checks that every entry exists in
+every supported release.
 
 ## Python packages
 
@@ -819,7 +822,12 @@ one pass offline, which leaves the paragraph order of apt's
 24.04, one directory timestamp different; the files, their contents and
 their owners are otherwise the same. Nor does the promise cross mmdebstrap
 or dpkg versions, or packages that generate random material when installed
-(an SSH host key, say; do not ship one in a golden image anyway).
+(an SSH host key, say; do not ship one in a golden image anyway). Measured
+for one 26.04 lock: a 24.04 build host (mmdebstrap 1.4.3) and a 26.04 one
+(1.5.7) rebuild it to images that differ in debconf's `config.dat-old` and
+`templates.dat-old` and one empty directory, and in nothing else. To get
+the same `sha256sum` again, rebuild with the mmdebstrap that made the first
+rebuild.
 
 The online build also records which packages apt installed on its own as
 `auto = true` in the lock, and the offline build restores those marks, so
@@ -946,12 +954,19 @@ last wins, and the lock and tarball may then come from different builds.
 **20.04 images ship known, unfixed CVEs.** Focal's standard support ended in
 May 2025. Its packages are still on the archive, but security fixes since then
 go to Ubuntu Pro, not to `focal-security`, and `build` warns about it. Freezing
-an old release is a legitimate use of this tool; prefer 22.04 or 24.04 unless
-you specifically need focal.
+an old release is a legitimate use of this tool; prefer 22.04, 24.04 or 26.04
+unless you specifically need focal.
 
-**Python on 24.04.** PEP 668 makes `pip install` outside a virtual environment
-fail by design. Name the packages in the recipe's `[python]` table and the
-image has one; for anything installed after import, `python3 -m venv .venv`.
+**Python on 24.04 and 26.04.** PEP 668 makes `pip install` outside a virtual
+environment fail by design. Name the packages in the recipe's `[python]`
+table and the image has one; for anything installed after import,
+`python3 -m venv .venv`.
+
+**A 26.04 image runs what 26.04 ships.** `sudo` is sudo-rs, coreutils are
+the Rust rewrite except GNU's `cp`, `mv`, `rm`, `df` and `true`, and time
+is kept by chrony rather than systemd-timesyncd. frostroot changes none
+of it: its provisioning and the recipe's passwordless sudo work the same
+there. The C sudo is installed too, as `sudo.ws`.
 
 **`systemctl is-system-running` says `degraded`, not `running`.** On 24.04 the
 failed units are gettys (`getty@tty1`, sometimes `console-getty`), because WSL
@@ -992,9 +1007,9 @@ explains itself, and screens for narrow and non-UTF-8 terminals (v0.9), a
 package picker that searches the whole Ubuntu archive from inside the form
 (v0.10), the same search for PyPI names (v0.11), and a search that covers
 the third-party sources the recipe adds, which are now chosen before the
-packages that come from them (v0.12), and `--insecure` for a network whose
+packages that come from them (v0.12), `--insecure` for a network whose
 certificate authority nobody has, with the lock recording what it could not
-verify (v0.13).
+verify (v0.13), and Ubuntu 26.04, which new recipes now start on (v0.14).
 
 **Deliberately not yet:** Fedora or any non-Ubuntu family · flat or unsigned
 apt repositories · npm and cargo lockfiles · Python source distributions ·
@@ -1038,12 +1053,12 @@ scripts/integration.sh
 
 runs every test behind the `integration` tag the way CI does, and fails
 unless each test CI requires was seen to pass. It builds a real 24.04 image
-with mmdebstrap and inspects the tarball: thousands
+and a real 26.04 one with mmdebstrap and inspects each tarball: thousands
 of symlinks all with targets, hardlinks and file capabilities intact, no
 subordinate-uid owners, the user, sudoers, `wsl.conf`, timezone and locale in
 place, and no leaked host files; it also checks that the build reported every
 phase in order with a real download total, and that every package in the
-`init` catalog exists in all three releases. A second test builds an image
+`init` catalog exists in every supported release. A second test builds an image
 online, vendors it, rebuilds it offline twice and requires one SHA-256, no
 entry dated after the lock's instant, and the online image's apt marks in
 the offline one. A third does the same for a recipe with Python packages: it
@@ -1287,6 +1302,10 @@ holding no setting of the build's; then the distribution was removed.
 | [Certificates plan](docs/superpowers/plans/2026-09-18-frostroot-certificates.md) | The ten tasks v0.8 was built from. |
 | [Picker spec](docs/superpowers/specs/2026-09-18-frostroot-picker.md) | v0.10: the package picker and the index behind it, all four components in builds; with the spike, the decisions and the verification. |
 | [PyPI spec](docs/superpowers/specs/2026-09-18-frostroot-pypi.md) | v0.11: searching PyPI, why its picker cannot look like the apt one, and the summary fetched on demand; with the spike and the verification. |
+| [Source search spec](docs/superpowers/specs/2026-09-19-frostroot-source-search.md) | v0.12: searching the third-party sources a recipe adds, which are now chosen before the packages that come from them. |
+| [`--insecure` plan](docs/superpowers/plans/2026-09-24-frostroot-insecure.md) | v0.13: the flag that skips TLS verification, what it gives up and where people are told, and the six tasks it was built from. |
+| [Ubuntu 26.04 spec](docs/superpowers/specs/2026-09-28-frostroot-resolute.md) | v0.14: what 26.04 changes, and the spike that built it end to end, on a 24.04 host and a 26.04 one, before any code changed. |
+| [Ubuntu 26.04 plan](docs/superpowers/plans/2026-09-28-frostroot-resolute.md) | The seven tasks v0.14 was built from. |
 | [TUI plan, second round](docs/superpowers/plans/2026-09-18-frostroot-tui-2.md) | What a walk through the interface found, the six tasks v0.9 was built from, and the tasks of v0.10's package picker. |
 | [Implementation plan](docs/superpowers/plans/2026-09-15-frostroot-v1.md) | The 13 tasks v1 was built from, with the spike's amendments. |
 | [TUI plan](docs/superpowers/plans/2026-09-17-frostroot-tui.md) | The seven tasks v0.2 was built from. |

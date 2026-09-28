@@ -55,7 +55,7 @@ Read from the archive on 2026-09-28:
 | dpkg | 1.22 | 1.23.7 |
 | python3 | 3.12 | 3.14 (3.14.3 in the release pocket, 3.14.4 in `-updates`) |
 | systemd | 255 | 259.5 |
-| coreutils | GNU | `coreutils-from-uutils`: rust-coreutils 0.10, with gnu-coreutils 9.7 for the tools uutils does not yet cover (`cp` is `gnucp`) |
+| coreutils | GNU | `coreutils-from-uutils`: 108 tools from rust-coreutils 0.10, and `cp`, `mv`, `rm`, `df` and `true` from gnu-coreutils 9.7 |
 | sudo | sudo | sudo 1.9.17 and sudo-rs 0.2.13, with sudo-rs the `sudo` and `visudo` alternatives |
 | time daemon | systemd-timesyncd | chrony; systemd-timesyncd is not installed |
 
