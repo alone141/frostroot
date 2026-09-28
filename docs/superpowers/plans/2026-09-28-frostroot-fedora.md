@@ -88,9 +88,10 @@ same SHA-256.
    image with the host's dnf 4 and frostroot's package manager tree, its
    downloads kept in a package cache under the work root: bash,
    coreutils, util-linux, dnf5, rpm, mkosi's helpers (bubblewrap, tar,
-   gzip, zstd, systemd), createrepo_c and ca-certificates. Its packages
-   go into the lock, optional and `omitempty`; offline it is made from
-   `vendor/`, indexed by the host's `createrepo_c`.
+   gzip, zstd, systemd) and ca-certificates. Its packages go into the
+   lock, optional and `omitempty`; offline it is made from `vendor/`,
+   indexed by the host's `createrepo_c`. mkosi removes it when the build
+   ends (`mkosi -f clean`), because it belongs to the subordinate ids.
 9. **The mkosi bootstrapper.** frostroot writes mkosi's configuration into
    the work directory (distribution, release, an uncompressed tar, weak
    dependencies and documentation on, `CleanPackageMetadata=no`,
@@ -116,21 +117,30 @@ same SHA-256.
     `Dependency` or `Weak Dependency`), from `packages.toml`; the
     repositories and key checksums used. New fields optional; a lock is
     hostile input.
-11. **`vendor` for Fedora.** `vendor/rpms/<repository>/`, the tools
-    tree's packages included; bounded reads with timeouts; the SHA-256
-    checked before the rename into place; `--prune` as on Ubuntu.
-12. **`build --offline` for Fedora.** createrepo_c from the tools tree
-    over each `vendor/rpms/<repository>/`, one local repository each under
-    its online name; mkosi with the network repositories off, every
-    locked package by name, the lock's instant and dnf5's reasons put
-    back; the image compared with the lock afterwards, as on Ubuntu.
+11. **`vendor` for Fedora.** One `vendor/rpms/`, the tools tree's
+    packages included, each file once; bounded reads with timeouts; the
+    SHA-256 checked before the rename into place; Koji, by the source rpm
+    the lock records, for an update the repository has replaced;
+    `--prune` as on Ubuntu. (Built as a flat directory: a file name is
+    unique across a release's repositories, and the lock says which each
+    came from.)
+12. **`build --offline` for Fedora.** The vendored files staged as local
+    repositories, one per repository of the release under its online
+    name for each of mkosi's two builds, indexed by the host's
+    createrepo_c and bound into mkosi's sandbox; mkosi with the network
+    repositories off, every locked package as `name-version.arch`, a
+    package cache of the build's own, the lock's instant and dnf5's
+    reasons put back; the image and the tools tree compared with the lock
+    afterwards, each package's repository included.
 13. **Tests.** Unit: the configuration and scripts rendered for hostile
     values and run through a real `sh`; the lock's new fields. Integration:
     `TestIntegrationFedoraTiny`, the structure checks of `testTinyImage`
     (owners, capabilities, hardlinks, the user, sudo, no build leaks), and
     `TestIntegrationFedoraOfflineRebuild`, two offline rebuilds and one
     SHA-256; `scripts/integration.sh` requires both, and CI installs
-    `dnf`, `mkosi`, `bubblewrap` and `uidmap`.
+    `mkosi`, `dnf`, `rpm`, `createrepo-c`, `bubblewrap` and `uidmap` on
+    `ubuntu-24.04` by name, with the AppArmor restriction on user
+    namespaces lifted, as WSL has none.
 14. **Scenarios.** `E2E_DISTRO=fedora` for `offline-identical`,
     `no-build-leaks` and `failed-build`; `wsl-boot` learns a Fedora image's
     first login, for the owner to run.

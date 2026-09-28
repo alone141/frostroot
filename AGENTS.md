@@ -72,7 +72,7 @@ Hand-typed alternatives break in ways that are easy to miss:
   can't compile and proves nothing, and the script says so. Then break the
   fix with `--sed` instead: keep the function, empty what it does.
 - If the change touches what the image holds, the lock, trust, or
-  mmdebstrap's flags, run the matching scenario:
+  mmdebstrap's or mkosi's flags, run the matching scenario:
   - offline builds or reproducibility: `offline-identical`
   - certificates: `certificates`
   - anything the build uses but must not ship: `no-build-leaks`
@@ -85,6 +85,8 @@ Hand-typed alternatives break in ways that are easy to miss:
   - a new Ubuntu release: every one of them with `E2E_RELEASE` naming it,
     after a spike like the one in
     `docs/superpowers/specs/2026-09-28-frostroot-resolute.md`
+  - anything of a Fedora build: `offline-identical`, `no-build-leaks` and
+    `failed-build` with `E2E_DISTRO=fedora`, and `wsl-boot` on Windows
 - A new recipe field needs a form field, a mapping in `FromRecipe` and
   `ToRecipe`, and a line in the recipe template in `internal/cli/init.go`.
   Otherwise `edit` silently drops it. `TestRecipeRoundTrip` and
@@ -109,15 +111,19 @@ Hand-typed alternatives break in ways that are easy to miss:
   everything from the lock and never writes it: the frozen instant, the deb
   lines, apt's auto marks and the pip version.
 - Nothing the build only used stays in the image, whether pip's reports,
-  the wheels, `--ca-bundle` copies or the host's `resolv.conf`. If you stage
-  a new file, a hook must delete it, and `no-build-leaks` must still pass.
+  the wheels, `--ca-bundle` copies, the host's `resolv.conf` or the log the
+  finalize script's own dnf5 queries write. If you stage a new file, a hook
+  or the finalize script must delete it, and `no-build-leaks` must still
+  pass.
 - The host's environment must not change the result. mmdebstrap gets the
   host's environment without any `PYTHON*` or `PIP_*` variable
   (`hostEnvironment` in `internal/builder/bootstrap.go`), because it hands
   its environment to dpkg's maintainer scripts and py3compile is Python: a
   `PYTHONPYCACHEPREFIX` once put 930 caches under a directory named after
   the host into the image. The Python step drops both again, unsets the
-  certificate path variables and sets `HOME`. Don't pass anything else
+  certificate path variables and sets `HOME`. mkosi builds the environment
+  of what it runs itself, but reads `MKOSI_DNF` and `MKOSI_INTERPRETER`
+  from its own, which `mkosiWrapper` unsets. Don't pass anything else
   through.
 - Every value that reaches a shell is validated with a strict pattern and
   quoted with `shellQuote`. A hook never swallows a failure: no `|| true`.

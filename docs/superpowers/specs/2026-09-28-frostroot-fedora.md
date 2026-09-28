@@ -274,28 +274,33 @@ becomes "only mmdebstrap or mkosi writes it", and Go still never tars,
 walks or deletes a root filesystem.
 
 The tools tree is a small Fedora root (bash, coreutils, util-linux, dnf5,
-rpm, bubblewrap, tar, gzip, zstd, systemd, createrepo_c, ca-certificates)
-that mkosi makes for each build as a `directory` image, with the host's
-dnf 4 and frostroot's package manager tree, in a user namespace like any
+rpm, bubblewrap, tar, gzip, zstd, systemd, ca-certificates) that mkosi
+makes for each build as a `directory` image, with the host's dnf 4 and
+frostroot's package manager tree, in a user namespace like any
 unprivileged mkosi build; its downloads stay in a package cache under the
 work root, so only the first build of a release fetches them all. Its
 versions change the bytes the way mmdebstrap's do, so the lock records
 them and `vendor` keeps the tools tree's packages too, which makes an
 offline rebuild independent of what the archive holds a year later. An
 offline build makes the tools tree from those files, indexed by the
-host's `createrepo_c`.
+host's `createrepo_c`, which is why the tools tree itself needs none.
+mkosi removes the tree when the build ends, however it ends (`mkosi -f
+clean`): it belongs to the subordinate ids, and frostroot deletes no root
+filesystem itself.
 
 frostroot hands mkosi a package manager tree of its own: the
 repositories, each with the pinned key file beside it, so that mkosi
 never writes its own or fetches a key. mkosi writes an uncompressed tar,
-and the tools tree's `gzip -n` compresses it, because mkosi's own gzip
-stamps the header with the time. Every image holds dnf5, and
+and the host's `gzip -n` compresses it, because mkosi's own gzip stamps
+the header with the time. Every image holds dnf5, and
 `CleanPackageMetadata=no` keeps rpm's database and dnf5's state.
 
 After the install, in mkosi's finalize script: read what rpm installed and
 what dnf5 recorded, then remove dnf5's transaction history, rpm's and the
 history's SQLite side files, ldconfig's aux-cache, dnf5's
-`system-repo.lock` and the build's resolver file. The build runs with
+`system-repo.lock`, the build's resolver file, and `/var/log/dnf5.log`,
+which the script's own dnf5 queries write into the image whatever dnf5 is
+told (mkosi removes it after its own runs, and the queries come later). The build runs with
 umask 022 whatever the caller's. Weak dependencies are installed, as
 Fedora's dnf does and as frostroot's Ubuntu builds install recommends,
 and documentation is kept, as on Ubuntu.
@@ -347,9 +352,11 @@ version, so a Fedora image never needs its recipe written by hand.
 Fedora lock says `distro = "fedora"`, the release, the repositories
 actually used (URL and key checksum, as `LockRepository` does), and for
 every package its name, epoch-version-release, rpm architecture, SHA-256,
-size, the repository it came from, its location below that repository and
-the reason dnf5 recorded for it: `User`, `Dependency` or `Weak
-Dependency`. The key rpm imports (`gpg-pubkey`) is not a package. A lock
+size, the repository it came from, its path below that repository
+(`Packages/<letter>/<file>`), the source rpm it was built from (which
+names it in Koji, where `vendor` falls back to) and the reason dnf5
+recorded for it: `User`, `Dependency` or `Weak Dependency`. `[[tools]]`
+lists the tools tree's packages the same way, without a reason. The key rpm imports (`gpg-pubkey`) is not a package. A lock
 is still read as hostile input, and one that mixes families is refused.
 
 ### Trust
@@ -364,17 +371,52 @@ is still read as hostile input, and one that mixes families is refused.
 
 ### vendor and build --offline
 
-`vendor` downloads each locked `.rpm` from its repository and checks its
-SHA-256 before renaming it into `vendor/rpms/<repository>/`. `build
---offline` gives each of those directories its metadata with the tools
-tree's `createrepo_c` and hands mkosi one local repository per directory,
-under the online repository's name, with the network repositories off, the
-key still checking every package, every locked package asked for by name,
-the lock's instant as `SOURCE_DATE_EPOCH`, and dnf5's reasons put back
-from the lock. Two offline builds of one lock must be byte-identical, as
+`vendor` downloads each locked `.rpm` from its repository, or from Koji
+once the updates repository has replaced it, and checks its SHA-256 before
+renaming it into `vendor/rpms/`, one directory for the image's packages
+and the tools tree's alike (a file name is unique across a release's
+repositories, and the two share many files). `build --offline` stages the
+files, hard-linked where it can, as local repositories: for each of
+mkosi's two builds, one per repository of the release under its online
+name, holding only that build's packages. The host's `createrepo_c`
+indexes them, mkosi binds the directory above them into its sandbox
+(`--local-mirror`), and both builds ask for every locked package as
+`name-version.arch`, with the network repositories off, the key still
+checking every package, the lock's instant as `SOURCE_DATE_EPOCH`, a
+package cache of the build's own (removed with the tools tree, `mkosi
+-ff clean`), and dnf5's reasons put back from the lock. The image and the
+tools tree are then compared with the lock, each package's repository
+included. Two offline builds of one lock must be byte-identical, as
 on Ubuntu; the offline measurement above found them so, and found them
 byte-identical with the online build too, which frostroot measures but
 does not promise.
+
+### What the implementation found
+
+- **dnf5 logs into the image.** The finalize script's dnf5 queries wrote
+  `/var/log/dnf5.log`, dated now and naming the workspace, so two offline
+  rebuilds differed by it, 786 bytes against 791; online it also held the
+  mirror list. The script removes it.
+- **mkosi reads two variables of the host's.** `MKOSI_DNF` names the
+  package manager and `MKOSI_INTERPRETER` the Python of mkosi's helpers;
+  the wrapper that sets mkosi's umask unsets both. mkosi hands everything
+  it runs an environment of its own besides.
+- **Ubuntu's kernels keep mkosi out of its user namespace.** Since 23.10
+  they let a program use the user namespace it makes only when an
+  AppArmor profile of its own allows it; Ubuntu 24.04 has one for
+  mmdebstrap and none for mkosi. CI's `ubuntu-24.04` runner found it, in
+  a traceback; WSL's kernel, Microsoft's, has no such switch, and neither
+  did the container every earlier run was made in. `Preflight` refuses
+  such a host unprivileged, naming root and `sysctl` as the ways out, and
+  CI lifts the restriction to be what WSL is.
+- **The package cache belongs to the subordinate ids** when mkosi runs
+  unprivileged, so the user cannot `rm -rf` it; `unshare --map-auto
+  --map-root-user rm -rf` can, and the README says so.
+- **Measured on one Fedora 44 lock** of git in `tr_TR.UTF-8`, 268
+  packages and a 122-package tools tree: two offline rebuilds as root under
+  `unshare --net` and one as uid 1001 wrote one SHA-256 in 54 to 57 s, and
+  an online build at the lock's instant wrote the same lock and the same
+  tarball.
 
 ## Risks
 
@@ -391,7 +433,9 @@ does not promise.
   care; online builds of an old recipe need the archive's URL, as 20.04
   needed its pockets checked.
 - **WSL's first boot of a Fedora image** is not measured; `wsl-boot` has
-  to learn Fedora before the first release that offers it.
+  learned Fedora (`E2E_DISTRO=fedora`), and runs only on Windows.
+- **A native Ubuntu host** builds Fedora as root, or with its AppArmor
+  restriction lifted (see "What the implementation found").
 - **Two families double the verification** every release: each scenario
   runs for both.
 
