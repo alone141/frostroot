@@ -60,7 +60,7 @@ func (v Values) Clone() Values {
 func Defaults(host Host) Values {
 	return Values{
 		KeyImageName:      "lab",
-		KeyRelease:        distro.NewestVersion(),
+		KeyRelease:        distro.NewestVersion(distro.Ubuntu),
 		KeyUserName:       "student",
 		KeySudo:           true,
 		KeyTimezone:       HostTimezone(host),

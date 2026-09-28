@@ -202,7 +202,7 @@ func (root systemRoot) checkRelease() (version, suite string, err error) {
 	}
 	known, err := distro.Lookup(release.version, distro.SupportedArch)
 	if err != nil {
-		return "", "", fmt.Errorf("%w: Ubuntu %s; frostroot builds %v", ErrUnsupportedRelease, release.version, distro.SupportedVersions())
+		return "", "", fmt.Errorf("%w: Ubuntu %s; frostroot builds %v", ErrUnsupportedRelease, release.version, distro.SupportedVersions(distro.Ubuntu))
 	}
 	return release.version, known.Suite, nil
 }

@@ -119,7 +119,7 @@ func (a *App) runBuild(args []string) int {
 	if release.EndOfLife {
 		a.stderrf("warning: Ubuntu %s is past the end of standard support. The image will contain packages\n"+
 			"with known, unfixed security vulnerabilities: security fixes are only published to Ubuntu Pro.\n"+
-			"Prefer %s unless you specifically need %s.\n", imageRecipe.Image.Release, orList(distro.VersionsInStandardSupport()), imageRecipe.Image.Release)
+			"Prefer %s unless you specifically need %s.\n", imageRecipe.Image.Release, orList(distro.VersionsInStandardSupport(distro.Ubuntu)), imageRecipe.Image.Release)
 	}
 	hasPython := len(imageRecipe.PythonPackages()) > 0
 	switch {

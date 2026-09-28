@@ -168,20 +168,20 @@ func TestLookupReportsReleaseBeforeArch(t *testing.T) {
 
 func TestSupportedVersions(t *testing.T) {
 	want := []string{"20.04", "22.04", "24.04", "26.04"}
-	if got := SupportedVersions(); !slices.Equal(got, want) {
-		t.Fatalf("SupportedVersions() = %q, want %q", got, want)
+	if got := SupportedVersions(Ubuntu); !slices.Equal(got, want) {
+		t.Fatalf("SupportedVersions(Ubuntu) = %q, want %q", got, want)
 	}
 }
 
 func TestNewestVersion(t *testing.T) {
-	if got := NewestVersion(); got != "26.04" {
-		t.Fatalf("NewestVersion() = %q, want 26.04", got)
+	if got := NewestVersion(Ubuntu); got != "26.04" {
+		t.Fatalf("NewestVersion(Ubuntu) = %q, want 26.04", got)
 	}
 }
 
 func TestVersionsInStandardSupportLeavesOutEndOfLife(t *testing.T) {
 	want := []string{"22.04", "24.04", "26.04"}
-	if got := VersionsInStandardSupport(); !slices.Equal(got, want) {
-		t.Fatalf("VersionsInStandardSupport() = %q, want %q", got, want)
+	if got := VersionsInStandardSupport(Ubuntu); !slices.Equal(got, want) {
+		t.Fatalf("VersionsInStandardSupport(Ubuntu) = %q, want %q", got, want)
 	}
 }

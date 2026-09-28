@@ -304,7 +304,7 @@ func checkPPAList(text string) error {
 // its standard support.
 func releaseOptions() []Option {
 	var options []Option
-	for _, version := range distro.SupportedVersions() {
+	for _, version := range distro.SupportedVersions(distro.Ubuntu) {
 		release, err := distro.Lookup(version, distro.SupportedArch)
 		if err != nil {
 			continue // SupportedVersions only lists what Lookup knows

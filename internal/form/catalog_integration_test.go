@@ -20,7 +20,7 @@ import (
 // It downloads about 50 MB and needs the network.
 func TestIntegrationCatalogExistsInEveryRelease(t *testing.T) {
 	client := &http.Client{Timeout: 5 * time.Minute}
-	for _, version := range distro.SupportedVersions() {
+	for _, version := range distro.SupportedVersions(distro.Ubuntu) {
 		release, err := distro.Lookup(version, distro.SupportedArch)
 		if err != nil {
 			t.Fatal(err)

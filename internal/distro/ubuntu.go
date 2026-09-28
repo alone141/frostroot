@@ -1,5 +1,6 @@
-// Package distro knows the Ubuntu LTS releases frostroot can bootstrap: their
-// suites, where their archives live, and which apt source lines to use.
+// Package distro knows the distribution families frostroot builds and their
+// releases: for Ubuntu, the LTS releases, their suites, where their archives
+// live, and which apt source lines to use.
 package distro
 
 import (
@@ -61,7 +62,7 @@ func Lookup(version, arch string) (Release, error) {
 	var problems []error
 	release, known := releasesByVersion[version]
 	if !known {
-		problems = append(problems, fmt.Errorf("%w: %q (known: %s)", ErrUnknownRelease, version, strings.Join(SupportedVersions(), ", ")))
+		problems = append(problems, fmt.Errorf("%w: %q (known: %s)", ErrUnknownRelease, version, strings.Join(SupportedVersions(Ubuntu), ", ")))
 	}
 	if arch != SupportedArch {
 		problems = append(problems, fmt.Errorf("%w: %q (v1 supports %s only)", ErrUnsupportedArch, arch, SupportedArch))
@@ -93,22 +94,35 @@ func (r Release) SourceLines(mirrorURL string) []string {
 	}
 }
 
-// SupportedVersions lists the supported release versions, oldest first.
-func SupportedVersions() []string { return []string{"20.04", "22.04", "24.04", "26.04"} }
+// SupportedVersions lists the versions of family that frostroot builds,
+// oldest first, and none for a family it does not know.
+func SupportedVersions(family Family) []string {
+	if family == Ubuntu {
+		return []string{"20.04", "22.04", "24.04", "26.04"}
+	}
+	return nil
+}
 
-// NewestVersion returns the newest supported release, which a new recipe
-// starts on.
-func NewestVersion() string {
-	versions := SupportedVersions()
+// NewestVersion returns the newest release of family that frostroot builds,
+// which a new recipe of that family starts on, or "" for a family it does
+// not know.
+func NewestVersion(family Family) string {
+	versions := SupportedVersions(family)
+	if len(versions) == 0 {
+		return ""
+	}
 	return versions[len(versions)-1]
 }
 
-// VersionsInStandardSupport lists the supported releases that are not past
+// VersionsInStandardSupport lists the releases of family that are not past
 // their standard support, oldest first: the ones to prefer over a release
 // that is.
-func VersionsInStandardSupport() []string {
+func VersionsInStandardSupport(family Family) []string {
+	if family != Ubuntu {
+		return nil
+	}
 	var versions []string
-	for _, version := range SupportedVersions() {
+	for _, version := range SupportedVersions(Ubuntu) {
 		if !releasesByVersion[version].EndOfLife {
 			versions = append(versions, version)
 		}
