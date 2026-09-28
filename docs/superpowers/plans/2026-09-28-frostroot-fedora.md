@@ -20,6 +20,7 @@ a byte.
 - **The five the owner answered** on 2026-09-28, in the spec: lab images
   for WSL; mkosi with a Fedora tools tree; byte-identical offline rebuilds
   from the first version; the form from the first version; the seam first.
+  And a sixth, after the seam merged: a lean WSL base, not `@core`.
 - **A recipe without `distro` is Ubuntu**, so every recipe and lock
   written so far stays valid and means what it meant.
 - **The tools tree is part of what the lock pins.** Its dnf5, rpm and
@@ -79,47 +80,67 @@ same SHA-256.
    repositories (metalink and base URL), and the primary keys of 43 to 46
    pinned by fingerprint, every primary key in the file checked as the
    sources catalog does.
-7. **Preflight for Fedora.** mkosi in a version frostroot knows, the
-   host's dnf for the tools tree, bubblewrap, and `newuidmap` and
-   `newgidmap` in unshare mode, each missing one a sentinel error with an
-   install hint that `reportBuildFailure` maps to exit 1.
-8. **The tools tree.** Installed by the host's dnf into the work root's
-   cache, one per release: dnf5, rpm, mkosi's helpers (bubblewrap, tar,
-   gzip, zstd, systemd) and createrepo_c. Its packages go into the lock,
-   optional and `omitempty`.
+7. **Preflight for Fedora.** mkosi in a version frostroot knows (20.2),
+   the host's `dnf` and `rpm`, `createrepo_c`, bubblewrap, and `newuidmap`
+   and `newgidmap` in unshare mode, each missing one a sentinel error with
+   an install hint that `reportBuildFailure` maps to exit 1.
+8. **The tools tree.** Made by mkosi for each build as a `directory`
+   image with the host's dnf 4 and frostroot's package manager tree, its
+   downloads kept in a package cache under the work root: bash,
+   coreutils, util-linux, dnf5, rpm, mkosi's helpers (bubblewrap, tar,
+   gzip, zstd, systemd) and ca-certificates. Its packages go into the
+   lock, optional and `omitempty`; offline it is made from `vendor/`,
+   indexed by the host's `createrepo_c`. mkosi removes it when the build
+   ends (`mkosi -f clean`), because it belongs to the subordinate ids.
 9. **The mkosi bootstrapper.** frostroot writes mkosi's configuration into
-   the work directory (distribution, release, tar with gzip, weak
-   dependencies on, `SOURCE_DATE_EPOCH`, the packages, the repositories),
-   runs mkosi with the tools tree and umask 022, provisions in a
-   post-installation script (the user in `wheel` with the sudoers drop-in,
-   `glibc-langpack-<language>` and `/etc/locale.conf`, `/etc/localtime`,
-   `wsl.conf`), and removes in a finalize script dnf5's transaction
-   history, `rpmdb.sqlite-shm`, ldconfig's aux-cache, dnf5's
-   `system-repo.lock` and the build's resolver file. Every value that
-   reaches a script is validated and quoted, and no script swallows a
-   failure. Progress reads mkosi's steps and dnf5's `[n/N] Installing`
-   lines into the existing phases, and the #102 watch has its mkosi
-   counterpart if mkosi can install unmounted.
+   the work directory (distribution, release, an uncompressed tar, weak
+   dependencies and documentation on, `CleanPackageMetadata=no`,
+   `SOURCE_DATE_EPOCH`, the lean base and the recipe's packages) and a
+   package manager tree of its own (the repositories, the pinned key
+   beside them), runs mkosi with the tools tree and umask 022, provisions
+   in a post-installation script (the user in `wheel` with the sudoers
+   drop-in, `glibc-langpack-<language>` and `/etc/locale.conf`,
+   `/etc/localtime`, `wsl.conf`), reads rpm's database and dnf5's state and
+   then removes, in a finalize script, dnf5's transaction history, the
+   SQLite side files, ldconfig's aux-cache, dnf5's `system-repo.lock` and
+   the build's resolver file, and compresses the tar with the tools tree's
+   `gzip -n`. Every value that reaches a script is validated and quoted,
+   and no script swallows a failure, a pipe included. Progress reads
+   mkosi's steps and dnf5's `[n/N] Installing` lines into the existing
+   phases, and the #102 watch has its mkosi counterpart if mkosi can
+   install unmounted.
 10. **The Fedora lock.** Every installed package's name, epoch, version,
-    release and rpm architecture from the image's rpm database; its
-    SHA-256, size and location from the repository's `primary` metadata
-    for that exact package; whether dnf5 installed it as a dependency,
-    from `packages.toml`; the repositories and key checksums used. New
-    fields optional; a lock is hostile input.
-11. **`vendor` for Fedora.** `vendor/rpms/`, the tools tree's packages
-    included; bounded reads with timeouts; the SHA-256 checked before the
-    rename into place; `--prune` as on Ubuntu.
-12. **`build --offline` for Fedora.** createrepo_c from the tools tree
-    over `vendor/rpms/`; mkosi with the network repositories off, the
-    lock's instant and the lock's dependency marks; the image compared
-    with the lock afterwards, as on Ubuntu.
+    release and rpm architecture from the image's rpm database, the key
+    rpm imported left out; its SHA-256, size and location from the
+    repository's `primary` metadata for that exact package; its
+    repository, from `nevras.toml`, and dnf5's reason for it (`User`,
+    `Dependency` or `Weak Dependency`), from `packages.toml`; the
+    repositories and key checksums used. New fields optional; a lock is
+    hostile input.
+11. **`vendor` for Fedora.** One `vendor/rpms/`, the tools tree's
+    packages included, each file once; bounded reads with timeouts; the
+    SHA-256 checked before the rename into place; Koji, by the source rpm
+    the lock records, for an update the repository has replaced;
+    `--prune` as on Ubuntu. (Built as a flat directory: a file name is
+    unique across a release's repositories, and the lock says which each
+    came from.)
+12. **`build --offline` for Fedora.** The vendored files staged as local
+    repositories, one per repository of the release under its online
+    name for each of mkosi's two builds, indexed by the host's
+    createrepo_c and bound into mkosi's sandbox; mkosi with the network
+    repositories off, every locked package as `name-version.arch`, a
+    package cache of the build's own, the lock's instant and dnf5's
+    reasons put back; the image and the tools tree compared with the lock
+    afterwards, each package's repository included.
 13. **Tests.** Unit: the configuration and scripts rendered for hostile
     values and run through a real `sh`; the lock's new fields. Integration:
     `TestIntegrationFedoraTiny`, the structure checks of `testTinyImage`
     (owners, capabilities, hardlinks, the user, sudo, no build leaks), and
     `TestIntegrationFedoraOfflineRebuild`, two offline rebuilds and one
     SHA-256; `scripts/integration.sh` requires both, and CI installs
-    `dnf`, `mkosi`, `bubblewrap` and `uidmap`.
+    `mkosi`, `dnf`, `rpm`, `createrepo-c`, `bubblewrap` and `uidmap` on
+    `ubuntu-24.04` by name, with the AppArmor restriction on user
+    namespaces lifted, as WSL has none.
 14. **Scenarios.** `E2E_DISTRO=fedora` for `offline-identical`,
     `no-build-leaks` and `failed-build`; `wsl-boot` learns a Fedora image's
     first login, for the owner to run.

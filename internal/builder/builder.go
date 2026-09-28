@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"frostroot/internal/deb"
+	"frostroot/internal/distro"
 	"frostroot/internal/export"
 	"frostroot/internal/pool"
 	"frostroot/internal/recipe"
@@ -141,9 +142,11 @@ type Result struct {
 	Reproducible bool
 }
 
-// Builder runs builds with a Bootstrapper.
+// Builder runs builds: an Ubuntu recipe's with its Bootstrapper, a Fedora
+// recipe's with its Fedora bootstrapper.
 type Builder struct {
 	Bootstrapper Bootstrapper
+	Fedora       FedoraBootstrapper
 }
 
 // Build builds imageRecipe, which the caller has already checked with
@@ -174,7 +177,11 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		getenv = os.Getenv
 	}
 	progress := progressOrDiscard(options.Progress)
-	image, offline, err := b.newFamilyBuild(imageRecipe, options, progress)
+	family, err := distro.FamilyOf(imageRecipe.Image.Distro)
+	if err != nil {
+		return Result{}, err
+	}
+	image, offline, err := b.newFamilyBuild(family, imageRecipe, options, progress)
 	if err != nil {
 		return Result{}, err
 	}
@@ -187,7 +194,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if err != nil {
 		return Result{}, err
 	}
-	if err := image.preflight(workRoot, instant); err != nil {
+	if err := image.preflight(ctx, workRoot, instant); err != nil {
 		return Result{}, err
 	}
 	if err := checkOutputWritable(options.RecipeDir); err != nil {
@@ -259,7 +266,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		return failBuild(fmt.Errorf("bootstrap reported success but left no tarball at %s", builtTarballPath))
 	}
 	progress.Report(ProgressEvent{Phase: PhasePlaceTarball, Kind: EventPhaseStarted})
-	tarballPath := filepath.Join(options.RecipeDir, export.TarballRelPath(imageRecipe.Image.Name, imageRecipe.Image.Release, imageRecipe.Image.Arch))
+	tarballPath := filepath.Join(options.RecipeDir, export.TarballRelPath(imageRecipe.Image.Name, string(family), imageRecipe.Image.Release, imageRecipe.Image.Arch))
 	reportCopied := func(copiedBytes, totalBytes int64) {
 		progress.Report(ProgressEvent{Phase: PhasePlaceTarball, Kind: EventProgress, Done: copiedBytes, Total: totalBytes, Unit: UnitBytes})
 	}
@@ -316,8 +323,9 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	return result, nil
 }
 
-// verifyPool checks vendor/debs against the lock, as a phase with a files
-// bar, before any work directory exists.
+// verifyPool checks vendor/debs, or a Fedora lock's vendor/rpms, and
+// vendor/wheels against the lock, as a phase with a files bar, before any
+// work directory exists.
 func verifyPool(offline *offlinePlan, progress Progress) error {
 	progress.Report(ProgressEvent{Phase: PhaseVerifyVendored, Kind: EventPhaseStarted})
 	status, err := pool.Verify(offline.poolDir, offline.entries, func(checked, total int) {
@@ -327,7 +335,7 @@ func verifyPool(offline *offlinePlan, progress Progress) error {
 		return fmt.Errorf("checking %s: %w", offline.poolDir, err)
 	}
 	if !status.Complete() {
-		return fmt.Errorf("%w: %s; run frostroot vendor", ErrPoolIncomplete, status.Describe(maxNamedPoolProblems))
+		return fmt.Errorf("%w: %s in %s; run frostroot vendor", ErrPoolIncomplete, status.Describe(maxNamedPoolProblems), pool.DirName(offline.lock))
 	}
 	if len(offline.wheelEntries) > 0 {
 		wheelStatus, err := pool.Verify(offline.wheelPoolDir, offline.wheelEntries, nil)

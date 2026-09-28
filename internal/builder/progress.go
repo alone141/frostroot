@@ -26,13 +26,14 @@ const (
 	PhaseCreateTarball
 	PhaseWriteLock
 	PhasePlaceTarball
-	PhaseVerifyVendored    // offline build: check vendor/debs against the lock
-	PhasePrepareRepository // offline build: stage the flat repository
+	PhaseVerifyVendored    // offline build: check the vendored files against the lock
+	PhasePrepareRepository // offline build: stage the local repositories
 	PhaseCheckLock         // offline build: compare the image with the lock
 	PhaseVendorRead        // vendor: read the lock
-	PhaseVendorCheck       // vendor: check what vendor/debs already holds
+	PhaseVendorCheck       // vendor: check what vendor/ already holds
 	PhaseVendorDownload    // vendor: download the rest
 	PhaseVendorPrune       // vendor --prune: remove files the lock does not name
+	PhaseMakeToolsTree     // Fedora build: mkosi makes the tools tree
 	phaseCount
 )
 
@@ -47,13 +48,14 @@ var phaseTitles = [phaseCount]string{
 	PhaseCreateTarball:     "Create tarball",
 	PhaseWriteLock:         "Write frostroot.lock",
 	PhasePlaceTarball:      "Place tarball",
-	PhaseVerifyVendored:    "Check vendor/debs against frostroot.lock",
+	PhaseVerifyVendored:    "Check the vendored files against frostroot.lock",
 	PhasePrepareRepository: "Prepare the local package repository",
 	PhaseCheckLock:         "Check the image against frostroot.lock",
 	PhaseVendorRead:        "Read frostroot.lock",
-	PhaseVendorCheck:       "Check vendor/debs",
+	PhaseVendorCheck:       "Check the vendored files",
 	PhaseVendorDownload:    "Download packages",
 	PhaseVendorPrune:       "Remove packages not in the lock",
+	PhaseMakeToolsTree:     "Make the tools tree",
 }
 
 // Title returns the phase's name as a progress display shows it.
@@ -76,6 +78,16 @@ func Phases(python bool) []Phase {
 		phases = append(phases, PhaseInstallPython)
 	}
 	return append(phases, PhaseCreateTarball, PhaseWriteLock, PhasePlaceTarball)
+}
+
+// FedoraPhases returns the phases of a Fedora build, in order. An offline
+// one checks and stages the vendored files first, downloads nothing, and
+// checks the image against the lock instead of writing it.
+func FedoraPhases(offline bool) []Phase {
+	if offline {
+		return []Phase{PhaseVerifyVendored, PhasePrepareRepository, PhaseMakeToolsTree, PhaseInstallRequested, PhaseProvision, PhaseCreateTarball, PhaseCheckLock, PhasePlaceTarball}
+	}
+	return []Phase{PhaseMakeToolsTree, PhaseDownload, PhaseInstallRequested, PhaseProvision, PhaseCreateTarball, PhaseWriteLock, PhasePlaceTarball}
 }
 
 // OfflinePhases returns the phases of a build from the vendored pools, in

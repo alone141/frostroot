@@ -20,10 +20,12 @@ const insecureFlagUsage = "skip TLS certificate verification on every fetch, for
 const (
 	insecureWarning = "warning: --insecure: TLS certificates are not verified on this run; anyone on the network path can answer as any server frostroot talks to.\n"
 
-	insecureBuildDetail  = "The .deb packages are still checked against the archive's and each source's signatures.\n"
-	insecurePythonDetail = "The Python packages are not: the resolve trusts whatever the network answers, and frostroot.lock will record it as unverified.\n"
-	insecureVendorDetail = "Every file is still checked against the lock's SHA-256, so what lands in vendor/ is the lock's or nothing.\n"
-	insecureFormDetail   = "Package names are only suggestions and build checks every one; a PPA's signing key, though, is fetched from wherever the network says, and every later build trusts it.\n"
+	insecureBuildDetail = "The .deb packages are still checked against the archive's and each source's signatures.\n"
+	// insecureFedoraBuildDetail is insecureBuildDetail for a Fedora build.
+	insecureFedoraBuildDetail = "Every package is still checked against the Fedora release's own signing key, which frostroot carries.\n"
+	insecurePythonDetail      = "The Python packages are not: the resolve trusts whatever the network answers, and frostroot.lock will record it as unverified.\n"
+	insecureVendorDetail      = "Every file is still checked against the lock's SHA-256, so what lands in vendor/ is the lock's or nothing.\n"
+	insecureFormDetail        = "Package names are only suggestions and build checks every one; a PPA's signing key, though, is fetched from wherever the network says, and every later build trusts it.\n"
 
 	// unverifiedLockWarning is printed by every command that reads a lock
 	// whose Python packages were resolved with --insecure, so that the risk

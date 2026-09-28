@@ -32,7 +32,8 @@ request and every push to `master`. On a Windows checkout the toolchain
 lives in WSL, so run it as `scripts/wsl.sh scripts/check.sh` from Git Bash
 or `.\scripts\wsl.ps1 scripts/check.sh` from PowerShell.
 
-The integration tests need mmdebstrap, the network and user namespaces.
+The integration tests need mmdebstrap, mkosi 20.2 with dnf, rpm and
+createrepo_c, the network and user namespaces.
 CI runs them, and this runs them the same way by hand:
 
 ```sh

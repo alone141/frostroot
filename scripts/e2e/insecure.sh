@@ -10,10 +10,11 @@
 source "$(dirname "$0")/lib.sh"
 
 e2e_begin insecure
+e2e_require_ubuntu
 e2e_require_bootstrap
 e2e_build_frostroot
 lab=$LAB/lab
-tarball=$lab/dist/e2e-insecure-ubuntu-$E2E_RELEASE-amd64.tar.gz
+tarball=$lab/$(e2e_tarball e2e-insecure)
 e2e_recipe "$lab" e2e-insecure "$E2E_RELEASE" "git" "requests"
 
 e2e_run build "$lab" "$FROSTROOT" build --plain --insecure

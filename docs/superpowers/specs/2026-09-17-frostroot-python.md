@@ -340,7 +340,7 @@ matches the lock's, as it already refuses a changed `include`.
 |---|---|---|
 | A version, extra or URL in `[python]` | 1 | invalid python package name ...; versions belong in the lock |
 | One package asked for twice | 1 | python.include names ... twice |
-| `vendor/wheels/` short or corrupt | 1 | vendor/debs is incomplete: ... in vendor/wheels; run frostroot vendor |
+| `vendor/wheels/` short or corrupt | 1 | the vendored files are incomplete: ... in vendor/wheels; run frostroot vendor |
 | `[python]` changed since the lock | 1 | frostroot.lock does not match frostroot.toml: python packages added ... |
 | The resolution needs a source distribution | 2 | not a wheel: ... (only wheels can be locked; ask for the apt package instead) |
 | The report has no checksum for a package | 2 | unusable pip report: ... has no sha256 |

@@ -192,7 +192,7 @@ func TestVendorDownloadsAndResumes(t *testing.T) {
 			t.Errorf("stdout lacks %q:\n%s", wantText, stdout.String())
 		}
 	}
-	for _, wantLine := range []string{"frostroot: vendoring 2 packages · ", "frostroot: Read frostroot.lock\n", "frostroot: Check vendor/debs\n", "frostroot: Download packages\n", "frostroot:   100%  "} {
+	for _, wantLine := range []string{"frostroot: vendoring 2 packages · ", "frostroot: Read frostroot.lock\n", "frostroot: Check the vendored files\n", "frostroot: Download packages\n", "frostroot:   100%  "} {
 		if !strings.Contains(stderr.String(), wantLine) {
 			t.Errorf("stderr lacks %q:\n%s", wantLine, stderr.String())
 		}
@@ -284,11 +284,11 @@ func TestVendorRefusals(t *testing.T) {
 			name: "lock of another family",
 			prepare: func(t *testing.T, fixture *vendorFixture) {
 				t.Helper()
-				fixture.lock.Distro = "fedora"
+				fixture.lock.Distro = "debian"
 				fixture.saveLock(t)
 			},
 			args:         []string{"vendor"},
-			wantInStderr: `unusable frostroot.lock: unknown distro: "fedora" (known: ubuntu)`,
+			wantInStderr: `unusable frostroot.lock: unknown distro: "debian" (known: ubuntu, fedora)`,
 		},
 		{
 			name:         "bad mirror",
@@ -541,5 +541,93 @@ func TestVendorPruneRemovesADownloadCutShort(t *testing.T) {
 	}
 	if _, err := os.Stat(cutShort); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("--prune must remove the download cut short, Stat error = %v", err)
+	}
+}
+
+// useFedoraLock replaces the fixture's lock with a Fedora one: two packages
+// of the image from two repositories, and a tools tree sharing one of them,
+// served under the repositories' paths.
+func (f *vendorFixture) useFedoraLock(t *testing.T) {
+	t.Helper()
+	f.lock = recipe.Lockfile{
+		Version: 1, Distro: "fedora", Release: "44", Arch: "amd64", FrostrootVersion: builder.Version, Requested: []string{"git"},
+		Repositories: []recipe.LockRepository{
+			{Name: "fedora", URL: f.server.URL + "/releases/44/Everything/x86_64/os", KeySHA256: "unused-here"},
+			{Name: "updates", URL: f.server.URL + "/updates/44/Everything/x86_64", KeySHA256: "unused-here"},
+		},
+	}
+	f.files = map[string][]byte{}
+	for _, locked := range []struct{ name, version, repository, path string }{
+		{"git", "2.55.0-1.fc44", "updates", "updates/44/Everything/x86_64"},
+		{"glibc", "2.43-2.fc44", "fedora", "releases/44/Everything/x86_64/os"},
+	} {
+		content := []byte("rpm " + locked.name + strings.Repeat("-", 60))
+		digest := sha256.Sum256(content)
+		fileName := "Packages/" + locked.name[:1] + "/" + locked.name + "-" + locked.version + ".x86_64.rpm"
+		f.files[locked.path+"/"+fileName] = content
+		f.lock.Packages = append(f.lock.Packages, recipe.LockPackage{
+			Name: locked.name, Version: locked.version, Arch: "x86_64", Reason: "User", Source: locked.repository,
+			SourceRPM: locked.name + "-" + locked.version + ".src.rpm", Filename: fileName,
+			SHA256: hex.EncodeToString(digest[:]), Size: int64(len(content)),
+		})
+	}
+	f.lock.Tools = []recipe.LockPackage{f.lock.Packages[1]}
+	f.saveLock(t)
+}
+
+// TestVendorFedoraLock: a Fedora lock's packages, the tools tree's
+// included, go to vendor/rpms, each fetched from its own repository.
+func TestVendorFedoraLock(t *testing.T) {
+	fixture := newVendorFixture(t)
+	fixture.useFedoraLock(t)
+	var stdout, stderr bytes.Buffer
+	if exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr.String())
+	}
+	for _, wantText := range []string{"into vendor/rpms: 2 downloaded."} {
+		if !strings.Contains(stdout.String(), wantText) {
+			t.Errorf("stdout lacks %q:\n%s", wantText, stdout.String())
+		}
+	}
+	if !strings.Contains(stderr.String(), "frostroot: vendoring 2 packages · ") || !strings.Contains(stderr.String(), " · Fedora's server\n") {
+		t.Errorf("stderr does not name what is vendored from where:\n%s", stderr.String())
+	}
+	for _, name := range []string{"git-2.55.0-1.fc44.x86_64.rpm", "glibc-2.43-2.fc44.x86_64.rpm"} {
+		if _, err := os.Stat(filepath.Join(fixture.recipeDir, "vendor", "rpms", name)); err != nil {
+			t.Errorf("%s was not vendored: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(fixture.poolDir()); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a Fedora lock made %s: %v", fixture.poolDir(), err)
+	}
+}
+
+func TestVendorFedoraLockNamesTheUpdatesRepositoryWhenAPackageIsGone(t *testing.T) {
+	fixture := newVendorFixture(t)
+	fixture.useFedoraLock(t)
+	delete(fixture.files, "updates/44/Everything/x86_64/"+fixture.lock.Packages[0].Filename)
+	var stdout, stderr bytes.Buffer
+	if exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor"}); exitCode != exitBuildFailed {
+		t.Fatalf("exit code = %d, want %d; stderr %s", exitCode, exitBuildFailed, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Fedora's updates repository drops superseded packages") {
+		t.Errorf("stderr does not say why a package can be gone:\n%s", stderr.String())
+	}
+}
+
+// TestVendorRefusesAMirrorForAFedoraLock: --mirror stands in for Ubuntu's
+// archive, and a Fedora lock has none.
+func TestVendorRefusesAMirrorForAFedoraLock(t *testing.T) {
+	fixture := newVendorFixture(t)
+	fixture.useFedoraLock(t)
+	var stdout, stderr bytes.Buffer
+	if exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor", "--mirror", fixture.server.URL}); exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d; stderr %s", exitCode, exitUserError, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "--mirror replaces Ubuntu's archive") {
+		t.Errorf("stderr does not explain the refusal:\n%s", stderr.String())
+	}
+	if fixture.requests.Load() != 0 {
+		t.Error("a refused vendor must not download")
 	}
 }

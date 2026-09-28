@@ -3,6 +3,7 @@ package builder
 import (
 	"bufio"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -17,6 +18,11 @@ type ErrorLine struct {
 // and frostroot's own provision and Python scripts with "frostroot:".
 // Warnings ("W:") are not errors, and a build that failed had one.
 var explanationPrefixes = []string{"E: ", "dpkg: error", "ERROR: ", "frostroot: "}
+
+// mkosiExplanationPrefixes are how a Fedora build's tools announce an error:
+// dnf5 names a package it cannot find or a transaction it cannot resolve,
+// rpm a scriptlet that failed, and frostroot's own scripts say "frostroot:".
+var mkosiExplanationPrefixes = []string{"No match for argument", "Failed to resolve the transaction", "Problem: ", "error: ", "frostroot: "}
 
 // maxExplanationLineBytes bounds a log line; pip has been seen to print a
 // single-line dependency report longer than that, which is not the
@@ -37,13 +43,17 @@ func FirstErrorLine(path string) (ErrorLine, bool) {
 	}
 	defer func() { _ = file.Close() }() // read only
 
+	prefixes := explanationPrefixes
+	if filepath.Base(path) == MkosiLogFileName {
+		prefixes = mkosiExplanationPrefixes
+	}
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64<<10), maxExplanationLineBytes)
 	number := 0
 	for scanner.Scan() {
 		number++
 		line := strings.TrimRight(scanner.Text(), "\r")
-		for _, prefix := range explanationPrefixes {
+		for _, prefix := range prefixes {
 			if strings.HasPrefix(line, prefix) {
 				return ErrorLine{Number: number, Text: line}, true
 			}

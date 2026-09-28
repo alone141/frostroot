@@ -12,12 +12,13 @@
 source "$(dirname "$0")/lib.sh"
 
 e2e_begin certificates
+e2e_require_ubuntu
 e2e_require_bootstrap
 e2e_require openssl
 e2e_build_frostroot
 lab=$LAB/lab
 lock=$lab/frostroot.lock
-tarball=$lab/dist/e2e-certs-ubuntu-$E2E_RELEASE-amd64.tar.gz
+tarball=$lab/$(e2e_tarball e2e-certs)
 mkdir -p "$lab/certs"
 e2e_certificate "frostroot e2e Corp Root CA" "$LAB/corp.key" "$lab/certs/corp-root.pem" ||
 	e2e_abort "openssl could not make the recipe's authority"

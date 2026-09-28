@@ -124,6 +124,183 @@ func newBuildApp(t *testing.T, recipeDir string, bootstrapper builder.Bootstrapp
 	}
 }
 
+// fakeFedoraBootstrapper writes what a Fedora build's mkosi and scripts
+// would, for one package: the records, the file dnf kept, and the tarball.
+type fakeFedoraBootstrapper struct {
+	ran          bool
+	preflightErr error
+}
+
+func (f *fakeFedoraBootstrapper) Preflight(context.Context, builder.FedoraSpec) error {
+	return f.preflightErr
+}
+
+func (f *fakeFedoraBootstrapper) Run(_ context.Context, spec builder.FedoraSpec) error {
+	f.ran = true
+	files := map[string]string{
+		filepath.Join(spec.ImageOutputDir, "image.installed"): "git-0:2.55.0-1.fc44.x86_64|User|updates|git-2.55.0-1.fc44.src.rpm\n",
+		filepath.Join(spec.ImageOutputDir, "image.locations"): "git-0:2.55.0-1.fc44.x86_64|updates|https://m.example/Packages/g/git-2.55.0-1.fc44.x86_64.rpm\n",
+		spec.ToolsRecordPath: "dnf5|0|5.4.6.0|1.fc44|x86_64|dnf5-5.4.6.0-1.fc44.src.rpm\n",
+		filepath.Join(spec.CacheDir, "cache", "libdnf5", "updates-1", "packages", "git-2.55.0-1.fc44.x86_64.rpm"): "git",
+		filepath.Join(spec.CacheDir, "cache", "dnf", "updates-1", "packages", "dnf5-5.4.6.0-1.fc44.x86_64.rpm"):   "dnf5",
+		spec.TarballPath: "fedora image",
+	}
+	for path, content := range files {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func TestBuildFedoraRecipe(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	recipeDir := newRecipeDir(t, "fedora.toml")
+	app := newBuildApp(t, recipeDir, &fakeBootstrapper{}, &stdout, &stderr)
+	fedora := &fakeFedoraBootstrapper{}
+	app.Builder = &builder.Builder{Bootstrapper: &fakeBootstrapper{}, Fedora: fedora}
+	if exitCode := app.Run([]string{"build", "--plain"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d; stderr:\n%s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Wrote dist/fedora-lab-fedora-44-amd64.tar.gz") {
+		t.Errorf("stdout does not name the Fedora tarball:\n%s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "Fedora 44 (amd64)") {
+		t.Errorf("progress does not say what it builds:\n%s", stderr.String())
+	}
+	lock, err := recipe.LoadLock(filepath.Join(recipeDir, "frostroot.lock"))
+	if err != nil || lock.Distro != "fedora" || len(lock.Packages) != 1 || len(lock.Tools) != 1 {
+		t.Errorf("lock = %+v, %v", lock, err)
+	}
+}
+
+// newFedoraOfflineRecipeDir builds the Fedora fixture online with the fake,
+// in C.UTF-8, which needs no langpack, then vendors what the lock names, as
+// frostroot vendor would.
+func newFedoraOfflineRecipeDir(t *testing.T) string {
+	t.Helper()
+	recipeDir := newRecipeDir(t, "fedora.toml")
+	recipePath := filepath.Join(recipeDir, "frostroot.toml")
+	recipeText, err := os.ReadFile(recipePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatedText := strings.Replace(string(recipeText), `lang = "tr_TR.UTF-8"`, `lang = "C.UTF-8"`, 1)
+	if updatedText == string(recipeText) {
+		t.Fatal("fixture has no locale line to replace")
+	}
+	if err := os.WriteFile(recipePath, []byte(updatedText), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, recipeDir, &fakeBootstrapper{}, &stdout, &stderr)
+	app.Builder = &builder.Builder{Fedora: &fakeFedoraBootstrapper{}}
+	if exitCode := app.Run([]string{"build", "--plain"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d; stderr:\n%s", exitCode, stderr.String())
+	}
+	vendorDir := filepath.Join(recipeDir, "vendor", "rpms")
+	if err := os.MkdirAll(vendorDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{"git-2.55.0-1.fc44.x86_64.rpm": "git", "dnf5-5.4.6.0-1.fc44.x86_64.rpm": "dnf5"} {
+		if err := os.WriteFile(filepath.Join(vendorDir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return recipeDir
+}
+
+func TestBuildFedoraRecipeOffline(t *testing.T) {
+	recipeDir := newFedoraOfflineRecipeDir(t)
+	lockBefore, err := os.ReadFile(filepath.Join(recipeDir, "frostroot.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, recipeDir, &fakeBootstrapper{}, &stdout, &stderr)
+	fedora := &fakeFedoraBootstrapper{}
+	app.Builder = &builder.Builder{Fedora: fedora}
+	if exitCode := app.Run([]string{"build", "--plain", "--offline"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d; stderr:\n%s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Wrote dist/fedora-lab-fedora-44-amd64.tar.gz (0 MB), rebuilt from frostroot.lock: 1 package, every one as locked.") {
+		t.Errorf("stdout does not say what was rebuilt:\n%s", stdout.String())
+	}
+	for _, wantLine := range []string{"frostroot: building fedora-lab · Fedora 44 (amd64) · vendor/rpms\n", "frostroot: Check the vendored files against frostroot.lock\n", "frostroot: Prepare the local package repository\n", "frostroot: Check the image against frostroot.lock\n"} {
+		if !strings.Contains(stderr.String(), wantLine) {
+			t.Errorf("stderr lacks %q:\n%s", wantLine, stderr.String())
+		}
+	}
+	if strings.Contains(stderr.String(), "Write frostroot.lock") || strings.Contains(stderr.String(), "Download packages") {
+		t.Errorf("an offline build neither downloads nor writes the lock:\n%s", stderr.String())
+	}
+	if lockAfter, err := os.ReadFile(filepath.Join(recipeDir, "frostroot.lock")); err != nil || string(lockAfter) != string(lockBefore) {
+		t.Errorf("the lock must not change: %v", err)
+	}
+}
+
+func TestBuildFedoraRecipeOfflineNeedsItsVendoredFiles(t *testing.T) {
+	recipeDir := newFedoraOfflineRecipeDir(t)
+	if err := os.Remove(filepath.Join(recipeDir, "vendor", "rpms", "dnf5-5.4.6.0-1.fc44.x86_64.rpm")); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, recipeDir, &fakeBootstrapper{}, &stdout, &stderr)
+	fedora := &fakeFedoraBootstrapper{}
+	app.Builder = &builder.Builder{Fedora: fedora}
+	if exitCode := app.Run([]string{"build", "--plain", "--offline"}); exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d; stderr:\n%s", exitCode, exitUserError, stderr.String())
+	}
+	if fedora.ran || !strings.Contains(stderr.String(), "the vendored files are incomplete: dnf5-5.4.6.0-1.fc44.x86_64.rpm (missing) in vendor/rpms; run frostroot vendor") {
+		t.Errorf("ran = %v; stderr:\n%s", fedora.ran, stderr.String())
+	}
+}
+
+// TestBuildFedoraRecipeOnAHostThatKeepsMkosiOutIsTheUsersToFix: a kernel
+// that keeps mkosi out of its user namespace is fixed with sudo or sysctl.
+func TestBuildFedoraRecipeOnAHostThatKeepsMkosiOutIsTheUsersToFix(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, newRecipeDir(t, "fedora.toml"), &fakeBootstrapper{}, &stdout, &stderr)
+	fedora := &fakeFedoraBootstrapper{preflightErr: fmt.Errorf("%w: build as root", builder.ErrUserNamespacesRestricted)}
+	app.Builder = &builder.Builder{Fedora: fedora}
+	if exitCode := app.Run([]string{"build", "--plain"}); exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d; stderr:\n%s", exitCode, exitUserError, stderr.String())
+	}
+	if fedora.ran || !strings.Contains(stderr.String(), "keeps mkosi out of its user namespace: build as root") {
+		t.Errorf("ran = %v; stderr:\n%s", fedora.ran, stderr.String())
+	}
+}
+
+// TestBuildFedoraRecipeInsecureSaysWhatStillHolds: what --insecure leaves
+// checked is Fedora's key, not Ubuntu's signatures.
+func TestBuildFedoraRecipeInsecureSaysWhatStillHolds(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, newRecipeDir(t, "fedora.toml"), &fakeBootstrapper{}, &stdout, &stderr)
+	app.Builder = &builder.Builder{Fedora: &fakeFedoraBootstrapper{}}
+	if exitCode := app.Run([]string{"build", "--plain", "--insecure"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d; stderr:\n%s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "warning: --insecure") || !strings.Contains(stderr.String(), "the Fedora release's own signing key") || strings.Contains(stderr.String(), ".deb") {
+		t.Errorf("stderr does not say what --insecure leaves checked on Fedora:\n%s", stderr.String())
+	}
+}
+
+func TestBuildFedoraRecipeRefusesMirror(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, newRecipeDir(t, "fedora.toml"), &fakeBootstrapper{}, &stdout, &stderr)
+	fedora := &fakeFedoraBootstrapper{}
+	app.Builder = &builder.Builder{Fedora: fedora}
+	if exitCode := app.Run([]string{"build", "--plain", "--mirror", "http://mirror.example/ubuntu"}); exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d; stderr:\n%s", exitCode, exitUserError, stderr.String())
+	}
+	if fedora.ran || !strings.Contains(stderr.String(), "--mirror replaces Ubuntu's archive") {
+		t.Errorf("ran = %v; stderr:\n%s", fedora.ran, stderr.String())
+	}
+}
+
 // setRelease replaces the release in a copy of valid.toml.
 func setRelease(t *testing.T, recipePath, release string) {
 	t.Helper()
@@ -298,7 +475,7 @@ func TestBuildOffline(t *testing.T) {
 	if strings.Contains(stderr.String(), "warning") {
 		t.Errorf("a lock with an instant deserves no warning:\n%s", stderr.String())
 	}
-	for _, wantLine := range []string{"frostroot: building cpp-lab · Ubuntu 22.04 (jammy, amd64) · vendor/debs\n", "frostroot: Check vendor/debs against frostroot.lock\n", "frostroot: Prepare the local package repository\n", "frostroot: Check the image against frostroot.lock\n"} {
+	for _, wantLine := range []string{"frostroot: building cpp-lab · Ubuntu 22.04 (jammy, amd64) · vendor/debs\n", "frostroot: Check the vendored files against frostroot.lock\n", "frostroot: Prepare the local package repository\n", "frostroot: Check the image against frostroot.lock\n"} {
 		if !strings.Contains(stderr.String(), wantLine) {
 			t.Errorf("stderr lacks %q:\n%s", wantLine, stderr.String())
 		}
@@ -535,6 +712,8 @@ func TestBuildPreflightFailuresAreUserErrors(t *testing.T) {
 		fmt.Errorf("%w; install it with: sudo apt install mmdebstrap", builder.ErrNoMmdebstrap),
 		fmt.Errorf("%w; install it with: sudo apt install mount", builder.ErrNoMount),
 		fmt.Errorf("%w at /usr/share/keyrings/ubuntu-archive-keyring.gpg", builder.ErrNoKeyring),
+		fmt.Errorf("%w: mkosi, createrepo_c; install with: sudo apt install mkosi createrepo-c", builder.ErrNoFedoraTool),
+		fmt.Errorf("%w: this host has mkosi %q, and frostroot builds Fedora with 20.2", builder.ErrMkosiVersion, "25.3"),
 	}
 	for _, preflightErr := range preflightErrors {
 		t.Run(preflightErr.Error(), func(t *testing.T) {

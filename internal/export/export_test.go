@@ -11,7 +11,7 @@ import (
 )
 
 func TestTarballRelPath(t *testing.T) {
-	got := TarballRelPath("cpp-lab", "22.04", "amd64")
+	got := TarballRelPath("cpp-lab", "ubuntu", "22.04", "amd64")
 	want := filepath.Join("dist", "cpp-lab-ubuntu-22.04-amd64.tar.gz")
 	if got != want {
 		t.Fatalf("TarballRelPath = %q, want %q", got, want)

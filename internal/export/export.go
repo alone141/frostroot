@@ -20,10 +20,10 @@ import (
 	"syscall"
 )
 
-// TarballRelPath returns where the image lands, relative to the recipe
-// directory.
-func TarballRelPath(imageName, release, arch string) string {
-	return filepath.Join("dist", fmt.Sprintf("%s-ubuntu-%s-%s.tar.gz", imageName, release, arch))
+// TarballRelPath returns where the image of a family ("ubuntu" or
+// "fedora") lands, relative to the recipe directory.
+func TarballRelPath(imageName, family, release, arch string) string {
+	return filepath.Join("dist", fmt.Sprintf("%s-%s-%s-%s.tar.gz", imageName, family, release, arch))
 }
 
 // CopyProgressFunc is told, after every chunk, how far a copy across

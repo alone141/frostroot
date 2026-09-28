@@ -34,6 +34,7 @@ expect_exit 1 "a wrong exit status stops the scenario at once" \
 e2e_check "and nothing after it ran" e2e_lacks "$LAB/inner.log" "reached"
 expect_exit 3 "an inconclusive scenario says so" 'e2e_inconclusive "the world moved"'
 expect_exit 4 "a missing tool skips the scenario" 'e2e_require no-such-tool-anywhere; e2e_end'
+expect_exit 4 "an Ubuntu-only scenario skips for another family" 'E2E_DISTRO=fedora; e2e_require_ubuntu; e2e_end'
 
 # A directory outside the root, with something in it: if the guard ever
 # broke, this is all it could remove.

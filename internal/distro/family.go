@@ -15,13 +15,24 @@ type Family string
 // recipe or a lock that names none belongs to.
 const Ubuntu Family = "ubuntu"
 
+// Name returns the family's name as people write it, such as "Fedora".
+func (f Family) Name() string {
+	switch f {
+	case Ubuntu:
+		return "Ubuntu"
+	case Fedora:
+		return "Fedora"
+	}
+	return string(f)
+}
+
 // ErrUnknownFamily means a distro field names a family frostroot does not
 // build.
 var ErrUnknownFamily = errors.New("unknown distro")
 
 // Families lists the families frostroot builds, in the order a form offers
 // them.
-func Families() []Family { return []Family{Ubuntu} }
+func Families() []Family { return []Family{Ubuntu, Fedora} }
 
 // FamilyOf returns the family a recipe's or a lock's distro field names:
 // Ubuntu when it names none, which every recipe and lock written before
@@ -38,12 +49,16 @@ func FamilyOf(name string) (Family, error) {
 	return "", unknownFamilyError(name)
 }
 
-// Check reports whether family builds version for arch. For Ubuntu the
-// errors are Lookup's: ErrUnknownRelease and ErrUnsupportedArch, joined when
-// both are wrong.
+// Check reports whether family builds version for arch. The errors are
+// the family's lookup's: ErrUnknownRelease or ErrUnknownFedoraRelease, and
+// ErrUnsupportedArch, joined when both are wrong.
 func Check(family Family, version, arch string) error {
-	if family == Ubuntu {
+	switch family {
+	case Ubuntu:
 		_, err := Lookup(version, arch)
+		return err
+	case Fedora:
+		_, err := LookupFedora(version, arch)
 		return err
 	}
 	return unknownFamilyError(string(family))

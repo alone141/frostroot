@@ -30,9 +30,9 @@ var (
 	// ErrLockMismatch means frostroot.toml has changed since frostroot.lock
 	// was written, in a way that changes the packages.
 	ErrLockMismatch = errors.New("frostroot.lock does not match frostroot.toml")
-	// ErrPoolIncomplete means vendor/debs lacks files the lock names, or
-	// holds corrupt ones.
-	ErrPoolIncomplete = errors.New("vendor/debs is incomplete")
+	// ErrPoolIncomplete means vendor/debs, vendor/rpms or vendor/wheels
+	// lacks files the lock names, or holds corrupt ones.
+	ErrPoolIncomplete = errors.New("the vendored files are incomplete")
 	// ErrImageDiffersFromLock means an offline build produced another set of
 	// packages than the lock records. The build fails; nothing is placed.
 	ErrImageDiffersFromLock = errors.New("the rebuilt image differs from frostroot.lock")
@@ -282,8 +282,17 @@ func setDifferences(previous, current []string) (added, removed []string) {
 // compareWithLock fails when the packages installed in the image are not
 // exactly the lock's, naming every difference.
 func compareWithLock(lock recipe.Lockfile, installed []recipe.LockPackage) error {
+	if details := packageSetDifferences(lock.Packages, installed, "the image"); len(details) > 0 {
+		return fmt.Errorf("%w: %s", ErrImageDiffersFromLock, strings.Join(details, "; "))
+	}
+	return nil
+}
+
+// packageSetDifferences says how the packages installed in where differ from
+// the locked ones, or nothing when they are the same set.
+func packageSetDifferences(lockedPackages, installed []recipe.LockPackage, where string) []string {
 	locked, inImage := map[packageKey]bool{}, map[packageKey]bool{}
-	for _, lockedPackage := range lock.Packages {
+	for _, lockedPackage := range lockedPackages {
 		locked[keyOf(lockedPackage)] = true
 	}
 	var onlyInImage, onlyInLock []string
@@ -299,19 +308,16 @@ func compareWithLock(lock recipe.Lockfile, installed []recipe.LockPackage) error
 			onlyInLock = append(onlyInLock, key.String())
 		}
 	}
-	if len(onlyInImage)+len(onlyInLock) == 0 {
-		return nil
-	}
 	sort.Strings(onlyInImage)
 	sort.Strings(onlyInLock)
 	var details []string
 	if len(onlyInLock) > 0 {
-		details = append(details, "in the lock but not in the image: "+strings.Join(onlyInLock, ", "))
+		details = append(details, "in the lock but not in "+where+": "+strings.Join(onlyInLock, ", "))
 	}
 	if len(onlyInImage) > 0 {
-		details = append(details, "in the image but not in the lock: "+strings.Join(onlyInImage, ", "))
+		details = append(details, "in "+where+" but not in the lock: "+strings.Join(onlyInImage, ", "))
 	}
-	return fmt.Errorf("%w: %s", ErrImageDiffersFromLock, strings.Join(details, "; "))
+	return details
 }
 
 // packagesIndexPattern matches the file names apt gives Packages indexes in

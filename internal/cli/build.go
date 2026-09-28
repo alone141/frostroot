@@ -15,7 +15,6 @@ import (
 
 	"frostroot/internal/builder"
 	"frostroot/internal/distro"
-	"frostroot/internal/export"
 	"frostroot/internal/pool"
 	"frostroot/internal/recipe"
 	"frostroot/internal/tui"
@@ -32,8 +31,10 @@ var archiveUnreachableMessages = []string{
 
 const buildUsageText = `usage: frostroot build [--mirror URL | --offline] [--ca-bundle FILE | --insecure] [--keep-work] [--plain]
 
-Build frostroot.lock and dist/<name>-ubuntu-<release>-amd64.tar.gz from frostroot.toml.
-Needs Linux, mmdebstrap, network, and user namespaces or root. Never prompts.
+Build frostroot.lock and dist/<name>-<distro>-<release>-amd64.tar.gz from frostroot.toml.
+Needs Linux, network, and user namespaces or root: mmdebstrap for Ubuntu, and
+for Fedora mkosi 20.2, dnf, rpm, createrepo_c and bubblewrap, which make a
+Fedora tools tree that then makes the image. Never prompts.
 mmdebstrap mounts /proc, /sys and /dev in the image as it installs, which takes
 mount and, as root, CAP_SYS_ADMIN: a container has it only when started with
 it. A host where it cannot is refused (exit 1) rather than given an incomplete
@@ -55,10 +56,12 @@ decides what is resolved, and the lock records that it was resolved
 unverified. Nothing of the flag reaches the image; apt inside it verifies as
 before.
 
-With --offline, rebuild the image from frostroot.lock and vendor/debs (see
-frostroot vendor) without the archive: the same packages at the same versions,
-verified against the lock, frozen at the lock's instant, so that every offline
-build of one lock produces the same bytes. The lock is read, not written.
+With --offline, rebuild the image from frostroot.lock and vendor/debs, or
+vendor/rpms for Fedora (see frostroot vendor), without the network: the same
+packages at the same versions, verified against the lock, frozen at the lock's
+instant, so that every offline build of one lock produces the same bytes. A
+Fedora rebuild makes its tools tree from the lock too. The lock is read, not
+written.
 
 `
 
@@ -69,10 +72,14 @@ const progressEventBuffer = 256
 // vendorDebsDisplayName is how the offline source is shown.
 const vendorDebsDisplayName = "vendor/debs"
 
+// fedoraMirrorsDisplayName is how a Fedora build's online source is shown:
+// its metalinks choose the mirrors.
+const fedoraMirrorsDisplayName = "Fedora's mirrors"
+
 func (a *App) runBuild(args []string) int {
 	flags := a.newFlagSet("build", buildUsageText)
 	mirrorURL := flags.String("mirror", "", "archive base `URL` to use for all three pockets instead of http://archive.ubuntu.com/ubuntu")
-	offline := flags.Bool("offline", false, "rebuild from frostroot.lock and vendor/debs, without the archive")
+	offline := flags.Bool("offline", false, "rebuild from frostroot.lock and vendor/, without the network")
 	caBundlePath := flags.String("ca-bundle", "", "PEM `FILE` of certificate authorities to trust while fetching, for a network that inspects TLS")
 	insecure := flags.Bool("insecure", false, insecureFlagUsage)
 	keepWork := flags.Bool("keep-work", false, "keep the work directory after a successful build")
@@ -81,7 +88,7 @@ func (a *App) runBuild(args []string) int {
 		return exitCode
 	}
 	if *mirrorURL != "" && *offline {
-		a.stderrf("frostroot: --mirror and --offline exclude each other: an offline build installs from %s\n", vendorDebsDisplayName)
+		a.stderrf("frostroot: --mirror and --offline exclude each other: an offline build installs from what frostroot vendor fetched\n")
 		return exitUserError
 	}
 	if *insecure && *offline {
@@ -103,6 +110,17 @@ func (a *App) runBuild(args []string) int {
 	imageRecipe, ok := a.loadRecipe()
 	if !ok {
 		return exitUserError
+	}
+	family, err := distro.FamilyOf(imageRecipe.Image.Distro)
+	if err != nil { // unreachable after validation, but never ignore an error
+		a.stderrf("frostroot: %v\n", err)
+		return exitUserError
+	}
+	if family == distro.Fedora {
+		return a.runFedoraBuild(imageRecipe, fedoraBuildFlags{
+			mirrorURL: *mirrorURL, offline: *offline, keepWork: *keepWork, plain: *plain,
+			insecure: *insecure, caBundlePath: *caBundlePath,
+		})
 	}
 	release, err := distro.Lookup(imageRecipe.Image.Release, imageRecipe.Image.Arch)
 	if err != nil { // unreachable after validation, but never ignore an error
@@ -161,6 +179,52 @@ func (a *App) runBuild(args []string) int {
 		return a.runBuildFullScreen(ctx, imageRecipe, options, screen, archiveURL)
 	}
 	return a.runBuildPlain(ctx, stopSignalHandling, imageRecipe, options, screen, archiveURL)
+}
+
+// fedoraBuildFlags are the build command's flags a Fedora build reads.
+type fedoraBuildFlags struct {
+	mirrorURL, caBundlePath string
+	offline, keepWork       bool
+	plain, insecure         bool
+}
+
+// runFedoraBuild builds a Fedora recipe: mkosi instead of mmdebstrap, and
+// Fedora's mirrors, found through its metalinks, instead of an archive URL;
+// or offline, vendor/rpms.
+func (a *App) runFedoraBuild(imageRecipe recipe.Recipe, flags fedoraBuildFlags) int {
+	if flags.mirrorURL != "" {
+		a.stderrf("frostroot: --mirror replaces Ubuntu's archive; a Fedora build finds Fedora's mirrors through its metalinks\n")
+		return exitUserError
+	}
+	if flags.insecure {
+		a.warnInsecure(insecureFedoraBuildDetail)
+	}
+	ctx, stopSignalHandling := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer stopSignalHandling()
+	extraTrust, ok := a.readCABundle(flags.caBundlePath)
+	if !ok {
+		return exitUserError
+	}
+	options := builder.Options{
+		RecipeDir:     a.RecipeDir,
+		KeepWork:      flags.keepWork,
+		GOOS:          a.GOOS,
+		Getenv:        a.Getenv,
+		Offline:       flags.offline,
+		ExtraTrustPEM: extraTrust,
+		Insecure:      flags.insecure,
+	}
+	source := fedoraMirrorsDisplayName
+	if flags.offline {
+		source = pool.RPMsDirName
+	}
+	screen := tui.FedoraBuildScreen(imageRecipe.Image.Name, imageRecipe.Image.Release, imageRecipe.Image.Arch, source, builder.FedoraPhases(flags.offline))
+	// No archive URL: the hint about an unreachable archive and --mirror is
+	// Ubuntu's.
+	if a.useFullScreen(flags.plain) {
+		return a.runBuildFullScreen(ctx, imageRecipe, options, screen, "")
+	}
+	return a.runBuildPlain(ctx, stopSignalHandling, imageRecipe, options, screen, "")
 }
 
 // runBuildPlain runs the build with progress as lines on standard error.
@@ -262,7 +326,8 @@ func (a *App) reportBuildFailure(err error, interrupted bool, archiveURL, keptWo
 		a.reportKeptWorkDir(keptWorkDir)
 		return exitUserError
 	case errors.Is(err, builder.ErrNotLinux), errors.Is(err, builder.ErrNoMmdebstrap),
-		errors.Is(err, builder.ErrNoMount),
+		errors.Is(err, builder.ErrNoMount), errors.Is(err, builder.ErrNoFedoraTool), errors.Is(err, builder.ErrMkosiVersion),
+		errors.Is(err, builder.ErrFedoraOption), errors.Is(err, builder.ErrUserNamespacesRestricted),
 		errors.Is(err, builder.ErrNoKeyring), errors.Is(err, builder.ErrBadWorkRoot),
 		errors.Is(err, builder.ErrUnwritableOutput), errors.Is(err, builder.ErrNoLock),
 		errors.Is(err, builder.ErrLockMismatch), errors.Is(err, builder.ErrPoolIncomplete),
@@ -272,7 +337,7 @@ func (a *App) reportBuildFailure(err error, interrupted bool, archiveURL, keptWo
 		return exitUserError
 	default:
 		a.reportBuildError(err, keptWorkDir)
-		if archiveURL != vendorDebsDisplayName && containsAny(err.Error(), archiveUnreachableMessages) {
+		if archiveURL != "" && archiveURL != vendorDebsDisplayName && containsAny(err.Error(), archiveUnreachableMessages) {
 			a.stderrf("frostroot: could not fetch from %s; check the network, or retry with --mirror URL\n", archiveURL)
 		}
 		a.reportKeptWorkDir(keptWorkDir)
@@ -286,7 +351,10 @@ const megabyte = 1 << 20
 // reportBuildSuccess prints what was written and how to import it.
 func (a *App) reportBuildSuccess(imageRecipe recipe.Recipe, result builder.Result) {
 	imageName := imageRecipe.Image.Name
-	relativeTarballPath := filepath.ToSlash(export.TarballRelPath(imageName, imageRecipe.Image.Release, imageRecipe.Image.Arch))
+	relativeTarballPath := filepath.ToSlash(result.TarballPath)
+	if relative, err := filepath.Rel(a.RecipeDir, result.TarballPath); err == nil {
+		relativeTarballPath = filepath.ToSlash(relative)
+	}
 	sizeSuffix := ""
 	if tarballInfo, err := os.Stat(result.TarballPath); err == nil {
 		sizeSuffix = " (" + formatMegabytes(tarballInfo.Size()) + ")"
@@ -351,21 +419,30 @@ func (a *App) reportBuildError(err error, keptWorkDir string) {
 		a.stderrf("frostroot: build failed: %v\n", err)
 		return
 	}
-	a.stderrf("frostroot: build failed: mmdebstrap failed: %v\n", bootstrapErr.Err)
+	program, logFile := bootstrapErr.Program, bootstrapErr.LogFile
+	if program == "" {
+		program, logFile = "mmdebstrap", builder.LogFileName
+	}
+	a.stderrf("frostroot: build failed: %s failed: %v\n", program, bootstrapErr.Err)
 	if keptWorkDir != "" {
-		if line, found := builder.FirstErrorLine(filepath.Join(keptWorkDir, builder.LogFileName)); found {
-			a.stderrf("frostroot: the first error in %s, line %d:\n  %s\n", builder.LogFileName, line.Number, line.Text)
+		if line, found := builder.FirstErrorLine(filepath.Join(keptWorkDir, logFile)); found {
+			a.stderrf("frostroot: the first error in %s, line %d:\n  %s\n", logFile, line.Number, line.Text)
 		}
 	}
-	a.stderrf("--- last lines of mmdebstrap output ---\n%s\n", bootstrapErr.Tail)
+	a.stderrf("--- last lines of %s output ---\n%s\n", program, bootstrapErr.Tail)
 }
 
 // reportKeptWorkDir tells the user where a kept work directory and its
-// mmdebstrap log are, if any.
+// bootstrap log are, if any: mmdebstrap's for Ubuntu, mkosi's for Fedora.
 func (a *App) reportKeptWorkDir(workDir string) {
-	if workDir != "" {
-		a.stderrf("frostroot: work directory kept at %s (mmdebstrap output in %s)\n", workDir, builder.LogFileName)
+	if workDir == "" {
+		return
 	}
+	program, logFile := "mmdebstrap", builder.LogFileName
+	if _, err := os.Stat(filepath.Join(workDir, builder.MkosiLogFileName)); err == nil {
+		program, logFile = "mkosi", builder.MkosiLogFileName
+	}
+	a.stderrf("frostroot: work directory kept at %s (%s output in %s)\n", workDir, program, logFile)
 }
 
 // validateMirrorURL applies the recipe's source URL rule to --mirror. The

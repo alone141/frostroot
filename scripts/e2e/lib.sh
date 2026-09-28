@@ -5,7 +5,8 @@
 #
 #   $FROSTROOT_E2E_ROOT, by default /var/tmp/frostroot-e2e-<uid>
 #     cache/        XDG_CACHE_HOME for every frostroot run: its work root,
-#                   cache/frostroot/build-*, and its package-index cache
+#                   cache/frostroot/build-*, its package-index cache, and
+#                   Fedora's package cache
 #     <scenario>/   one scenario's lab: recipes, locks, dist/, logs, images
 #     <scenario>.log  what scripts/e2e/run.sh printed while it ran
 #
@@ -24,9 +25,18 @@ set -uo pipefail
 
 e2eRepo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 E2E_ROOT=${FROSTROOT_E2E_ROOT:-/var/tmp/frostroot-e2e-$(id -u)}
-# The Ubuntu release the scenarios build, 24.04 unless E2E_RELEASE names
-# another: the release the runs the README records were made with.
-E2E_RELEASE=${E2E_RELEASE:-24.04}
+# The family and release the scenarios build: Ubuntu 24.04, the release the
+# runs the README records were made with, unless E2E_RELEASE names another;
+# with E2E_DISTRO=fedora, Fedora 44.
+E2E_DISTRO=${E2E_DISTRO:-ubuntu}
+case "$E2E_DISTRO" in
+ubuntu) E2E_RELEASE=${E2E_RELEASE:-24.04} ;;
+fedora) E2E_RELEASE=${E2E_RELEASE:-44} ;;
+*)
+	echo "E2E_DISTRO=$E2E_DISTRO is not a family frostroot builds: ubuntu or fedora" >&2
+	exit 2
+	;;
+esac
 e2eChecks=0
 e2eFailures=0
 e2eStatus=0
@@ -69,14 +79,39 @@ e2e_require() {
 	fi
 }
 
-# e2e_require_bootstrap ends the scenario as SKIP unless a real build can
-# run here: Linux, mmdebstrap and the Ubuntu archive keyring.
+# e2e_require_bootstrap ends the scenario as SKIP unless a real build of
+# $E2E_DISTRO can run here: for Ubuntu, mmdebstrap and the archive keyring;
+# for Fedora, mkosi, what it runs on the host, and the uid maps unless this
+# is root. frostroot's own preflight checks mkosi's version.
 e2e_require_bootstrap() {
+	if [ "$E2E_DISTRO" = fedora ]; then
+		e2e_require mkosi dnf rpm createrepo_c bwrap gzip
+		if [ "$(id -u)" -ne 0 ]; then
+			e2e_require newuidmap newgidmap
+		fi
+		return 0
+	fi
 	e2e_require mmdebstrap
 	if [ ! -e /usr/share/keyrings/ubuntu-archive-keyring.gpg ]; then
 		echo "SKIP $e2eName: needs ubuntu-keyring (sudo apt install ubuntu-keyring)"
 		exit 4
 	fi
+}
+
+# e2e_require_ubuntu ends the scenario as SKIP when E2E_DISTRO names
+# another family: what it checks, such as [certificates], Python packages or
+# capture, frostroot does for Ubuntu alone so far.
+e2e_require_ubuntu() {
+	if [ "$E2E_DISTRO" != ubuntu ]; then
+		echo "SKIP $e2eName: Ubuntu's alone so far, and E2E_DISTRO is $E2E_DISTRO"
+		exit 4
+	fi
+}
+
+# e2e_tarball NAME prints where a build of the recipe named NAME places its
+# tarball, relative to the recipe's directory.
+e2e_tarball() {
+	printf 'dist/%s-%s-%s-amd64.tar.gz' "$1" "$E2E_DISTRO" "$E2E_RELEASE"
 }
 
 # e2e_build_frostroot builds the checkout's binary into the lab: $FROSTROOT.
@@ -98,14 +133,19 @@ e2e_build_frostroot() {
 	echo "binary: $("$FROSTROOT" version | head -1)"
 }
 
-# e2e_recipe DIR NAME RELEASE "APT PACKAGES" ["PYTHON PACKAGES" ["MORE TOML"]]
-# writes DIR/frostroot.toml for a student user on UTC, the way every
-# scenario wants it, with the tables a scenario adds appended as they are.
+# e2e_recipe DIR NAME RELEASE "PACKAGES" ["PYTHON PACKAGES" ["MORE TOML"]]
+# writes DIR/frostroot.toml of $E2E_DISTRO for a student user on UTC, the
+# way every scenario wants it, with the tables a scenario adds appended as
+# they are.
 e2e_recipe() {
 	local dir=$1 name=$2 release=$3 packages=$4 python=${5:-} extra=${6:-}
 	mkdir -p "$dir"
 	{
-		printf '[image]\nname = "%s"\nrelease = "%s"\narch = "amd64"\n\n' "$name" "$release"
+		printf '[image]\nname = "%s"\n' "$name"
+		if [ "$E2E_DISTRO" != ubuntu ]; then
+			printf 'distro = "%s"\n' "$E2E_DISTRO"
+		fi
+		printf 'release = "%s"\narch = "amd64"\n\n' "$release"
 		printf '[user]\nname = "student"\nsudo = true\n\n'
 		printf '[wsl]\nsystemd = true\ndefault_user = "student"\n\n'
 		printf '[locale]\nlang = "en_US.UTF-8"\ntimezone = "UTC"\n\n'
@@ -266,6 +306,23 @@ e2e_check_no_build_trust() {
 	e2e_check "apt in the image names nothing of this lab" e2e_tree_lacks "$apt/etc/apt" "$E2E_ROOT"
 }
 
+# e2e_check_no_fedora_build_trust TARBALL is e2e_check_no_build_trust for a
+# Fedora image: the repository file, key and CA bundle frostroot hands mkosi
+# are the package manager tree's, never the image's, and dnf in the image
+# verifies TLS with its own store.
+e2e_check_no_fedora_build_trust() {
+	local tarball=$1 entries repos
+	entries=$(e2e_entries "$tarball")
+	repos=$LAB/repos-of-$(basename "$tarball")
+	e2e_unpack "$tarball" "$repos" ./etc/yum.repos.d
+	e2e_check "the image has an /etc/yum.repos.d to look in" test -d "$repos/etc/yum.repos.d"
+	e2e_check "the image has no key or CA bundle of the build's" e2e_lacks_match "$entries" '^\./etc/frostroot-(keys|trust)'
+	e2e_check "the image has no repository file of the build's" e2e_lacks "$entries" "./etc/yum.repos.d/mkosi.repo"
+	e2e_check "dnf in the image names no CA bundle" e2e_tree_lacks "$repos/etc/yum.repos.d" "sslcacert"
+	e2e_check "dnf in the image verifies TLS" e2e_tree_lacks "$repos/etc/yum.repos.d" "sslverify"
+	e2e_check "dnf in the image names nothing of this lab" e2e_tree_lacks "$repos/etc/yum.repos.d" "$E2E_ROOT"
+}
+
 # e2e_remove PATH removes a path under the e2e root, and nothing else.
 e2e_remove() {
 	local target=$1
@@ -280,7 +337,7 @@ e2e_remove() {
 	chmod -R u+rwX "$target" 2> /dev/null
 	rm -rf "$target" 2> /dev/null && return 0
 	# An interrupted mmdebstrap can leave files owned by the subordinate
-	# ids of its user namespace, which only that kind of namespace can
-	# remove.
+	# ids of its user namespace, and an unprivileged Fedora build's package
+	# cache always is, which only that kind of namespace can remove.
 	unshare --map-auto --map-root-user rm -rf "$target"
 }

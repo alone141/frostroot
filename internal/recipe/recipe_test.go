@@ -120,7 +120,7 @@ func TestValidateReportsProblem(t *testing.T) {
 		breakRecipe func(*Recipe)
 		wantMessage string
 	}{
-		{"unknown distro", func(imageRecipe *Recipe) { imageRecipe.Image.Distro = "debian" }, `unknown distro: "debian" (known: ubuntu)`},
+		{"unknown distro", func(imageRecipe *Recipe) { imageRecipe.Image.Distro = "debian" }, `unknown distro: "debian" (known: ubuntu, fedora)`},
 		{"distro in capitals", func(imageRecipe *Recipe) { imageRecipe.Image.Distro = "Ubuntu" }, "unknown distro"},
 		{"unknown release", func(imageRecipe *Recipe) { imageRecipe.Image.Release = "18.04" }, "unknown ubuntu release"},
 		{"empty release", func(imageRecipe *Recipe) { imageRecipe.Image.Release = "" }, "unknown ubuntu release"},
@@ -310,5 +310,52 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(reloaded, original) {
 		t.Fatalf("round trip =\n%+v\nwant\n%+v", reloaded, original)
+	}
+}
+
+// TestValidateFedora: a Fedora recipe names Fedora's packages, capitals
+// included, and asks for none of what frostroot builds for Ubuntu only.
+func TestValidateFedora(t *testing.T) {
+	imageRecipe, err := Load(testdataPath("fedora.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if problems := Validate(imageRecipe); len(problems) != 0 {
+		t.Fatalf("Validate(fedora.toml) = %q, want none", problems)
+	}
+	testCases := []struct {
+		name        string
+		breakRecipe func(*Recipe)
+		wantMessage string
+	}{
+		{"an Ubuntu release", func(r *Recipe) { r.Image.Release = "24.04" }, `unknown fedora release: "24.04" (known: 44)`},
+		{"a shell command for a name", func(r *Recipe) { r.Packages.Include = []string{"git; rm -rf /"} }, "Fedora package names only"},
+		{"a group", func(r *Recipe) { r.Packages.Include = []string{"@core"} }, "Fedora package names only"},
+		{"a glob", func(r *Recipe) { r.Packages.Include = []string{"python3-*"} }, "Fedora package names only"},
+		{"an option", func(r *Recipe) { r.Packages.Include = []string{"--nogpgcheck"} }, "Fedora package names only"},
+		{"a space", func(r *Recipe) { r.Packages.Include = []string{"git gcc"} }, "Fedora package names only"},
+		{"extra sources", func(r *Recipe) {
+			r.Sources = []Source{{Name: "docker", URL: "https://download.docker.com/linux/ubuntu", Key: "docker.asc"}}
+		}, "[[sources]] are apt repositories"},
+		{"python", func(r *Recipe) { r.Python = &Python{Include: []string{"requests"}} }, "[python] is for Ubuntu recipes so far"},
+		{"certificates", func(r *Recipe) { r.Certificates = &Certificates{Include: []string{"corp.pem"}} }, "[certificates] is for Ubuntu recipes so far"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			broken, err := Load(testdataPath("fedora.toml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			testCase.breakRecipe(&broken)
+			if problems := strings.Join(Validate(broken), "\n"); !strings.Contains(problems, testCase.wantMessage) {
+				t.Errorf("Validate = %q, want a problem mentioning %q", problems, testCase.wantMessage)
+			}
+		})
+	}
+	// Ubuntu keeps Debian's rule: no capitals in an apt package name.
+	ubuntu := loadValidRecipe(t)
+	ubuntu.Packages.Include = []string{"NetworkManager"}
+	if problems := strings.Join(Validate(ubuntu), "\n"); !strings.Contains(problems, "apt package names only") {
+		t.Errorf("an Ubuntu recipe with a capital in a package name: %q", problems)
 	}
 }

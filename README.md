@@ -23,6 +23,12 @@
 > every end-to-end scenario that runs without Windows, their first login
 > being the check still to make before the release. See
 > [Verification](#verification).
+>
+> **On `master`, for v0.15:** a recipe that says `distro = "fedora"` builds
+> Fedora 44 with mkosi, and `vendor` and `build --offline` rebuild it byte
+> for byte; see [Fedora](#fedora). The form does not offer Fedora yet, so
+> such a recipe is written by hand, and its first login under WSL is still
+> to be checked.
 
 ---
 
@@ -151,6 +157,21 @@ install -m 0755 frostroot-linux-amd64 ~/.local/bin/frostroot
 frostroot version
 sudo apt install mmdebstrap        # also pulls uidmap
 ```
+
+For Fedora images, on Ubuntu 24.04:
+
+```sh
+sudo apt install mkosi dnf rpm createrepo-c bubblewrap uidmap
+```
+
+frostroot drives mkosi 20.2, the version 24.04 ships, and refuses another:
+mkosi's settings and the bytes it writes change between versions. Under
+WSL that is all. On a machine that boots Ubuntu's own kernel, AppArmor lets
+a program use the user namespace it makes only when a profile of its own
+allows it, and mkosi has none (mmdebstrap has one), so build Fedora there
+with `sudo`, or lift the restriction with `sudo sysctl -w
+kernel.apparmor_restrict_unprivileged_userns=0`; frostroot says so before
+it starts.
 
 The binary is static and runs on any distribution, including Ubuntu 20.04.
 Or from source, with Go 1.27.1 or newer, the version `go.mod` names:
@@ -282,15 +303,16 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 | `frostroot edit [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back; fetches any missing source keys. The file is regenerated from the template, so your own comments in it do not survive. |
 | `frostroot capture [--root DIR] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, starting with a page of what it found and what a recipe cannot carry, writes `frostroot.toml`, the signing keys of the third-party sources it could carry and the certificate authorities the machine added under `/usr/local/share/ca-certificates`, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys and certificates; needs no root. |
 | `frostroot validate` | Checks `frostroot.toml`, including that every source's key file is there and is a key, and prints every problem. No network, no root. |
-| `frostroot build [--mirror URL] [--ca-bundle FILE \| --insecure] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-ubuntu-<release>-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. |
-| `frostroot vendor [--mirror URL] [--ca-bundle FILE \| --insecure] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, and every wheel it names into `vendor/wheels/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name, including the partial download an abandoned run leaves behind. |
-| `frostroot build --offline [--keep-work] [--plain]` | Rebuilds the image from `frostroot.lock` and `vendor/debs/`, without the archive. Fails unless the result has exactly the lock's packages. The lock is read, not written. |
+| `frostroot build [--mirror URL] [--ca-bundle FILE \| --insecure] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-<distro>-<release>-amd64.tar.gz`, such as `dist/lab-ubuntu-24.04-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. |
+| `frostroot vendor [--mirror URL] [--ca-bundle FILE \| --insecure] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, or `vendor/rpms/` for Fedora, and every wheel it names into `vendor/wheels/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name, including the partial download an abandoned run leaves behind. |
+| `frostroot build --offline [--keep-work] [--plain]` | Rebuilds the image from `frostroot.lock` and `vendor/debs/` or `vendor/rpms/`, without the network. Fails unless the result has exactly the lock's packages. The lock is read, not written. |
 | `frostroot version` | Prints the version and the commit it was built from. |
 
 All of them work on the recipe in the current directory. `--plain` asks for
 the line interface even in a terminal. `--mirror` replaces
 `http://archive.ubuntu.com/ubuntu` in all three pockets, for a local or faster
-mirror; for `vendor` it replaces the mirror recorded in the lock.
+mirror; for `vendor` it replaces the mirror recorded in the lock. A Fedora
+build refuses it: Fedora's metalinks choose its mirrors.
 `--keep-work` keeps the work directory after a successful build (it is always
 kept after a failure). `--ca-bundle` names a PEM file of certificate
 authorities to trust while fetching, for a network that inspects TLS; see
@@ -306,8 +328,8 @@ them again before their week is up.
 | Exit code | Meaning |
 |---|---|
 | 0 | success |
-| 1 | something you can fix: invalid or missing recipe, not Linux, mmdebstrap or ubuntu-keyring missing, unusable work directory, a `dist/` you cannot write to; for `vendor` and `--offline`, no lock, a lock without checksums, a recipe that changed since the lock, an incomplete `vendor/debs/` |
-| 2 | the build failed: mmdebstrap failed (unknown package, mirror unreachable), provisioning failed, the tarball could not be placed, an offline build's packages differ from the lock; for `vendor`, a download failed or a file did not match its checksum |
+| 1 | something you can fix: invalid or missing recipe, not Linux, mmdebstrap or ubuntu-keyring missing, for Fedora mkosi or a program it runs missing or an mkosi frostroot does not know, unusable work directory, a `dist/` you cannot write to; for `vendor` and `--offline`, no lock, a lock without checksums, a recipe that changed since the lock, an incomplete `vendor/debs/` or `vendor/rpms/` |
+| 2 | the build failed: mmdebstrap or mkosi failed (unknown package, mirror unreachable), provisioning failed, the tarball could not be placed, an offline build's packages differ from the lock; for `vendor`, a download failed or a file did not match its checksum |
 | 130 | interrupted with Ctrl-C; nothing is written and the work directory is kept; `vendor` keeps finished downloads |
 
 ## The recipe
@@ -315,8 +337,8 @@ them again before their week is up.
 | Field | Rules | `init` default |
 |---|---|---|
 | `image.name` | letters, digits, `.` `_` `-`; names the tarball and the WSL distro | `lab` |
-| `image.distro` | `ubuntu`, the only family so far; may be omitted, which means `ubuntu` | omitted |
-| `image.release` | `20.04`, `22.04`, `24.04` or `26.04` | `26.04`, the newest |
+| `image.distro` | `ubuntu` or `fedora` (see [Fedora](#fedora)); may be omitted, which means `ubuntu` | omitted |
+| `image.release` | `20.04`, `22.04`, `24.04` or `26.04`; for Fedora, `44` | `26.04`, the newest |
 | `image.arch` | `amd64` | `amd64` |
 | `user.name` | lowercase, digits, `_` `-`, 1 to 32 characters, not `root` | `student` |
 | `user.sudo` | `true` gives passwordless sudo; `false` gives none | `true` |
@@ -324,10 +346,10 @@ them again before their week is up.
 | `wsl.default_user` | must equal `user.name`; may be omitted | the user name |
 | `locale.lang` | e.g. `en_US.UTF-8`, `tr_TR.UTF-8`, `C.UTF-8` | `en_US.UTF-8` |
 | `locale.timezone` | e.g. `UTC`, `Europe/Istanbul`, `America/Argentina/Buenos_Aires` | `UTC` |
-| `packages.include` | apt package names only; no versions, no suites | preset plus extras |
-| `python.include` | PyPI names only; see [Python packages](#python-packages) | none |
-| `[[sources]]` | extra apt repositories; see [Third-party sources](#third-party-sources) | none |
-| `certificates.include` | PEM files beside the recipe; see [Networks that inspect TLS](#networks-that-inspect-tls) | none |
+| `packages.include` | apt package names only, or Fedora's rpm names; no versions, no suites | preset plus extras |
+| `python.include` | PyPI names only; see [Python packages](#python-packages); Ubuntu only so far | none |
+| `[[sources]]` | extra apt repositories; see [Third-party sources](#third-party-sources); Ubuntu only | none |
+| `certificates.include` | PEM files beside the recipe; see [Networks that inspect TLS](#networks-that-inspect-tls); Ubuntu only so far | none |
 
 Unknown fields are an error, so a `[package]` typo fails loudly instead of
 building an image without your packages. `locale` and `timezone` are checked
@@ -860,6 +882,78 @@ a directory. `vendor` and `build --offline` say so when they see a `go.mod`;
 build that module with `go build -mod=mod`, or keep the recipe in a
 directory of its own.
 
+## Fedora
+
+A recipe that says `distro = "fedora"` builds Fedora 44:
+
+```toml
+[image]
+name = "fedora-lab"
+distro = "fedora"
+release = "44"
+arch = "amd64"
+
+[user]
+name = "student"
+sudo = true
+
+[wsl]
+systemd = true
+default_user = "student"
+
+[locale]
+lang = "tr_TR.UTF-8"
+timezone = "Europe/Istanbul"
+
+[packages]
+include = ["git", "gcc", "NetworkManager-tui"]
+```
+
+The form does not offer Fedora yet, `edit` refuses such a recipe, and
+`capture` describes Ubuntu systems only, so write the recipe by hand;
+`frostroot validate` checks it, rpm names included. `[[sources]]`, `[python]` and `[certificates]` are Ubuntu's alone
+so far, and so is `--mirror`: Fedora's metalinks choose its mirrors, over
+HTTPS.
+
+mkosi builds the image, with the host packages under [Install](#install).
+It first makes a small Fedora tools tree with the host's dnf, then installs
+the image with that tree's dnf5 and rpm in a user namespace, as mmdebstrap
+does for Ubuntu, and writes the tar. The image holds a lean WSL base
+(systemd, sudo, dnf5, the core command-line tools, `curl`, `man-db`,
+`tzdata`, `ca-certificates`), the recipe's packages with their weak
+dependencies, the glibc langpack of the recipe's locale, and the user, in
+`wheel` and with passwordless sudo through `/etc/sudoers.d/90-frostroot`,
+`wsl.conf`, the locale and the timezone.
+Every package is checked against Fedora 44's signing key, which frostroot
+carries, pinned by its fingerprint: no build fetches a key.
+
+The lock records every package's epoch, version, release and arch, its
+file's SHA-256, size and path, the repository it came from (`fedora` or
+`updates`), the source rpm it was built from, and dnf5's reason for it:
+`User`, `Dependency` or `Weak Dependency`. It records the tools tree's
+packages the same way, because their versions are part of the image's
+bytes.
+
+`vendor` fetches both into `vendor/rpms/` from Fedora's server. An update
+the repository has since replaced comes from Koji, Fedora's build system,
+which keeps every build, signed with the release's key; the checksum
+decides, as for Ubuntu. `build --offline` stages the files as local
+repositories under their online names, makes the tools tree and the image
+from them alone, puts dnf5's reasons back as the lock has them, and
+compares both with the lock. Two offline rebuilds of one lock are the same
+bytes, with or without root; measured here, so was an online build at the
+lock's instant, though that is not promised.
+
+Downloads stay in a package cache under the work root,
+`/var/tmp/frostroot-<uid>/fedora-packages` by default, so the next build
+fetches only what changed. Built as yourself, that cache belongs to the
+subordinate ids of mkosi's user namespace, which `rm -rf` cannot remove;
+this can:
+
+```sh
+unshare --map-auto --map-root-user rm -rf /var/tmp/frostroot-$(id -u)/fedora-packages
+```
+
 ## What is in the image
 
 - Ubuntu `--variant=important` plus your packages, with **Recommends on**, so
@@ -1021,13 +1115,13 @@ packages that come from them (v0.12), `--insecure` for a network whose
 certificate authority nobody has, with the lock recording what it could not
 verify (v0.13), and Ubuntu 26.04, which new recipes now start on (v0.14).
 
-**Deliberately not yet:** Fedora or any non-Ubuntu family · flat or unsigned
-apt repositories · npm and cargo lockfiles · Python source distributions ·
-bare-metal disk or ISO images · a native Windows binary · architectures other
-than amd64.
+**Deliberately not yet:** families other than Ubuntu and Fedora · flat or
+unsigned apt repositories · npm and cargo lockfiles · Python source
+distributions · bare-metal disk or ISO images · a native Windows binary ·
+architectures other than amd64.
 
-Each exclusion has a door left open in the design. Adding Fedora means a new
-`internal/distro` implementation, not a rewrite.
+Each exclusion has a door left open in the design. Fedora went in behind a
+seam in the builder that another family can use too.
 
 ## Verification
 
@@ -1077,8 +1171,14 @@ environment and its `profile.d` line are in the tarball, that nothing the
 Python step used was left in the image, and that two offline rebuilds have
 one SHA-256. A fourth gives mmdebstrap a `mount` that does not run, and
 requires the build to stop before any package is downloaded and fail as
-the user's to fix. They need Linux, mmdebstrap, ubuntu-keyring, network, and
-user namespaces or root, and take about twenty minutes.
+the user's to fix. Two more build Fedora 44 with mkosi: one inspects the
+tarball as the Ubuntu ones do, and the lock, which records dnf5's reason and
+repository for every package and the tools tree's packages too; the other
+vendors a build from Fedora's server, rebuilds it offline twice, and
+requires one SHA-256, the lock's reasons in the image, and no dnf5 log.
+They need Linux, mmdebstrap, ubuntu-keyring, mkosi 20.2 with dnf, rpm,
+createrepo_c and bubblewrap, network, and user namespaces or root, and take
+about twenty-five minutes.
 
 The [end-to-end scenarios](scripts/e2e/README.md) go further, and each ends
 in a verdict of its own. They check that two offline rebuilds with Python
@@ -1358,6 +1458,38 @@ passed every required test but `TestIntegrationPython`, whose pip refused
 PyPI's re-signed certificate as before; CI ran all seven to a pass on
 16b2307.
 
+Then Fedora 44 itself, in the second pull request, from a recipe of `git`
+in `tr_TR.UTF-8` written by hand. Built online, it took 69 s as root and
+76 s as uid 1001 from a warm cache, and wrote a lock of 268 packages (28
+`User`, 209 `Dependency` and 31 `Weak Dependency`) and a tools tree of 122.
+The image had the user in `wheel`, the sudoers drop-in 0440, `wsl.conf`,
+`LANG=tr_TR.UTF-8`, the timezone, `sudo` setuid and the journal setgid,
+and a gzip header without a time. `vendor` fetched its 271 files, 120 MB,
+in 8 s. Two offline rebuilds as root under `unshare --net` and one as uid
+1001, each about a minute, wrote one SHA-256, `5f62096b…45b9`, and an
+online build at the lock's instant wrote the same lock, byte for byte, and
+the same tarball; the uid 1001 build left nothing in its work root. The
+first two rebuilds had differed, in a `/var/log/dnf5.log` the finalize
+script's own dnf5 queries left in the image, and the pull request removes
+it. With `E2E_DISTRO=fedora`, `failed-build` passed its 7 checks, dnf5's
+own explanation printed first; `offline-identical` its 10 as root and as
+uid 1001, the second rebuild with `MKOSI_DNF=dnf` set; and
+`no-build-leaks` its 15, a plain build and one with `--ca-bundle` and
+`--insecure` writing one lock and one image. With Ubuntu, `failed-build`,
+`no-build-leaks` and `harness` passed again after the scenarios' library
+changed. `TestIntegrationFedoraTiny` and
+`TestIntegrationFedoraOfflineRebuild` passed here as root and as uid 1001.
+Their first run in CI failed in mkosi's user namespace: Ubuntu's kernels
+let a program use the one it makes only when an AppArmor profile of its
+own allows it, and mkosi, unlike mmdebstrap, has none. frostroot now
+refuses such a host with the two ways out, and CI lifts the restriction to
+be what WSL is; CI then ran all nine required tests to a pass as an
+unprivileged user on f883de0, the two Fedora ones in 104 s and 172 s.
+Each change is pinned by a test that fails with it broken, run with
+`scripts/mutate.sh` and recorded in the commits, and `scripts/check.sh`
+ran every step. A Fedora image's first login, `wsl-boot` with
+`E2E_DISTRO=fedora`, needs Windows and is still to run.
+
 
 ## Documentation
 
@@ -1403,9 +1535,9 @@ internal/sources/   the catalog of third-party repositories, PPAs, and fetching 
 internal/pgp/       OpenPGP public keys: armor, the fingerprint of every primary key; nothing else
 internal/tui/       the full-screen form with its package picker, and the progress screen (the only package using the Charm libraries)
 internal/recipe/    frostroot.toml and frostroot.lock: types, strict parsing, validation
-internal/distro/    the families frostroot builds, and Ubuntu's releases, archive URL, components, the three pocket lines
-internal/builder/   orchestration and what depends on the family; for Ubuntu, the mmdebstrap runner and progress parser, provisioning, the Python step, dpkg status, lock checksums, offline builds
-internal/pool/      the vendored pools: manifests from the lock, verify, fetch, prune, stage as a flat repository or a directory of wheels
+internal/distro/    the families frostroot builds: Ubuntu's releases, archive URL, components and pocket lines, and Fedora's releases, repositories and signing key
+internal/builder/   orchestration and what depends on the family; for Ubuntu, the mmdebstrap runner and progress parser, provisioning, the Python step, dpkg status, lock checksums, offline builds; for Fedora, the mkosi runner, its configuration and scripts, the tools tree, the lock from dnf5's records, and the local repositories of an offline build
+internal/pool/      the vendored pools: manifests from the lock, verify, fetch (with Launchpad's and Koji's fallbacks), prune, stage as a flat repository or a directory of files
 internal/deb/       Debian formats: control stanzas, Packages indexes, .deb control files, flat repository index
 internal/export/    tarball naming and atomic placement
 testdata/           recipe fixtures

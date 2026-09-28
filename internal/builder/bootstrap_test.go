@@ -322,11 +322,11 @@ func TestMmdebstrapRunRefusesUnreachableWorkDir(t *testing.T) {
 
 func TestCheckReachableFromUserNamespace(t *testing.T) {
 	notCreatedYet := filepath.Join(createReachableDir(t), "not", "created", "yet")
-	if err := checkReachableFromUserNamespace(notCreatedYet); err != nil {
+	if err := checkReachableFromUserNamespace("mmdebstrap", notCreatedYet); err != nil {
 		t.Errorf("missing components are created 0755 later, so they are fine: %v", err)
 	}
 	unreachableDir := createUnreachableDir(t)
-	err := checkReachableFromUserNamespace(filepath.Join(unreachableDir, "frostroot"))
+	err := checkReachableFromUserNamespace("mmdebstrap", filepath.Join(unreachableDir, "frostroot"))
 	if !errors.Is(err, ErrBadWorkRoot) || !strings.Contains(err.Error(), unreachableDir) {
 		t.Errorf("error = %v, want ErrBadWorkRoot naming %s", err, unreachableDir)
 	}

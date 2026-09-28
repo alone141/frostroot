@@ -14,7 +14,7 @@ import (
 type familyBuild interface {
 	// preflight takes the build's work root and frozen instant, and checks
 	// the host before any work directory exists.
-	preflight(workRoot string, instant frozenInstant) error
+	preflight(ctx context.Context, workRoot string, instant frozenInstant) error
 	// bootstrap installs the image in workDir, reads what it installed, and
 	// returns the path of the tarball it wrote there.
 	bootstrap(ctx context.Context, workDir string) (tarballPath string, err error)
@@ -34,10 +34,9 @@ type packageCounts struct {
 // newFamilyBuild returns the part of a build that depends on imageRecipe's
 // family, and for an offline build the plan it rebuilds from; everything a
 // build will trust is read by then.
-func (b *Builder) newFamilyBuild(imageRecipe recipe.Recipe, options Options, progress Progress) (familyBuild, *offlinePlan, error) {
-	if _, err := distro.FamilyOf(imageRecipe.Image.Distro); err != nil {
-		return nil, nil, err
+func (b *Builder) newFamilyBuild(family distro.Family, imageRecipe recipe.Recipe, options Options, progress Progress) (familyBuild, *offlinePlan, error) {
+	if family == distro.Fedora {
+		return newFedoraBuild(b.Fedora, imageRecipe, options, progress)
 	}
-	// Ubuntu is the only family so far.
 	return newUbuntuBuild(b.Bootstrapper, imageRecipe, options, progress)
 }
