@@ -37,7 +37,7 @@ three releases already supported.
   offline from one, and found no change it needs.
 - The preflight check for a build host without `mount`, which the spike
   found silently degrades an image. It is not 26.04's, and it is a change
-  of its own.
+  of its own: #102.
 - The first boot under WSL cannot run in the spike's container: `wsl-boot`
   needs `wsl.exe`. It is the owner's check on Windows before the release,
   as the README asks of every release.

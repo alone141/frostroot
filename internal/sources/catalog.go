@@ -45,6 +45,11 @@ type Entry struct {
 // On 2026-09-19 every KeyURL was fetched again and its primary keys counted,
 // because the pin is now the whole set: seven serve exactly the one key
 // already named here, and github-cli serves two.
+//
+// On 2026-09-28 every entry was checked for 26.04: the five that follow the
+// release's code name publish an InRelease for resolute, the other three
+// use one suite for every release, and init fetched all eight keys against
+// these pins.
 var catalog = []Entry{
 	{
 		Name: "deadsnakes", Title: "deadsnakes PPA", Description: "newer and older Python versions (python3.12, python3.13...)", Category: "Languages",
@@ -69,9 +74,10 @@ var catalog = []Entry{
 	{
 		Name: "github-cli", Title: "GitHub CLI", Description: "the gh command", Category: "Tools",
 		URL: "https://cli.github.com/packages", Suite: "stable", KeyURL: "https://cli.github.com/packages/githubcli-archive-keyring.gpg",
-		// GitHub's keyring holds two primary keys: the one it has signed with
-		// since 2022 and a second added 2026-04-07. Both are named, because
-		// both are in the file that becomes the signed-by keyring.
+		// GitHub's keyring holds two primary keys: one from 2022, which
+		// expired on 2026-09-05, and one added on 2026-04-07, which the
+		// repository signs with now. Both are named, because both are in the
+		// file that becomes the signed-by keyring.
 		Fingerprints: []string{
 			"2C6106201985B60E6C7AC87323F3D4EA75716059",
 			"7F38BBB59D064DBCB3D84D725612B36462313325",

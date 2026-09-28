@@ -56,9 +56,10 @@ const ImageTrustPath = "/etc/ssl/certs/ca-certificates.crt"
 // checksums and URLs come from. Installing one pinned pip first means a
 // recipe resolves the same way on every release, and it is pinned by
 // checksum for the same reason a source's signing key is: the file decides,
-// not the server. It supports Python 3.8 and up, which covers all three
-// releases. The environment keeps it, so the lock records it like any other
-// package and vendor fetches it like any other wheel.
+// not the server. It supports Python 3.8 and up, which covers every
+// supported release, from 20.04's 3.8 to 26.04's 3.14. The environment keeps
+// it, so the lock records it like any other package and vendor fetches it
+// like any other wheel.
 var PinnedPip = recipe.LockPyPI{
 	Name:     "pip",
 	Version:  "24.3.1",

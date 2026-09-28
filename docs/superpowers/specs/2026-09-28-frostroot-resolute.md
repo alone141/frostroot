@@ -188,7 +188,7 @@ in CI, and the documentation.
 
 ## Found along the way
 
-These are not 26.04's, and none of them is changed here.
+These are not 26.04's. The first is left for its own change.
 
 - **A build host without `mount`.** The first 26.04 build host was a
   minimal root without it. mmdebstrap printed `cannot execute mount`,
@@ -196,8 +196,8 @@ These are not 26.04's, and none of them is changed here.
   came out without systemd's catalog, its tmpfiles directories and a real
   `hwdb.bin`, while frostroot reported success. A real installation ships
   `mount`; a stripped container used as a build host might not. A
-  preflight check is a candidate for a later change.
-- **The GitHub CLI key's comment.** `internal/sources/catalog.go` says
+  preflight check is issue #102, a change of its own.
+- **The GitHub CLI key's comment.** `internal/sources/catalog.go` said
   GitHub signs with its 2022 key; the repository signs with the 2026 key,
   and the 2022 key expired on 2026-09-05. Both are pinned, so nothing
-  breaks.
+  broke; the comment is corrected with this change.
