@@ -7,7 +7,9 @@ were laid out; the spike below ran the same day without changing
 frostroot's code; and the owner then answered the decisions at the end:
 lab images for WSL, mkosi with a Fedora tools tree, byte-identical offline
 rebuilds from the first version, Fedora in the form from the first
-version, and the seam first, as a pull request of its own. The tasks are in
+version, and the seam first, as a pull request of its own; after the seam
+merged, the offline path was measured and the owner chose a lean WSL base
+over `@core`. The tasks are in
 [`2026-09-28-frostroot-fedora.md`](../plans/2026-09-28-frostroot-fedora.md).
 Extends: [`2026-09-14-frostroot-design.md`](2026-09-14-frostroot-design.md)
 (the extension point "Fedora / other families"),
@@ -161,12 +163,60 @@ things to decide: `/var/lib/libdnf5/system-repo.lock`, a lock file left
 behind, and `/etc/resolv.conf`, a link into systemd-resolved's stub where
 WSL writes its own.
 
-**Not measured yet.** An offline build from a local package set (mkosi's
-`--package-directory` with the network repositories off), a first boot
-under WSL (`wsl-boot`, on Windows), gzip output for `wsl --import`, the
-POSIX ACLs systemd-tmpfiles sets on `/var/log/journal` (this host's tar
-could not apply them on extract) as WSL imports them, a cold tools tree,
-and Ubuntu 26.04's newer mkosi.
+**Offline, from a vendored set (measured after the seam merged, the same
+day).** The spike's tools tree, with `createrepo_c` 1.2.1 added, and
+mkosi 20.2, as root:
+
+- An online build of `systemd`, `sudo`, `passwd`, `glibc-langpack-en`,
+  `git` and `dnf5`, weak dependencies on, documentation kept, frozen at
+  1790600000, took 31 s from a warm cache and left 253 entries in rpm's
+  database: 252 packages and `gpg-pubkey-36f612dc…`, the key rpm imported,
+  dated at the frozen instant and no package file. dnf5 recorded each
+  package's reason in `packages.toml`, three of them, not two: 7 `User`,
+  212 `Dependency` and 33 `Weak Dependency`; and each package's
+  repository in `nevras.toml` (`fedora` or `updates`).
+- The 252 `.rpm` files, copied from mkosi's package cache into a
+  directory, got their repository metadata from the tools tree's
+  `createrepo_c` under bubblewrap, without network, in 0.3 s. Two builds
+  from it under `unshare --net`, each with a fresh cache, every package
+  asked for by name and the Fedora key still checking every package, took
+  26 s each and wrote the same tar: 22,061 entries, one SHA-256. Their
+  `.tar.gz` files differed only in gzip's header, which records the time
+  when mkosi compresses a stream (`gzip --fast --stdout -`); the tools
+  tree's `gzip -n` compressed that tar to one SHA-256 twice.
+- Against the online image, such an offline tar differed in two files
+  only, dnf5's `packages.toml` and `nevras.toml`: the packages asked for
+  by name were `User`, 246 of them, all but the 6 that mkosi's first step
+  (`filesystem` alone) had brought in, and all came from one repository.
+  With the files
+  vendored per repository, each given its own metadata and its online
+  repository's name, and `packages.toml` put back as the online build
+  wrote it, the offline tar was byte-identical to the online one:
+  `ececaee9…4329` for both, the rpm database and its install times
+  included.
+
+Three things the spike did not expect. mkosi removes a package manager's
+database from an image that lacks the package manager, so an image
+without dnf5 has no rpm database at all; `CleanPackageMetadata=no` and
+dnf5 in every image prevent it. mkosi fetched `fedora.gpg` from
+fedoraproject.org during the build, its fallback when the key is in
+neither the tools tree nor the package manager tree; frostroot supplies
+the pinned key in its own package manager tree, so `build` still never
+fetches a key. And reading rpm's database recreates the SQLite side files,
+so a script reads it first and removes them last.
+
+**The base set.** `@core` with `glibc-langpack-en`, `dnf5` and `sudo` came
+to 367 packages and 599 MiB uncompressed, among them NetworkManager,
+firewalld, the SELinux policy, sssd, openssh-server, audit, dracut,
+plymouth, polkit, avahi and zram-generator. A list of what a WSL lab uses
+(systemd, sudo, dnf5, the core command-line tools, `curl`, `man-db`,
+`tzdata`, `ca-certificates`) came to 188 packages and 347 MiB. The owner
+chose the second (decision 6).
+
+**Not measured yet.** A first boot under WSL (`wsl-boot`, on Windows),
+the POSIX ACLs systemd-tmpfiles sets on `/var/log/journal` (this host's
+tar could not apply them on extract) as WSL imports them, a cold tools
+tree, an unprivileged offline build, and Ubuntu 26.04's newer mkosi.
 
 ## Proposed design
 
@@ -206,17 +256,27 @@ change the bytes the way mmdebstrap's do, so the lock records them and
 `vendor` keeps the tools tree's packages too, which makes an offline
 rebuild independent of what the archive holds a year later.
 
-After the install, in mkosi's post-installation hook: remove dnf5's
-transaction history, `rpmdb.sqlite-shm`, ldconfig's aux-cache,
-`/var/lib/libdnf5/system-repo.lock` and the build's resolver file. The
-build runs with umask 022 whatever the caller's. Weak dependencies are
-installed, as Fedora's dnf does and as frostroot's Ubuntu builds install
-recommends.
+frostroot hands mkosi a package manager tree of its own: the
+repositories, each with the pinned key file beside it, so that mkosi
+never writes its own or fetches a key. mkosi writes an uncompressed tar,
+and the tools tree's `gzip -n` compresses it, because mkosi's own gzip
+stamps the header with the time. Every image holds dnf5, and
+`CleanPackageMetadata=no` keeps rpm's database and dnf5's state.
+
+After the install, in mkosi's finalize script: read what rpm installed and
+what dnf5 recorded, then remove dnf5's transaction history, rpm's and the
+history's SQLite side files, ldconfig's aux-cache, dnf5's
+`system-repo.lock` and the build's resolver file. The build runs with
+umask 022 whatever the caller's. Weak dependencies are installed, as
+Fedora's dnf does and as frostroot's Ubuntu builds install recommends,
+and documentation is kept, as on Ubuntu.
 
 ### The recipe
 
 `[image] distro = "fedora"`, `release = "44"`, `arch = "amd64"` (written
-`x86_64` wherever rpm reads it). A recipe without `distro` is Ubuntu. The
+`x86_64` wherever rpm reads it). A recipe without `distro` is Ubuntu. A
+Fedora image starts from frostroot's lean WSL base (decision 6), and the
+recipe's `[packages]` add to it. The
 rest of the recipe keeps its meaning; on Fedora `sudo = true` puts the user
 in `wheel` with passwordless sudo, and `[locale] lang` installs
 `glibc-langpack-<language>`. A new recipe field needs a form field, a
@@ -258,9 +318,10 @@ version, so a Fedora image never needs its recipe written by hand.
 Fedora lock says `distro = "fedora"`, the release, the repositories
 actually used (URL and key checksum, as `LockRepository` does), and for
 every package its name, epoch-version-release, rpm architecture, SHA-256,
-size, location below its repository and whether dnf5 installed it as a
-dependency. A lock is still read as hostile input, and one that mixes
-families is refused.
+size, the repository it came from, its location below that repository and
+the reason dnf5 recorded for it: `User`, `Dependency` or `Weak
+Dependency`. The key rpm imports (`gpg-pubkey`) is not a package. A lock
+is still read as hostile input, and one that mixes families is refused.
 
 ### Trust
 
@@ -275,11 +336,16 @@ families is refused.
 ### vendor and build --offline
 
 `vendor` downloads each locked `.rpm` from its repository and checks its
-SHA-256 before renaming it into `vendor/rpms/`. `build --offline` hands
-mkosi that directory with the network repositories off, the lock's
-instant as `SOURCE_DATE_EPOCH`, and the lock's dependency marks to
-restore. Two offline builds of one lock must be byte-identical, and the
-first task of the implementation measures it.
+SHA-256 before renaming it into `vendor/rpms/<repository>/`. `build
+--offline` gives each of those directories its metadata with the tools
+tree's `createrepo_c` and hands mkosi one local repository per directory,
+under the online repository's name, with the network repositories off, the
+key still checking every package, every locked package asked for by name,
+the lock's instant as `SOURCE_DATE_EPOCH`, and dnf5's reasons put back
+from the lock. Two offline builds of one lock must be byte-identical, as
+on Ubuntu; the offline measurement above found them so, and found them
+byte-identical with the online build too, which frostroot measures but
+does not promise.
 
 ## Risks
 
@@ -318,3 +384,8 @@ first task of the implementation measures it.
    `internal/index`, and more frames to record and read.
 5. **The seam first**, as a pull request of its own that changes no byte
    of any Ubuntu image, then Fedora.
+6. **A Fedora image starts from a lean WSL base** (answered after the
+   seam merged): systemd, sudo, dnf5 and the core command-line tools, 188
+   packages and 347 MiB, rather than `@core`'s 367 and 599 MiB, whose
+   NetworkManager, firewalld, zram swap and sshd a WSL distribution does
+   not use and partly fights. The cost is a list frostroot keeps.
