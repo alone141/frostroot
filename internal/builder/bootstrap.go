@@ -134,12 +134,18 @@ func (m *Mmdebstrap) Run(ctx context.Context, spec BootstrapSpec) error {
 // command line can print the line that explains the failure before the
 // tail rather than after it; Error renders both, for everyone else.
 type BootstrapError struct {
-	Err  error
-	Tail string // the last errorTailBytes of output, from a line boundary
+	Err     error
+	Tail    string // the last errorTailBytes of output, from a line boundary
+	Program string // what produced the output; "" is mmdebstrap
+	LogFile string // the log in the work directory holding all of it; "" is LogFileName
 }
 
 func (e *BootstrapError) Error() string {
-	return fmt.Sprintf("mmdebstrap failed: %v\n--- last lines of mmdebstrap output ---\n%s", e.Err, e.Tail)
+	program := e.Program
+	if program == "" {
+		program = "mmdebstrap"
+	}
+	return fmt.Sprintf("%s failed: %v\n--- last lines of %s output ---\n%s", program, e.Err, program, e.Tail)
 }
 
 func (e *BootstrapError) Unwrap() error { return e.Err }

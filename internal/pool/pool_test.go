@@ -228,7 +228,9 @@ func TestManifestRefusals(t *testing.T) {
 	duplicate.Packages[1].Name = "curl-copy"
 	// Another family's lock names another family's files.
 	otherFamily := lockFor(entryFor("curl", "1"))
-	otherFamily.Distro = "fedora"
+	otherFamily.Distro = "debian"
+	fedoraLock := lockFor(entryFor("curl", "1"))
+	fedoraLock.Distro = "fedora"
 	testCases := []struct {
 		name      string
 		lock      recipe.Lockfile
@@ -236,6 +238,7 @@ func TestManifestRefusals(t *testing.T) {
 	}{
 		{name: "format version 2", lock: version2, wantError: ErrBadLock},
 		{name: "another family", lock: otherFamily, wantError: ErrBadLock},
+		{name: "a Fedora lock, until vendor fetches rpms", lock: fedoraLock, wantError: ErrBadLock},
 		{name: "frostroot 0.3 lock", lock: oldLock, wantError: ErrNoChecksums},
 		{name: "two packages with one file name", lock: duplicate, wantError: ErrBadLock},
 	}

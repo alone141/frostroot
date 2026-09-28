@@ -149,3 +149,128 @@ func TestMkosiVersion(t *testing.T) {
 		}
 	}
 }
+
+// TestMkosiRunMakesToolsTreeThenImageThenCompresses: the order, the command
+// lines, the umask, and gzip's output going into the tarball.
+func TestMkosiRunMakesToolsTreeThenImageThenCompresses(t *testing.T) {
+	workDir := t.TempDir()
+	spec := FedoraSpec{
+		WorkDir:         workDir,
+		ToolsConfigDir:  filepath.Join(workDir, "mkosi-tools"),
+		ImageConfigDir:  filepath.Join(workDir, "mkosi-image"),
+		CacheDir:        filepath.Join(workDir, "cache"),
+		ToolsOutputDir:  filepath.Join(workDir, "tools"),
+		ToolsRecordPath: filepath.Join(workDir, "tools.installed"),
+		ImageOutputDir:  filepath.Join(workDir, "image"),
+		SourceDateEpoch: 1790600000,
+		TarballPath:     filepath.Join(workDir, "image.tar.gz"),
+	}
+	var phases []string
+	spec.Progress = ProgressFunc(func(event ProgressEvent) {
+		if event.Kind == EventPhaseStarted {
+			phases = append(phases, event.Phase.Title())
+		}
+	})
+	var commands [][]string
+	run := func(_ context.Context, program string, args, _ []string, stdout, _ io.Writer) error {
+		commands = append(commands, append([]string{program}, args...))
+		switch program {
+		case "sh":
+			// The tools tree's build prints markers of its own, which
+			// must not move the image's phases.
+			if slices.Contains(args, "--directory="+spec.ToolsConfigDir) && slices.Contains(args, "build") {
+				_, _ = io.WriteString(stdout, "Running transaction\n‣  Creating tar archive /z…\n")
+				// The finalize script's record, in mkosi's output directory.
+				if err := os.MkdirAll(spec.ToolsOutputDir, 0o755); err != nil {
+					return err
+				}
+				if err := os.WriteFile(filepath.Join(spec.ToolsOutputDir, "tools.installed"), []byte("dnf5|0|5.4.6.0|1.fc44|x86_64|x\n"), 0o644); err != nil {
+					return err
+				}
+			}
+			if slices.Contains(args, "--directory="+spec.ImageConfigDir) {
+				_, _ = io.WriteString(stdout, "‣  Installing Fedora\nRunning transaction\n‣  Running postinstall script /x…\n‣  Creating tar archive /y…\n")
+			}
+		case "gzip":
+			_, _ = io.WriteString(stdout, "compressed")
+		}
+		return nil
+	}
+	if err := (&Mkosi{RunCommand: run}).Run(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if len(commands) != 4 {
+		t.Fatalf("ran %d commands, want mkosi twice, gzip, and mkosi's clean:\n%q", len(commands), commands)
+	}
+	wantClean := []string{"sh", "-c", `umask 022 && exec mkosi "$@"`, "mkosi", "--directory=" + spec.ToolsConfigDir, "--output-dir=" + spec.ToolsOutputDir, "-f", "clean"}
+	if !slices.Equal(commands[3], wantClean) {
+		t.Errorf("last command =\n%q\nwant mkosi removing the tools tree\n%q", commands[3], wantClean)
+	}
+	wantTools := []string{"sh", "-c", `umask 022 && exec mkosi "$@"`, "mkosi",
+		"--directory=" + spec.ToolsConfigDir,
+		"--package-manager-tree=" + filepath.Join(spec.ToolsConfigDir, fedoraPackageManagerTree),
+		"--cache-dir=" + spec.CacheDir,
+		"--output-dir=" + spec.ToolsOutputDir,
+		"--finalize-script=" + filepath.Join(spec.ToolsConfigDir, fedoraFinalizeName),
+		"--force", "build"}
+	if !slices.Equal(commands[0], wantTools) {
+		t.Errorf("tools tree command =\n%q\nwant\n%q", commands[0], wantTools)
+	}
+	for _, want := range []string{
+		"--tools-tree=" + filepath.Join(spec.ToolsOutputDir, "tools"),
+		"--source-date-epoch=1790600000",
+		"--postinst-script=" + filepath.Join(spec.ImageConfigDir, fedoraProvisionName),
+		"--finalize-script=" + filepath.Join(spec.ImageConfigDir, fedoraFinalizeName),
+	} {
+		if !slices.Contains(commands[1], want) {
+			t.Errorf("image command lacks %q:\n%q", want, commands[1])
+		}
+	}
+	if want := []string{"gzip", "-n", "-c", filepath.Join(spec.ImageOutputDir, "image.tar")}; !slices.Equal(commands[2], want) {
+		t.Errorf("gzip command = %q, want %q: -n, so that the header carries no name and no time", commands[2], want)
+	}
+	if content, err := os.ReadFile(spec.TarballPath); err != nil || string(content) != "compressed" {
+		t.Errorf("tarball = %q, %v; want gzip's output", content, err)
+	}
+	if want := []string{"Make the tools tree", "Download packages", "Install requested packages", "Provision user, locale and timezone", "Create tarball"}; !slices.Equal(phases, want) {
+		t.Errorf("phases started = %q, want %q", phases, want)
+	}
+	if record, err := os.ReadFile(spec.ToolsRecordPath); err != nil || !strings.HasPrefix(string(record), "dnf5|") {
+		t.Errorf("the tools record = %q, %v; want it moved out of what mkosi's clean removes", record, err)
+	}
+	if log, err := os.ReadFile(filepath.Join(workDir, MkosiLogFileName)); err != nil || !strings.Contains(string(log), "Running transaction") {
+		t.Errorf("mkosi.log = %q, %v; want mkosi's output", log, err)
+	}
+}
+
+func TestMkosiRunFailureCarriesMkosisOwnWords(t *testing.T) {
+	workDir := t.TempDir()
+	spec := FedoraSpec{WorkDir: workDir, CacheDir: filepath.Join(workDir, "c"), ToolsOutputDir: filepath.Join(workDir, "t"), ImageOutputDir: filepath.Join(workDir, "i"), TarballPath: filepath.Join(workDir, "image.tar.gz")}
+	run := func(_ context.Context, program string, _, _ []string, stdout, _ io.Writer) error {
+		_, _ = io.WriteString(stdout, "No match for argument: gti\nFailed to resolve the transaction:\n")
+		return errors.New("exit status 1")
+	}
+	var cleaned bool
+	failing := run
+	run = func(ctx context.Context, program string, args, environment []string, stdout, stderr io.Writer) error {
+		if slices.Contains(args, "clean") {
+			cleaned = true
+			return nil
+		}
+		return failing(ctx, program, args, environment, stdout, stderr)
+	}
+	err := (&Mkosi{RunCommand: run}).Run(context.Background(), spec)
+	if !cleaned {
+		t.Error("a failed build left the tools tree for the user, who cannot remove it")
+	}
+	var bootstrapErr *BootstrapError
+	if !errors.As(err, &bootstrapErr) || bootstrapErr.Program != "mkosi" || bootstrapErr.LogFile != MkosiLogFileName || !strings.Contains(bootstrapErr.Tail, "No match for argument: gti") {
+		t.Fatalf("Run = %#v, want a BootstrapError from mkosi carrying its output", err)
+	}
+	if !strings.Contains(err.Error(), "mkosi failed: mkosi could not make the tools tree") {
+		t.Errorf("error = %v", err)
+	}
+	if line, found := FirstErrorLine(filepath.Join(workDir, MkosiLogFileName)); !found || line.Text != "No match for argument: gti" {
+		t.Errorf("FirstErrorLine = %+v, %v; want dnf's own explanation", line, found)
+	}
+}

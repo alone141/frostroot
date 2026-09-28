@@ -72,8 +72,12 @@ func Manifest(lock recipe.Lockfile) ([]Entry, error) {
 	}
 	// Only an Ubuntu lock names .deb files, and a lock that names no family
 	// is Ubuntu's, as a recipe that names none is.
-	if _, err := distro.FamilyOf(lock.Distro); err != nil {
+	family, err := distro.FamilyOf(lock.Distro)
+	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBadLock, err)
+	}
+	if family != distro.Ubuntu {
+		return nil, fmt.Errorf("%w: vendor does not fetch a %s lock's packages yet", ErrBadLock, family)
 	}
 	if !lock.HasChecksums() {
 		return nil, ErrNoChecksums

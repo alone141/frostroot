@@ -59,6 +59,26 @@ func TestEditKeepsTheRecipeFamily(t *testing.T) {
 	}
 }
 
+// TestEditRefusesAFedoraRecipe: the form knows Ubuntu's releases and
+// packages only, and would give a Fedora recipe one of each.
+func TestEditRefusesAFedoraRecipe(t *testing.T) {
+	recipeDir := newRecipeDir(t, "fedora.toml")
+	before, err := os.ReadFile(filepath.Join(recipeDir, "frostroot.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exitCode, _, stderr, prompt := runEditWithAnswers(recipeDir, nil)
+	if exitCode != exitUserError || !strings.Contains(stderr, "edit does not know Fedora recipes yet") {
+		t.Errorf("exit code = %d, stderr %q", exitCode, stderr)
+	}
+	if len(prompt.questionsAsked) != 0 {
+		t.Errorf("asked %d questions of a recipe it cannot edit", len(prompt.questionsAsked))
+	}
+	if after, err := os.ReadFile(filepath.Join(recipeDir, "frostroot.toml")); err != nil || string(after) != string(before) {
+		t.Errorf("the recipe changed: %v", err)
+	}
+}
+
 func TestEditPreselectsCurrentValues(t *testing.T) {
 	recipeDir := newRecipeDir(t, "valid.toml")
 	_, _, _, prompt := runEditWithAnswers(recipeDir, nil)

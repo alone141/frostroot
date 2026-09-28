@@ -12,12 +12,12 @@ import (
 // It is written by build and committed next to the recipe.
 type Lockfile struct {
 	Version          int      `toml:"version"` // lock format version
-	Distro           string   `toml:"distro"`  // the recipe's family; every lock so far says "ubuntu"
+	Distro           string   `toml:"distro"`  // the recipe's family: "ubuntu" or "fedora"
 	Release          string   `toml:"release"`
-	Suite            string   `toml:"suite"`
+	Suite            string   `toml:"suite,omitempty"` // Ubuntu's code name; Fedora has none
 	Arch             string   `toml:"arch"`
-	Mirror           string   `toml:"mirror"`  // archive URL actually used
-	Sources          []string `toml:"sources"` // the three deb lines actually used
+	Mirror           string   `toml:"mirror,omitempty"`  // Ubuntu's archive URL actually used
+	Sources          []string `toml:"sources,omitempty"` // Ubuntu's three deb lines actually used
 	FrostrootVersion string   `toml:"frostroot_version"`
 	Requested        []string `toml:"requested"` // the recipe's packages.include, as written
 	// SourceDateEpoch is the instant the image is frozen at, in seconds since
@@ -40,6 +40,11 @@ type Lockfile struct {
 	// PyPI is every package in the image's virtual environment, sorted, with
 	// the wheel each came from. Absent without Python packages.
 	PyPI []LockPyPI `toml:"pypi,omitempty"`
+	// Tools is every package of the tools tree a Fedora build made its
+	// image with, sorted: their versions change the image's bytes the way
+	// mmdebstrap's do, so an offline build makes the tools tree from them
+	// too. Absent for Ubuntu.
+	Tools []LockPackage `toml:"tools,omitempty"`
 }
 
 // LockPython is the Python side of a build: what the recipe asked for, where
@@ -101,13 +106,14 @@ type LockCertificate struct {
 	SHA256 string `toml:"sha256"`
 }
 
-// LockRepository is one extra source the build installed from.
+// LockRepository is one repository the build installed from besides
+// Ubuntu's archive: a recipe's extra source, or one of a Fedora release's own.
 type LockRepository struct {
 	Name       string   `toml:"name"`
 	URL        string   `toml:"url"`
-	Suite      string   `toml:"suite"`
-	Components []string `toml:"components"`
-	KeySHA256  string   `toml:"key_sha256"` // hex digest of the recipe's key file
+	Suite      string   `toml:"suite,omitempty"`      // an apt source's; a Fedora repository has none
+	Components []string `toml:"components,omitempty"` // an apt source's; a Fedora repository has none
+	KeySHA256  string   `toml:"key_sha256"`           // hex digest of the key file the build trusted
 }
 
 // Repository returns the repository named name.
@@ -132,13 +138,21 @@ type LockPackage struct {
 	// as opposed to one the build asked for by name. An offline build
 	// restores the marks, so that apt autoremove and frostroot capture see
 	// the same image either way. Locks written before frostroot 0.6 have none.
-	Auto     bool   `toml:"auto,omitempty"`
-	SHA256   string `toml:"sha256,omitempty"`   // hex digest of the .deb file
-	Size     int64  `toml:"size,omitempty"`     // bytes of the .deb file
-	Filename string `toml:"filename,omitempty"` // path of the .deb below its source's base URL
+	Auto bool `toml:"auto,omitempty"`
+	// Reason is why dnf5 installed a Fedora package, as it records it:
+	// "User", "Dependency" or "Weak Dependency". An offline build puts the
+	// reasons back, as it does apt's marks. Empty for Ubuntu, which has Auto.
+	Reason   string `toml:"reason,omitempty"`
+	SHA256   string `toml:"sha256,omitempty"`   // hex digest of the package file
+	Size     int64  `toml:"size,omitempty"`     // bytes of the package file
+	Filename string `toml:"filename,omitempty"` // path of the package file below its repository's base URL
 	// Source names the repository Filename is relative to; empty for the
 	// Ubuntu archive (Mirror).
 	Source string `toml:"source,omitempty"`
+	// SourceRPM is the source package a Fedora package was built from, as
+	// rpm names it, which is where Fedora's build system keeps every build
+	// once an update has left the repository.
+	SourceRPM string `toml:"source_rpm,omitempty"`
 }
 
 // HasChecksums reports whether every package carries the checksum, size and

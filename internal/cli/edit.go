@@ -3,6 +3,7 @@ package cli
 import (
 	"path/filepath"
 
+	"frostroot/internal/distro"
 	"frostroot/internal/form"
 )
 
@@ -23,6 +24,12 @@ func (a *App) runEdit(args []string) int {
 	}
 	imageRecipe, ok := a.loadValidatedRecipe()
 	if !ok {
+		return exitUserError
+	}
+	// The form offers Ubuntu's releases, packages and sources only, and
+	// would give a Fedora recipe one of each.
+	if family, err := distro.FamilyOf(imageRecipe.Image.Distro); err == nil && family == distro.Fedora {
+		a.stderrf("frostroot: edit does not know Fedora recipes yet; change %s by hand\n", recipeFileName)
 		return exitUserError
 	}
 	indexes, ok := a.packageIndexes(indexOptions)

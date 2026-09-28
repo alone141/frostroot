@@ -28,8 +28,12 @@ var (
 	// lowercase letters, digits, + - and dot. No = / or :, so versions and
 	// suites cannot be smuggled into the recipe.
 	packageNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]+$`)
-	localePattern      = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*\.[A-Za-z0-9-]+$`)
-	timezonePattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_+-]*(/[A-Za-z0-9][A-Za-z0-9_+-]*){0,2}$`)
+	// rpmNamePattern is a Fedora package name: capitals and underscores are
+	// allowed (NetworkManager, perl-File-Temp), and still no whitespace, no
+	// version operator, and neither dnf's @group nor a glob.
+	rpmNamePattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
+	localePattern   = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*\.[A-Za-z0-9-]+$`)
+	timezonePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_+-]*(/[A-Za-z0-9][A-Za-z0-9_+-]*){0,2}$`)
 	// pythonNamePattern is a PyPI distribution name as PEP 503 defines it.
 	// The names reach a requirements file and pip's command line inside the
 	// image, so, like the locale, this is an injection boundary: no version
@@ -74,12 +78,16 @@ func Validate(imageRecipe Recipe) []string {
 		}
 	}
 	addProblem(CheckImageName(imageRecipe.Image.Name))
-	if family, err := distro.FamilyOf(imageRecipe.Image.Distro); err != nil {
+	family, err := distro.FamilyOf(imageRecipe.Image.Distro)
+	if err != nil {
 		addProblem(err)
 	} else if err := distro.Check(family, imageRecipe.Image.Release, imageRecipe.Image.Arch); err != nil {
 		for _, checkErr := range splitJoinedError(err) {
 			addProblem(checkErr)
 		}
+	}
+	if family == distro.Fedora {
+		problems = append(problems, fedoraUnsupported(imageRecipe)...)
 	}
 	userName := imageRecipe.User.Name
 	addProblem(CheckUserName(userName))
@@ -93,7 +101,11 @@ func Validate(imageRecipe Recipe) []string {
 		addProblem(CheckTimezone(timezone))
 	}
 	for _, packageName := range imageRecipe.Packages.Include {
-		addProblem(CheckPackageName(packageName))
+		if family == distro.Fedora {
+			addProblem(CheckRPMName(packageName))
+		} else {
+			addProblem(CheckPackageName(packageName))
+		}
 	}
 	seenPythonNames := map[string]bool{}
 	for _, packageName := range imageRecipe.PythonPackages() {
@@ -409,6 +421,31 @@ func CheckPackageName(name string) error {
 		return fmt.Errorf("invalid package name %q (apt package names only; versions belong in the lock)", name)
 	}
 	return nil
+}
+
+// CheckRPMName reports why name is not a Fedora package name, or nil.
+func CheckRPMName(name string) error {
+	if !rpmNamePattern.MatchString(name) {
+		return fmt.Errorf("invalid package name %q (Fedora package names only; versions belong in the lock)", name)
+	}
+	return nil
+}
+
+// fedoraUnsupported names what a Fedora recipe asks for that frostroot
+// builds for Ubuntu only so far: extra repositories, Python packages and
+// certificate authorities each need a Fedora way of their own.
+func fedoraUnsupported(imageRecipe Recipe) []string {
+	var problems []string
+	if len(imageRecipe.Sources) > 0 {
+		problems = append(problems, "[[sources]] are apt repositories, for Ubuntu recipes; a Fedora recipe installs from Fedora's own repositories only")
+	}
+	if imageRecipe.Python != nil {
+		problems = append(problems, "[python] is for Ubuntu recipes so far; for a Fedora image, name Fedora's python3-* packages in [packages]")
+	}
+	if imageRecipe.Certificates != nil {
+		problems = append(problems, "[certificates] is for Ubuntu recipes so far")
+	}
+	return problems
 }
 
 // CheckPythonPackageName reports why name is not a PyPI distribution name, or

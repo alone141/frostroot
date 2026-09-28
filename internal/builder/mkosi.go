@@ -5,9 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -21,6 +24,9 @@ var (
 	// knows how to drive: its settings and command line change between
 	// versions, and so do the bytes it writes.
 	ErrMkosiVersion = errors.New("mkosi version frostroot does not know")
+	// ErrFedoraOption means the build was given an option a Fedora build
+	// cannot use.
+	ErrFedoraOption = errors.New("not for a Fedora build")
 )
 
 // KnownMkosiVersions are the mkosi versions frostroot drives, oldest first:
@@ -68,8 +74,24 @@ type Mkosi struct {
 }
 
 // FedoraSpec is everything the Mkosi bootstrapper needs to build one image.
+// The configuration directories hold what frostroot wrote for each of
+// mkosi's two builds: mkosi.conf, the package manager tree, the scripts,
+// and the files the scripts install.
 type FedoraSpec struct {
-	WorkDir string // the build directory; during Preflight, the work root
+	WorkDir        string // the build directory; during Preflight, the work root
+	ToolsConfigDir string // mkosi's configuration for the tools tree
+	ImageConfigDir string // mkosi's configuration for the image
+	CacheDir       string // mkosi's package cache, kept under the work root between builds
+	ToolsOutputDir string // where mkosi writes the tools tree, which is removed when the build ends
+	// ToolsRecordPath is where the record of the tools tree's packages is
+	// left: mkosi's clean removes everything in its output directory.
+	ToolsRecordPath string
+	ImageOutputDir  string // where mkosi writes the image's tar, and the records of its packages
+	// SourceDateEpoch is the instant every timestamp in the image is
+	// clamped to, and what rpm dates each package's install from.
+	SourceDateEpoch int64
+	TarballPath     string   // where the gzip-compressed image goes
+	Progress        Progress // receives phases and output lines; nil discards them
 }
 
 // Preflight checks the host before any work is done: every program a
@@ -156,4 +178,196 @@ func mkosiVersion(output string) string {
 // lastLine returns the last line of text.
 func lastLine(text string) string {
 	return text[strings.LastIndexByte(text, '\n')+1:]
+}
+
+// MkosiLogFileName is the file in the work directory that receives the
+// complete output of mkosi's two builds and of gzip.
+const MkosiLogFileName = "mkosi.log"
+
+// Run makes the tools tree, then the image, then compresses it with gzip -n
+// into spec.TarballPath. Every program's output goes to MkosiLogFileName and
+// is parsed into phases for spec.Progress; the end of it is repeated in the
+// error, because mkosi's and dnf's own messages are the best explanation of
+// a failure.
+func (m *Mkosi) Run(ctx context.Context, spec FedoraSpec) (runErr error) {
+	for _, dir := range []string{spec.CacheDir, spec.ToolsOutputDir, spec.ImageOutputDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	logPath := filepath.Join(spec.WorkDir, MkosiLogFileName)
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := logFile.Close(); err != nil && runErr == nil {
+			runErr = err
+		}
+	}()
+	progress := progressOrDiscard(spec.Progress)
+	progress.Report(ProgressEvent{Kind: EventLogFile, Line: logPath})
+	parser := &mkosiProgress{progress: progress, phase: PhaseMakeToolsTree}
+	tail := newTailBuffer(errorTailBytes)
+	lines := &lineSplitter{emit: parser.line}
+	output := io.MultiWriter(logFile, tail, lines)
+	fail := func(what string, err error) error {
+		lines.flush()
+		return &BootstrapError{Err: fmt.Errorf("%s: %w", what, err), Tail: tail.String(), Program: "mkosi", LogFile: MkosiLogFileName}
+	}
+	// The tools tree belongs to the subordinate ids an unprivileged mkosi
+	// maps, so the user cannot remove it, and frostroot does not delete a
+	// root filesystem itself: mkosi removes it, in its own user namespace,
+	// however the build ends. It is no evidence of a failure; the log is.
+	defer func() {
+		cleanErr := m.mkosi(context.WithoutCancel(ctx), output, []string{
+			"--directory=" + spec.ToolsConfigDir,
+			"--output-dir=" + spec.ToolsOutputDir,
+			"-f", "clean",
+		})
+		if cleanErr != nil && runErr == nil {
+			runErr = fmt.Errorf("removing the tools tree: %w", cleanErr)
+		}
+	}()
+
+	progress.Report(ProgressEvent{Phase: PhaseMakeToolsTree, Kind: EventPhaseStarted})
+	if err := m.mkosi(ctx, output, []string{
+		"--directory=" + spec.ToolsConfigDir,
+		"--package-manager-tree=" + filepath.Join(spec.ToolsConfigDir, fedoraPackageManagerTree),
+		"--cache-dir=" + spec.CacheDir,
+		"--output-dir=" + spec.ToolsOutputDir,
+		"--finalize-script=" + filepath.Join(spec.ToolsConfigDir, fedoraFinalizeName),
+		"--force", "build",
+	}); err != nil {
+		return fail("mkosi could not make the tools tree", err)
+	}
+	if err := os.Rename(filepath.Join(spec.ToolsOutputDir, fedoraToolsInstalledFile), spec.ToolsRecordPath); err != nil {
+		return fail("the tools tree's build recorded no packages", err)
+	}
+	progress.Report(ProgressEvent{Phase: PhaseMakeToolsTree, Kind: EventPhaseFinished})
+	parser.advance(PhaseDownload)
+
+	if err := m.mkosi(ctx, output, []string{
+		"--directory=" + spec.ImageConfigDir,
+		"--tools-tree=" + filepath.Join(spec.ToolsOutputDir, mkosiToolsOutput),
+		"--package-manager-tree=" + filepath.Join(spec.ImageConfigDir, fedoraPackageManagerTree),
+		"--cache-dir=" + spec.CacheDir,
+		"--output-dir=" + spec.ImageOutputDir,
+		"--source-date-epoch=" + strconv.FormatInt(spec.SourceDateEpoch, 10),
+		"--postinst-script=" + filepath.Join(spec.ImageConfigDir, fedoraProvisionName),
+		"--finalize-script=" + filepath.Join(spec.ImageConfigDir, fedoraFinalizeName),
+		"--force", "build",
+	}); err != nil {
+		return fail("mkosi could not make the image", err)
+	}
+	lines.flush()
+
+	tarball, err := os.Create(spec.TarballPath)
+	if err != nil {
+		return err
+	}
+	runCommand := m.RunCommand
+	if runCommand == nil {
+		runCommand = runInterruptibly
+	}
+	gzipErr := runCommand(ctx, "gzip", []string{"-n", "-c", filepath.Join(spec.ImageOutputDir, mkosiImageOutput+".tar")}, nil, tarball, output)
+	if closeErr := tarball.Close(); gzipErr == nil {
+		gzipErr = closeErr
+	}
+	if gzipErr != nil {
+		return fail("gzip could not compress the image", gzipErr)
+	}
+	parser.advance(phaseCount)
+	return nil
+}
+
+// mkosi runs mkosi with args and umask 022, whatever the caller's: the
+// modes dnf5 gives its state files follow the umask, and they are part of
+// the image.
+func (m *Mkosi) mkosi(ctx context.Context, output io.Writer, args []string) error {
+	runCommand := m.RunCommand
+	if runCommand == nil {
+		runCommand = runInterruptibly
+	}
+	return runCommand(ctx, "sh", append([]string{"-c", `umask 022 && exec mkosi "$@"`, "mkosi"}, args...), nil, output, output)
+}
+
+// mkosiProgress turns mkosi's output into phases. mkosi marks each of its
+// steps with a line that starts with ‣; a phase starts at the step that
+// begins it and finishes when a later phase starts. Phases only move
+// forward: mkosi installs twice, filesystem alone first.
+type mkosiProgress struct {
+	progress Progress
+	phase    Phase
+	started  bool
+}
+
+// mkosiSteps are the step lines that begin a phase of the image build.
+var mkosiSteps = []struct {
+	marker string
+	phase  Phase
+}{
+	{"Running transaction", PhaseInstallRequested},
+	{"Running postinstall script", PhaseProvision},
+	{"Creating tar archive", PhaseCreateTarball},
+}
+
+// line reports one line of output. The tools tree's build prints some of the
+// same markers, so they count only once the image's build has begun.
+func (p *mkosiProgress) line(line string) {
+	if p.phase != PhaseMakeToolsTree {
+		for _, step := range mkosiSteps {
+			if strings.Contains(line, step.marker) {
+				p.advance(step.phase)
+			}
+		}
+	}
+	p.progress.Report(ProgressEvent{Phase: p.phase, Kind: EventLogLine, Line: line})
+}
+
+// advance finishes the running phase and starts phase, unless phase is not
+// later; phaseCount finishes the last one.
+func (p *mkosiProgress) advance(phase Phase) {
+	if !p.after(phase) {
+		return
+	}
+	if p.started || p.phase != PhaseMakeToolsTree {
+		p.progress.Report(ProgressEvent{Phase: p.phase, Kind: EventPhaseFinished})
+	}
+	p.phase, p.started = phase, true
+	if phase != phaseCount {
+		p.progress.Report(ProgressEvent{Phase: phase, Kind: EventPhaseStarted})
+	}
+}
+
+// after reports whether phase comes after the running one in FedoraPhases.
+func (p *mkosiProgress) after(phase Phase) bool {
+	order := append(FedoraPhases(), phaseCount)
+	return slices.Index(order, phase) > slices.Index(order, p.phase)
+}
+
+// lineSplitter hands complete lines to emit as output arrives.
+type lineSplitter struct {
+	emit    func(line string)
+	pending []byte
+}
+
+func (s *lineSplitter) Write(data []byte) (int, error) {
+	s.pending = append(s.pending, data...)
+	for {
+		index := bytes.IndexByte(s.pending, '\n')
+		if index < 0 {
+			return len(data), nil
+		}
+		s.emit(strings.TrimRight(string(s.pending[:index]), "\r"))
+		s.pending = s.pending[index+1:]
+	}
+}
+
+// flush hands on a last line that ended without a newline.
+func (s *lineSplitter) flush() {
+	if len(s.pending) > 0 {
+		s.emit(string(s.pending))
+		s.pending = nil
+	}
 }

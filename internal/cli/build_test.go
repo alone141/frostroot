@@ -124,6 +124,69 @@ func newBuildApp(t *testing.T, recipeDir string, bootstrapper builder.Bootstrapp
 	}
 }
 
+// fakeFedoraBootstrapper writes what a Fedora build's mkosi and scripts
+// would, for one package: the records, the file dnf kept, and the tarball.
+type fakeFedoraBootstrapper struct {
+	ran bool
+}
+
+func (f *fakeFedoraBootstrapper) Preflight(context.Context, builder.FedoraSpec) error { return nil }
+
+func (f *fakeFedoraBootstrapper) Run(_ context.Context, spec builder.FedoraSpec) error {
+	f.ran = true
+	files := map[string]string{
+		filepath.Join(spec.ImageOutputDir, "image.installed"): "git-0:2.55.0-1.fc44.x86_64|User|updates|git-2.55.0-1.fc44.src.rpm\n",
+		filepath.Join(spec.ImageOutputDir, "image.locations"): "git-0:2.55.0-1.fc44.x86_64|updates|https://m.example/Packages/g/git-2.55.0-1.fc44.x86_64.rpm\n",
+		spec.ToolsRecordPath: "dnf5|0|5.4.6.0|1.fc44|x86_64|dnf5-5.4.6.0-1.fc44.src.rpm\n",
+		filepath.Join(spec.CacheDir, "cache", "libdnf5", "updates-1", "packages", "git-2.55.0-1.fc44.x86_64.rpm"): "git",
+		filepath.Join(spec.CacheDir, "cache", "dnf", "updates-1", "packages", "dnf5-5.4.6.0-1.fc44.x86_64.rpm"):   "dnf5",
+		spec.TarballPath: "fedora image",
+	}
+	for path, content := range files {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func TestBuildFedoraRecipe(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	recipeDir := newRecipeDir(t, "fedora.toml")
+	app := newBuildApp(t, recipeDir, &fakeBootstrapper{}, &stdout, &stderr)
+	fedora := &fakeFedoraBootstrapper{}
+	app.Builder = &builder.Builder{Bootstrapper: &fakeBootstrapper{}, Fedora: fedora}
+	if exitCode := app.Run([]string{"build", "--plain"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d; stderr:\n%s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Wrote dist/fedora-lab-fedora-44-amd64.tar.gz") {
+		t.Errorf("stdout does not name the Fedora tarball:\n%s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "Fedora 44 (amd64)") {
+		t.Errorf("progress does not say what it builds:\n%s", stderr.String())
+	}
+	lock, err := recipe.LoadLock(filepath.Join(recipeDir, "frostroot.lock"))
+	if err != nil || lock.Distro != "fedora" || len(lock.Packages) != 1 || len(lock.Tools) != 1 {
+		t.Errorf("lock = %+v, %v", lock, err)
+	}
+}
+
+func TestBuildFedoraRecipeRefusesMirror(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := newBuildApp(t, newRecipeDir(t, "fedora.toml"), &fakeBootstrapper{}, &stdout, &stderr)
+	fedora := &fakeFedoraBootstrapper{}
+	app.Builder = &builder.Builder{Fedora: fedora}
+	if exitCode := app.Run([]string{"build", "--plain", "--mirror", "http://mirror.example/ubuntu"}); exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d; stderr:\n%s", exitCode, exitUserError, stderr.String())
+	}
+	if fedora.ran || !strings.Contains(stderr.String(), "--mirror replaces Ubuntu's archive") {
+		t.Errorf("ran = %v; stderr:\n%s", fedora.ran, stderr.String())
+	}
+}
+
 // setRelease replaces the release in a copy of valid.toml.
 func setRelease(t *testing.T, recipePath, release string) {
 	t.Helper()

@@ -37,7 +37,7 @@ func TestValidateReportsProblems(t *testing.T) {
 	}{
 		{fixtureName: "bad-user.toml", wantInStderr: "user name"},
 		{fixtureName: "bad-release.toml", wantInStderr: "18.04"},
-		{fixtureName: "bad-distro.toml", wantInStderr: `unknown distro: "debian" (known: ubuntu)`},
+		{fixtureName: "bad-distro.toml", wantInStderr: `unknown distro: "debian" (known: ubuntu, fedora)`},
 		{fixtureName: "bad-locale.toml", wantInStderr: "locale lang"},
 		{fixtureName: "unknown-field.toml", wantInStderr: "[package]"}, // points at the typo
 	}

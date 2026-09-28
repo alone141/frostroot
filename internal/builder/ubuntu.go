@@ -80,7 +80,7 @@ func newUbuntuBuild(bootstrapper Bootstrapper, imageRecipe recipe.Recipe, option
 	return build, offline, nil
 }
 
-func (u *ubuntuBuild) preflight(workRoot string, instant frozenInstant) error {
+func (u *ubuntuBuild) preflight(_ context.Context, workRoot string, instant frozenInstant) error {
 	// Apt splits a "deb" line on whitespace and reads options out of
 	// brackets, and every build hands it a path under the work root: the
 	// signed-by path of an extra source, and the copy:// URL of the

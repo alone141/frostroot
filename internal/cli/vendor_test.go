@@ -284,11 +284,11 @@ func TestVendorRefusals(t *testing.T) {
 			name: "lock of another family",
 			prepare: func(t *testing.T, fixture *vendorFixture) {
 				t.Helper()
-				fixture.lock.Distro = "fedora"
+				fixture.lock.Distro = "debian"
 				fixture.saveLock(t)
 			},
 			args:         []string{"vendor"},
-			wantInStderr: `unusable frostroot.lock: unknown distro: "fedora" (known: ubuntu)`,
+			wantInStderr: `unusable frostroot.lock: unknown distro: "debian" (known: ubuntu, fedora)`,
 		},
 		{
 			name:         "bad mirror",

@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"path/filepath"
 
 	"frostroot/internal/builder"
 )
@@ -38,7 +39,11 @@ func (p *plainProgress) Report(event builder.ProgressEvent) {
 		p.lastTenth = tenth
 		p.printf("frostroot:   %3d%%  %s\n", tenth*10, event.Summary())
 	case builder.EventLogFile:
-		p.printf("frostroot: mmdebstrap output goes to %s\n", event.Line)
+		program := "mmdebstrap"
+		if filepath.Base(event.Line) == builder.MkosiLogFileName {
+			program = "mkosi"
+		}
+		p.printf("frostroot: %s output goes to %s\n", program, event.Line)
 	case builder.EventLogLine, builder.EventPhaseFinished:
 	}
 }

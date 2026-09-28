@@ -1,6 +1,10 @@
 package cli
 
-import "fmt"
+import (
+	"fmt"
+
+	"frostroot/internal/distro"
+)
 
 func (a *App) runValidate(args []string) int {
 	flags := a.newFlagSet("validate", "usage: frostroot validate\n\nCheck frostroot.toml in the current directory. No network, no root.\n")
@@ -21,8 +25,13 @@ func (a *App) runValidate(args []string) int {
 	if count := len(imageRecipe.PythonPackages()); count > 0 {
 		pythonNote = fmt.Sprintf(", %d from PyPI", count)
 	}
-	a.stdoutf("%s: ok (%s, Ubuntu %s %s, %s requested%s%s)\n", recipeFileName,
-		imageRecipe.Image.Name, imageRecipe.Image.Release, imageRecipe.Image.Arch, packageCount(len(imageRecipe.Packages.Include)), pythonNote, sourcesNote)
+	family, err := distro.FamilyOf(imageRecipe.Image.Distro)
+	if err != nil { // unreachable after validation, but never ignore an error
+		a.stderrf("frostroot: %v\n", err)
+		return exitUserError
+	}
+	a.stdoutf("%s: ok (%s, %s %s %s, %s requested%s%s)\n", recipeFileName,
+		imageRecipe.Image.Name, family.Name(), imageRecipe.Image.Release, imageRecipe.Image.Arch, packageCount(len(imageRecipe.Packages.Include)), pythonNote, sourcesNote)
 	return exitSuccess
 }
 

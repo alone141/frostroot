@@ -33,6 +33,7 @@ const (
 	PhaseVendorCheck       // vendor: check what vendor/debs already holds
 	PhaseVendorDownload    // vendor: download the rest
 	PhaseVendorPrune       // vendor --prune: remove files the lock does not name
+	PhaseMakeToolsTree     // Fedora build: mkosi makes the tools tree
 	phaseCount
 )
 
@@ -54,6 +55,7 @@ var phaseTitles = [phaseCount]string{
 	PhaseVendorCheck:       "Check vendor/debs",
 	PhaseVendorDownload:    "Download packages",
 	PhaseVendorPrune:       "Remove packages not in the lock",
+	PhaseMakeToolsTree:     "Make the tools tree",
 }
 
 // Title returns the phase's name as a progress display shows it.
@@ -76,6 +78,11 @@ func Phases(python bool) []Phase {
 		phases = append(phases, PhaseInstallPython)
 	}
 	return append(phases, PhaseCreateTarball, PhaseWriteLock, PhasePlaceTarball)
+}
+
+// FedoraPhases returns the phases of an online Fedora build, in order.
+func FedoraPhases() []Phase {
+	return []Phase{PhaseMakeToolsTree, PhaseDownload, PhaseInstallRequested, PhaseProvision, PhaseCreateTarball, PhaseWriteLock, PhasePlaceTarball}
 }
 
 // OfflinePhases returns the phases of a build from the vendored pools, in
