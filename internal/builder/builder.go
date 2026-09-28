@@ -38,6 +38,9 @@ var (
 	// ErrNoMount means mount is not installed, which mmdebstrap needs to
 	// mount /proc, /sys and /dev in the image while it installs.
 	ErrNoMount = errors.New("mount not found on PATH")
+	// ErrCannotMount means mmdebstrap said it would install with nothing
+	// mounted at /proc, /sys and /dev, and the build was stopped.
+	ErrCannotMount = errors.New("mmdebstrap cannot mount /proc, /sys and /dev in the image")
 	// ErrNoKeyring means the Ubuntu archive keyring is not installed.
 	ErrNoKeyring = errors.New("keyring for the Ubuntu archive not found")
 	// ErrBadWorkRoot means the directory builds work in cannot be used.

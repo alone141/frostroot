@@ -251,6 +251,12 @@ func (a *App) reportBuildFailure(err error, interrupted bool, archiveURL, keptWo
 		a.stderrf("frostroot: build interrupted; no lock or tarball was written\n")
 		a.reportKeptWorkDir(keptWorkDir)
 		return exitInterrupted
+	case errors.Is(err, builder.ErrCannotMount):
+		// A host the user can fix, found once mmdebstrap was running, so
+		// there is a work directory, with mmdebstrap's log, to point at.
+		a.stderrf("frostroot: %v\n", err)
+		a.reportKeptWorkDir(keptWorkDir)
+		return exitUserError
 	case errors.Is(err, builder.ErrNotLinux), errors.Is(err, builder.ErrNoMmdebstrap),
 		errors.Is(err, builder.ErrNoMount),
 		errors.Is(err, builder.ErrNoKeyring), errors.Is(err, builder.ErrBadWorkRoot),

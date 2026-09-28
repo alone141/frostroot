@@ -579,6 +579,22 @@ func TestBuildBootstrapFailure(t *testing.T) {
 	assertNoLock(t, recipeDir)
 }
 
+func TestBuildThatCannotMountIsUserError(t *testing.T) {
+	recipeDir := newRecipeDir(t, "valid.toml")
+	var stdout, stderr bytes.Buffer
+	cannotMount := fmt.Errorf("%w: it said %q", builder.ErrCannotMount, "W: cannot mount because unshare --mount failed")
+	app := newBuildApp(t, recipeDir, &fakeBootstrapper{runErr: cannotMount}, &stdout, &stderr)
+	if exitCode := app.Run([]string{"build"}); exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d; stderr %s", exitCode, exitUserError, stderr.String())
+	}
+	for _, wantText := range []string{cannotMount.Error(), "work directory kept"} {
+		if !strings.Contains(stderr.String(), wantText) {
+			t.Errorf("stderr lacks %q:\n%s", wantText, stderr.String())
+		}
+	}
+	assertNoLock(t, recipeDir)
+}
+
 func TestBuildArchiveTroubleSuggestsMirrorFlag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	bootstrapper := &fakeBootstrapper{runErr: errors.New("mmdebstrap failed: exit status 1\n" +
