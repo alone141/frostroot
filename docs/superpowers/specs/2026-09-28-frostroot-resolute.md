@@ -201,3 +201,17 @@ These are not 26.04's. The first is left for its own change.
   GitHub signs with its 2022 key; the repository signs with the 2026 key,
   and the 2022 key expired on 2026-09-05. Both are pinned, so nothing
   broke; the comment is corrected with this change.
+
+## Verification (2026-09-28, the branch's binary at de48515)
+
+`scripts/check.sh` ran every step clean, golangci-lint at CI's v2.13.2.
+`TestIntegrationNobleTiny` and `TestIntegrationResoluteTiny`, which now
+share one body, passed in 105 s and 104 s. With `E2E_RELEASE=26.04` every
+scenario that runs without Windows passed: `offline-identical` 12 checks,
+`certificates` 21, `no-build-leaks` 15, `insecure` 17,
+`capture-roundtrip` 10, `failed-build` 7, and `tui` 4, writing
+`release = "26.04"` from the form's new default. As in the spike, the
+container re-signs every TLS connection, so the online builds of
+`offline-identical` and `certificates` were given its authority with
+`--ca-bundle`; the other scenarios ran as committed. `wsl-boot` with
+`E2E_RELEASE=26.04` needs Windows and is the owner's check before the tag.

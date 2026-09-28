@@ -1282,6 +1282,28 @@ warnings, UTC, `python3` at `/opt/frostroot/venv/bin/python3` with `requests`
 2.34.2 and pip 24.3.1, the authority trusted by the image's store, and apt
 holding no setting of the build's; then the distribution was removed.
 
+For v0.14.0, Ubuntu 26.04 went through a spike before any code changed:
+`master` at 7ce0b16 with the release's row as its only change, on a 24.04
+build host and on a 26.04 one. A minimal image built in 90 s, one with
+`requests` and `numpy` on Python 3.14.4 and the pinned pip in 111 s, one
+with all 32 packages of the form's catalog (1,135 installed) in 540 s, and
+one with all eight catalog sources, each package from its own repository,
+in 326 s; the 26.04 spec records what each showed. Then, with the branch's
+binary (de48515), `scripts/check.sh` ran every step,
+`TestIntegrationNobleTiny` and the new `TestIntegrationResoluteTiny` passed
+in 105 s and 104 s, and every scenario that runs without Windows passed
+with `E2E_RELEASE=26.04`: `offline-identical` its 12 checks, two offline
+rebuilds with a Python environment coming out as one SHA-256;
+`certificates` its 21, the rebuilds with and without `--ca-bundle` one
+SHA-256 too; `no-build-leaks` its 15, `insecure` its 17,
+`capture-roundtrip` its 10 and `failed-build` its 7; and `tui` its 4 on the
+form's new default, writing `release = "26.04"`. The container they ran in
+re-signs every TLS connection it makes, PyPI's included, so the online
+builds of `offline-identical` and `certificates` were given its authority
+with `--ca-bundle`, as such a network needs; the other scenarios ran as
+committed. The first login of a 26.04 image, `wsl-boot` with
+`E2E_RELEASE=26.04`, needs Windows and is still to run.
+
 
 ## Documentation
 
