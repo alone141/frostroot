@@ -81,7 +81,7 @@ func Defaults(host Host) Values {
 // the PPA field, and anything else is kept as it is. The recipe's own order
 // is remembered so ToRecipe can keep it.
 func FromRecipe(imageRecipe recipe.Recipe) Values {
-	catalogNames, otherNames := SplitPackages(imageRecipe.Packages.Include)
+	catalogNames, otherNames := SplitPackages(distro.Ubuntu, imageRecipe.Packages.Include)
 	catalogSources, ppas := SplitSources(imageRecipe.Sources)
 	simpleCertificates, exoticCertificates := splitCertificatePaths(imageRecipe.CertificatePaths())
 	timezone := imageRecipe.Locale.Timezone

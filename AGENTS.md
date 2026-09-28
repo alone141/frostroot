@@ -208,7 +208,7 @@ Hand-typed alternatives break in ways that are easy to miss:
 - Integration tests carry the `integration` build tag, are named
   `TestIntegration*`, and call `skipUnlessMmdebstrapAvailable`, or for
   Fedora `skipUnlessFedoraToolsAvailable`. `scripts/integration.sh`
-  requires nine of them by name, so renaming one means editing that list.
+  requires ten of them by name, so renaming one means editing that list.
 - A fake implements the real interface and lives in the test file that uses
   it. `builder` and `cli` each have their own `fakeBootstrapper`.
 - New hook text is run through a real `sh`, with hostile paths.

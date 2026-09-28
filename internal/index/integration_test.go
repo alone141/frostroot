@@ -32,7 +32,7 @@ func TestIntegrationOpenEveryRelease(t *testing.T) {
 			if opened.Len() < 50_000 {
 				t.Errorf("%d packages; a release has many more", opened.Len())
 			}
-			for _, entry := range form.Catalog() {
+			for _, entry := range form.Catalog(distro.Ubuntu) {
 				matches, _ := opened.Search(entry.Name, "", 1)
 				if len(matches) != 1 || matches[0].Name != entry.Name {
 					t.Errorf("searching %q found %v first", entry.Name, matches)
@@ -58,6 +58,58 @@ func TestIntegrationOpenEveryRelease(t *testing.T) {
 				t.Fatalf("reopening from the cache: %v, %v", cached, err)
 			}
 			t.Logf("reopened from the cache in %v", time.Since(started).Round(time.Millisecond))
+		})
+	}
+}
+
+// TestIntegrationFedoraCatalogExistsInEveryRelease fetches the real index of
+// every Fedora release the table knows, 22 MB for Fedora 44, and checks that
+// each entry of the Fedora catalog is a package there, so that the form
+// never offers a name dnf cannot install; and, as
+// TestIntegrationOpenEveryRelease does for Ubuntu, what the picker promises
+// of the index.
+func TestIntegrationFedoraCatalogExistsInEveryRelease(t *testing.T) {
+	versions := distro.SupportedVersions(distro.Fedora)
+	if len(versions) == 0 {
+		t.Fatal("the table knows no Fedora release")
+	}
+	for _, version := range versions {
+		release, err := distro.LookupFedora(version, distro.SupportedArch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Run(version, func(t *testing.T) {
+			started := time.Now()
+			cacheDir := t.TempDir()
+			opened, err := OpenFedora(context.Background(), Options{CacheDir: cacheDir}, release)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("%s, fetched and reduced in %v", opened.Describe(), time.Since(started).Round(time.Millisecond))
+			if opened.Len() < 50_000 {
+				t.Errorf("%d packages; a release has many more", opened.Len())
+			}
+			for _, entry := range form.Catalog(distro.Fedora) {
+				if !opened.Has(entry.Name) {
+					t.Errorf("%s is not in Fedora %s", entry.Name, version)
+					continue
+				}
+				if matches, _ := opened.Search(entry.Name, "", 1); len(matches) != 1 || matches[0].Name != entry.Name {
+					t.Errorf("searching %q found %v first", entry.Name, matches)
+				}
+			}
+			if nearest := opened.Nearest("ninja-buld", 3); len(nearest) == 0 || nearest[0] != "ninja-build" {
+				t.Errorf("Nearest(ninja-buld) = %v", nearest)
+			}
+			started = time.Now()
+			_, total := opened.Search("lib", "", 200)
+			if took := time.Since(started); took > 100*time.Millisecond {
+				t.Errorf("Search(lib) found %d in %v: too slow to run on every key", total, took)
+			}
+			cached, err := OpenFedora(context.Background(), Options{CacheDir: cacheDir, Offline: true}, release)
+			if err != nil || cached.Len() != opened.Len() {
+				t.Fatalf("reopening from the cache: %v, %v", cached, err)
+			}
 		})
 	}
 }

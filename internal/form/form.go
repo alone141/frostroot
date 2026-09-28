@@ -218,7 +218,7 @@ func Fields(host Host) []Field {
 			Key: KeyPackages, Page: PagePackages, Kind: KindMultiSelect, Filterable: true,
 			Title:       "Packages",
 			Description: "Space selects, Enter continues, / filters",
-			Options:     catalogOptions(),
+			Options:     catalogOptions(distro.Ubuntu),
 		},
 		{
 			Key: KeyOtherPackages, Page: PagePackages, Kind: KindSearch,
