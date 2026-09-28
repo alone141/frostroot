@@ -34,6 +34,10 @@ const buildUsageText = `usage: frostroot build [--mirror URL | --offline] [--ca-
 
 Build frostroot.lock and dist/<name>-ubuntu-<release>-amd64.tar.gz from frostroot.toml.
 Needs Linux, mmdebstrap, network, and user namespaces or root. Never prompts.
+mmdebstrap mounts /proc, /sys and /dev in the image as it installs, which takes
+mount and, as root, CAP_SYS_ADMIN: a container has it only when started with
+it. A host where it cannot is refused (exit 1) rather than given an incomplete
+image.
 The image is frozen at the instant the build starts, or at SOURCE_DATE_EPOCH
 when that is set: no file in it is dated later, and the lock records the instant.
 

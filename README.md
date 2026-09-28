@@ -165,6 +165,14 @@ Building needs either **user namespaces** (normal on current distributions,
 and what you get when you run frostroot as yourself) or **root** (`sudo
 frostroot build`). It needs network access; consuming the tarball does not.
 
+Either way, mmdebstrap mounts `/proc`, `/sys` and `/dev` in the image while
+it installs. That takes `mount`, which every Ubuntu installation has, and,
+as root, the `CAP_SYS_ADMIN` capability, which a container has only when it
+is started with it (`docker run --privileged`, for one). Without them
+mmdebstrap would install anyway and systemd's setup would quietly come out
+incomplete, so frostroot refuses such a host with exit 1: before anything
+starts when `mount` is missing, and within a second of starting otherwise.
+
 ## Quick start
 
 ```sh
