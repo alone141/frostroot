@@ -1458,6 +1458,38 @@ passed every required test but `TestIntegrationPython`, whose pip refused
 PyPI's re-signed certificate as before; CI ran all seven to a pass on
 16b2307.
 
+Then Fedora 44 itself, in the second pull request, from a recipe of `git`
+in `tr_TR.UTF-8` written by hand. Built online, it took 69 s as root and
+76 s as uid 1001 from a warm cache, and wrote a lock of 268 packages (28
+`User`, 209 `Dependency` and 31 `Weak Dependency`) and a tools tree of 122.
+The image had the user in `wheel`, the sudoers drop-in 0440, `wsl.conf`,
+`LANG=tr_TR.UTF-8`, the timezone, `sudo` setuid and the journal setgid,
+and a gzip header without a time. `vendor` fetched its 271 files, 120 MB,
+in 8 s. Two offline rebuilds as root under `unshare --net` and one as uid
+1001, each about a minute, wrote one SHA-256, `5f62096b…45b9`, and an
+online build at the lock's instant wrote the same lock, byte for byte, and
+the same tarball; the uid 1001 build left nothing in its work root. The
+first two rebuilds had differed, in a `/var/log/dnf5.log` the finalize
+script's own dnf5 queries left in the image, and the pull request removes
+it. With `E2E_DISTRO=fedora`, `failed-build` passed its 7 checks, dnf5's
+own explanation printed first; `offline-identical` its 10 as root and as
+uid 1001, the second rebuild with `MKOSI_DNF=dnf` set; and
+`no-build-leaks` its 15, a plain build and one with `--ca-bundle` and
+`--insecure` writing one lock and one image. With Ubuntu, `failed-build`,
+`no-build-leaks` and `harness` passed again after the scenarios' library
+changed. `TestIntegrationFedoraTiny` and
+`TestIntegrationFedoraOfflineRebuild` passed here as root and as uid 1001.
+Their first run in CI failed in mkosi's user namespace: Ubuntu's kernels
+let a program use the one it makes only when an AppArmor profile of its
+own allows it, and mkosi, unlike mmdebstrap, has none. frostroot now
+refuses such a host with the two ways out, and CI lifts the restriction to
+be what WSL is; CI then ran all nine required tests to a pass as an
+unprivileged user on f883de0, the two Fedora ones in 104 s and 172 s.
+Each change is pinned by a test that fails with it broken, run with
+`scripts/mutate.sh` and recorded in the commits, and `scripts/check.sh`
+ran every step. A Fedora image's first login, `wsl-boot` with
+`E2E_DISTRO=fedora`, needs Windows and is still to run.
+
 
 ## Documentation
 
