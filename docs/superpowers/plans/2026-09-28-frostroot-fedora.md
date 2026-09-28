@@ -80,14 +80,17 @@ same SHA-256.
    repositories (metalink and base URL), and the primary keys of 43 to 46
    pinned by fingerprint, every primary key in the file checked as the
    sources catalog does.
-7. **Preflight for Fedora.** mkosi in a version frostroot knows, the
-   host's dnf for the tools tree, bubblewrap, and `newuidmap` and
-   `newgidmap` in unshare mode, each missing one a sentinel error with an
-   install hint that `reportBuildFailure` maps to exit 1.
-8. **The tools tree.** Installed by the host's dnf into the work root's
-   cache, one per release: dnf5, rpm, mkosi's helpers (bubblewrap, tar,
-   gzip, zstd, systemd) and createrepo_c. Its packages go into the lock,
-   optional and `omitempty`.
+7. **Preflight for Fedora.** mkosi in a version frostroot knows (20.2),
+   the host's `dnf` and `rpm`, `createrepo_c`, bubblewrap, and `newuidmap`
+   and `newgidmap` in unshare mode, each missing one a sentinel error with
+   an install hint that `reportBuildFailure` maps to exit 1.
+8. **The tools tree.** Made by mkosi for each build as a `directory`
+   image with the host's dnf 4 and frostroot's package manager tree, its
+   downloads kept in a package cache under the work root: bash,
+   coreutils, util-linux, dnf5, rpm, mkosi's helpers (bubblewrap, tar,
+   gzip, zstd, systemd), createrepo_c and ca-certificates. Its packages
+   go into the lock, optional and `omitempty`; offline it is made from
+   `vendor/`, indexed by the host's `createrepo_c`.
 9. **The mkosi bootstrapper.** frostroot writes mkosi's configuration into
    the work directory (distribution, release, an uncompressed tar, weak
    dependencies and documentation on, `CleanPackageMetadata=no`,

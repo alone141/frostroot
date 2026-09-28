@@ -205,6 +205,30 @@ the pinned key in its own package manager tree, so `build` still never
 fetches a key. And reading rpm's database recreates the SQLite side files,
 so a script reads it first and removes them last.
 
+**Unprivileged, from the tools tree up.** As uid 1001, with its subuid
+range and the host's Python 3.12 (this container's `python3` is another,
+which the spike set aside in a private mount namespace), mkosi built the
+tools tree itself, as a `directory` image made with the host's dnf 4 from
+frostroot's own package manager tree (the two metalinks and the pinned
+key): 125 packages, 177 MiB, 66 s from a cold cache. That tree then built
+the lean base and `git` as a 419 MiB tar in 67 s, 264 packages, with
+`sudo` setuid root, `/var/log/journal` 0/190 and setgid, `/etc/shadow` 0/0
+and mode 000, file capabilities on `newuidmap`, `newgidmap`, `clockdiff`
+and `arping`, and 2,162 hardlinks. Offline, under `unshare --net`: the
+tools tree came back from its 125 vendored files, indexed by the host's
+`createrepo_c`, in 13 s with the same package set; and two image builds
+with it, from the vendored files per repository and dnf5's reasons put
+back, took 26 s and 24 s. The online tar and both offline tars had one
+SHA-256, `8d3c5ef5…2dd5`.
+
+So a Fedora build host needs, from Ubuntu's archive, `mkosi` (20.2 on
+24.04), `dnf` (to make the tools tree), `rpm` (mkosi 20.2 runs it for any
+rpm-based image, and 24.04's `dnf` does not pull it in) and
+`createrepo-c` (to index the vendored files before any tools tree
+exists), besides the `uidmap` unprivileged Ubuntu builds already use. The
+tools tree's rpm database is at its root, `/.rpmdb`, where the host's
+Debian-patched rpm puts it.
+
 **The base set.** `@core` with `glibc-langpack-en`, `dnf5` and `sudo` came
 to 367 packages and 599 MiB uncompressed, among them NetworkManager,
 firewalld, the SELinux policy, sssd, openssh-server, audit, dracut,
@@ -215,8 +239,8 @@ chose the second (decision 6).
 
 **Not measured yet.** A first boot under WSL (`wsl-boot`, on Windows),
 the POSIX ACLs systemd-tmpfiles sets on `/var/log/journal` (this host's
-tar could not apply them on extract) as WSL imports them, a cold tools
-tree, an unprivileged offline build, and Ubuntu 26.04's newer mkosi.
+tar could not apply them on extract) as WSL imports them, and Ubuntu
+26.04's newer mkosi.
 
 ## Proposed design
 
@@ -249,12 +273,17 @@ attributes and hardlinks. So the rule "only mmdebstrap writes the tarball"
 becomes "only mmdebstrap or mkosi writes it", and Go still never tars,
 walks or deletes a root filesystem.
 
-The tools tree is a small Fedora root (dnf5, rpm, bubblewrap, tar, gzip,
-zstd, systemd, createrepo_c) that frostroot installs with the host's dnf 4
-the first time a release is built, and keeps in its cache. Its versions
-change the bytes the way mmdebstrap's do, so the lock records them and
-`vendor` keeps the tools tree's packages too, which makes an offline
-rebuild independent of what the archive holds a year later.
+The tools tree is a small Fedora root (bash, coreutils, util-linux, dnf5,
+rpm, bubblewrap, tar, gzip, zstd, systemd, createrepo_c, ca-certificates)
+that mkosi makes for each build as a `directory` image, with the host's
+dnf 4 and frostroot's package manager tree, in a user namespace like any
+unprivileged mkosi build; its downloads stay in a package cache under the
+work root, so only the first build of a release fetches them all. Its
+versions change the bytes the way mmdebstrap's do, so the lock records
+them and `vendor` keeps the tools tree's packages too, which makes an
+offline rebuild independent of what the archive holds a year later. An
+offline build makes the tools tree from those files, indexed by the
+host's `createrepo_c`.
 
 frostroot hands mkosi a package manager tree of its own: the
 repositories, each with the pinned key file beside it, so that mkosi
