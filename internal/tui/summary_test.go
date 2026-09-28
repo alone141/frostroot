@@ -25,7 +25,7 @@ func TestSummaryPageShowsThePreviewAndScrollsIt(t *testing.T) {
 	d.pressEnterUntil(stageSummary)
 
 	view := frameOf(d.model.View())
-	for _, wantText := range []string{"Summary", "lab, Ubuntu 24.04 amd64", "This is what frostroot.toml will say:", "line  a", "more lines", "Write frostroot.toml?"} {
+	for _, wantText := range []string{"Summary", "lab, Ubuntu 26.04 amd64", "This is what frostroot.toml will say:", "line  a", "more lines", "Write frostroot.toml?"} {
 		if !strings.Contains(view, wantText) {
 			t.Errorf("summary page lacks %q:\n%s", wantText, view)
 		}

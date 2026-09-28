@@ -30,6 +30,10 @@ type Release struct {
 	ArchiveURL string   // base URL of the archive the three pockets come from
 	Components []string // archive components to enable
 	EndOfLife  bool     // past standard support: security fixes need Ubuntu Pro
+	// ExternallyManagedPython means the release's python3 refuses pip
+	// install outside a virtual environment (PEP 668), which someone who
+	// asks for python3-pip is told.
+	ExternallyManagedPython bool
 }
 
 // allComponents is the whole archive, in the order Ubuntu's own sources.list
@@ -39,10 +43,14 @@ type Release struct {
 // deb lines and an offline build writes those.
 var allComponents = []string{"main", "restricted", "universe", "multiverse"}
 
+// releasesByVersion is every release frostroot builds. A release joins it
+// once a spike has built it end to end; 26.04's is recorded in
+// docs/superpowers/specs/2026-09-28-frostroot-resolute.md.
 var releasesByVersion = map[string]Release{
 	"20.04": {Suite: "focal", ArchiveURL: ubuntuArchiveURL, Components: allComponents, EndOfLife: true},
 	"22.04": {Suite: "jammy", ArchiveURL: ubuntuArchiveURL, Components: allComponents},
-	"24.04": {Suite: "noble", ArchiveURL: ubuntuArchiveURL, Components: allComponents},
+	"24.04": {Suite: "noble", ArchiveURL: ubuntuArchiveURL, Components: allComponents, ExternallyManagedPython: true},
+	"26.04": {Suite: "resolute", ArchiveURL: ubuntuArchiveURL, Components: allComponents, ExternallyManagedPython: true},
 }
 
 // Lookup returns how to bootstrap an Ubuntu release, such as "24.04", for an
@@ -86,4 +94,24 @@ func (r Release) SourceLines(mirrorURL string) []string {
 }
 
 // SupportedVersions lists the supported release versions, oldest first.
-func SupportedVersions() []string { return []string{"20.04", "22.04", "24.04"} }
+func SupportedVersions() []string { return []string{"20.04", "22.04", "24.04", "26.04"} }
+
+// NewestVersion returns the newest supported release, which a new recipe
+// starts on.
+func NewestVersion() string {
+	versions := SupportedVersions()
+	return versions[len(versions)-1]
+}
+
+// VersionsInStandardSupport lists the supported releases that are not past
+// their standard support, oldest first: the ones to prefer over a release
+// that is.
+func VersionsInStandardSupport() []string {
+	var versions []string
+	for _, version := range SupportedVersions() {
+		if !releasesByVersion[version].EndOfLife {
+			versions = append(versions, version)
+		}
+	}
+	return versions
+}

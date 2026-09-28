@@ -119,7 +119,7 @@ func TestInitDefaults(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr)
 	}
 	want := recipe.Recipe{
-		Image:    recipe.Image{Name: "lab", Release: "24.04", Arch: "amd64"},
+		Image:    recipe.Image{Name: "lab", Release: "26.04", Arch: "amd64"},
 		User:     recipe.User{Name: "student", Sudo: true},
 		WSL:      recipe.WSL{Systemd: true, DefaultUser: "student"},
 		Locale:   recipe.Locale{Lang: "en_US.UTF-8", Timezone: "UTC"},
@@ -149,7 +149,7 @@ func TestInitAsksInOrder(t *testing.T) {
 
 func TestInitListsOptionsForSelects(t *testing.T) {
 	_, stdout, _ := runInitWithAnswers(t.TempDir(), nil)
-	for _, wantText := range []string{"Ubuntu 24.04 LTS (noble)", "Ubuntu 20.04 LTS (focal)  (past standard support", "C/C++", "build-essential", "choices, for example UTC", "English (United States)"} {
+	for _, wantText := range []string{"Ubuntu 24.04 LTS (noble)", "Ubuntu 26.04 LTS (resolute)", "Ubuntu 20.04 LTS (focal)  (past standard support", "C/C++", "build-essential", "choices, for example UTC", "English (United States)"} {
 		if !strings.Contains(stdout, wantText) {
 			t.Errorf("plain init should list %q among the options:\n%s", wantText, stdout)
 		}
@@ -157,7 +157,7 @@ func TestInitListsOptionsForSelects(t *testing.T) {
 	if strings.Contains(stdout, "Africa/Abidjan") {
 		t.Errorf("plain init must not dump the whole timezone list:\n%s", stdout[:min(2000, len(stdout))])
 	}
-	if !strings.Contains(stdout, "Image     lab, Ubuntu 24.04 amd64") {
+	if !strings.Contains(stdout, "Image     lab, Ubuntu 26.04 amd64") {
 		t.Errorf("plain init should show the summary before writing:\n%s", stdout)
 	}
 }
@@ -180,14 +180,18 @@ func TestInitPackagesByNumberOrName(t *testing.T) {
 	}
 }
 
-func TestInitPythonNoteOnlyOnNoble(t *testing.T) {
-	_, stdout, _ := runInitWithAnswers(t.TempDir(), answersWith(map[int]string{answerRelease: "24.04", answerPackages: "python3-pip"}))
-	if !strings.Contains(stdout, "venv") || !strings.Contains(stdout, "PEP 668") {
-		t.Errorf("24.04 with pip should warn about PEP 668:\n%s", stdout)
+func TestInitPythonNoteOnlyWherePEP668Applies(t *testing.T) {
+	for _, release := range []string{"24.04", "26.04"} {
+		_, stdout, _ := runInitWithAnswers(t.TempDir(), answersWith(map[int]string{answerRelease: release, answerPackages: "python3-pip"}))
+		if wantNote := "Ubuntu " + release + " enforces PEP 668"; !strings.Contains(stdout, wantNote) || !strings.Contains(stdout, "venv") {
+			t.Errorf("%s with pip should say %q and point at a venv:\n%s", release, wantNote, stdout)
+		}
 	}
-	_, stdout, _ = runInitWithAnswers(t.TempDir(), answersWith(map[int]string{answerRelease: "22.04", answerPackages: "python3-pip"}))
-	if strings.Contains(stdout, "PEP 668") {
-		t.Errorf("22.04 has no PEP 668 restriction:\n%s", stdout)
+	for _, release := range []string{"20.04", "22.04"} {
+		_, stdout, _ := runInitWithAnswers(t.TempDir(), answersWith(map[int]string{answerRelease: release, answerPackages: "python3-pip"}))
+		if strings.Contains(stdout, "PEP 668") {
+			t.Errorf("%s has no PEP 668 restriction:\n%s", release, stdout)
+		}
 	}
 }
 
@@ -276,7 +280,7 @@ func TestInitWritesComments(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The recipe is edited by hand, so it explains itself.
-	for _, wantText := range []string{"#", "frostroot.lock", "20.04 | 22.04 | 24.04"} {
+	for _, wantText := range []string{"#", "frostroot.lock", "20.04 | 22.04 | 24.04 | 26.04"} {
 		if !strings.Contains(string(recipeText), wantText) {
 			t.Errorf("recipe lacks %q:\n%s", wantText, recipeText)
 		}
@@ -304,7 +308,7 @@ func TestInitWithLinePrompt(t *testing.T) {
 		imageRecipe.User.Name != "student" || !slices.Equal(imageRecipe.Packages.Include, []string{"build-essential"}) {
 		t.Errorf("recipe = %+v", imageRecipe)
 	}
-	if !strings.Contains(stdout.String(), "[24.04]") {
+	if !strings.Contains(stdout.String(), "[26.04]") {
 		t.Errorf("prompts should show defaults:\n%s", stdout.String())
 	}
 }

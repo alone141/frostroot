@@ -56,7 +56,7 @@ func TestEditShowsWhatChangesAsADiff(t *testing.T) {
 		"2 lines change:",
 		`- name = "lab"`,
 		`+ name = "cpp-lab"`,
-		`  release = "24.04"`,
+		`  release = "26.04"`,
 	} {
 		if !strings.Contains(stdout, wantText) {
 			t.Errorf("stdout lacks %q:\n%s", wantText, stdout)

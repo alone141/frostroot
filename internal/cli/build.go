@@ -115,7 +115,7 @@ func (a *App) runBuild(args []string) int {
 	if release.EndOfLife {
 		a.stderrf("warning: Ubuntu %s is past the end of standard support. The image will contain packages\n"+
 			"with known, unfixed security vulnerabilities: security fixes are only published to Ubuntu Pro.\n"+
-			"Prefer 22.04 or 24.04 unless you specifically need %s.\n", imageRecipe.Image.Release, imageRecipe.Image.Release)
+			"Prefer %s unless you specifically need %s.\n", imageRecipe.Image.Release, orList(distro.VersionsInStandardSupport()), imageRecipe.Image.Release)
 	}
 	hasPython := len(imageRecipe.PythonPackages()) > 0
 	switch {
@@ -367,6 +367,18 @@ func validateMirrorURL(mirrorURL string) error {
 		return fmt.Errorf("--mirror: %w", err)
 	}
 	return nil
+}
+
+// orList renders choices the way a sentence offers them: "24.04", "24.04 or
+// 26.04", "22.04, 24.04 or 26.04".
+func orList(choices []string) string {
+	switch len(choices) {
+	case 0:
+		return ""
+	case 1:
+		return choices[0]
+	}
+	return strings.Join(choices[:len(choices)-1], ", ") + " or " + choices[len(choices)-1]
 }
 
 // containsAny reports whether text contains any of substrings.

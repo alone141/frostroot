@@ -22,10 +22,10 @@ fi
 e2e_build_frostroot
 distro=frostroot-e2e-boot
 lab=$LAB/lab
-tarball=$lab/dist/e2e-boot-ubuntu-24.04-amd64.tar.gz
+tarball=$lab/dist/e2e-boot-ubuntu-$E2E_RELEASE-amd64.tar.gz
 mkdir -p "$lab/certs"
 e2e_certificate "frostroot e2e Corp Root CA" "$LAB/corp.key" "$lab/certs/corp-root.pem" || e2e_abort "openssl failed"
-e2e_recipe "$lab" e2e-boot 24.04 "git openssl" "requests" '[certificates]
+e2e_recipe "$lab" e2e-boot "$E2E_RELEASE" "git openssl" "requests" '[certificates]
 include = ["certs/corp-root.pem"]'
 
 # windows_text strips what wsl.exe prints: UTF-16 with NULs, and CRLF.

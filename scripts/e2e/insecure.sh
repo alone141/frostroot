@@ -13,8 +13,8 @@ e2e_begin insecure
 e2e_require_bootstrap
 e2e_build_frostroot
 lab=$LAB/lab
-tarball=$lab/dist/e2e-insecure-ubuntu-24.04-amd64.tar.gz
-e2e_recipe "$lab" e2e-insecure 24.04 "git" "requests"
+tarball=$lab/dist/e2e-insecure-ubuntu-$E2E_RELEASE-amd64.tar.gz
+e2e_recipe "$lab" e2e-insecure "$E2E_RELEASE" "git" "requests"
 
 e2e_run build "$lab" "$FROSTROOT" build --plain --insecure
 e2e_expect_status 0 build

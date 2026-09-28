@@ -212,7 +212,7 @@ const sampleRecipeText = `# frostroot recipe: the image you want. Edit it, then 
 
 [image]
 name = "lab"  # file name of the tarball and name of the WSL distro
-release = "24.04"
+release = "26.04"
 arch = "amd64"  # the only architecture in v1
 
 [user]
@@ -235,7 +235,7 @@ include = ["git", "build-essential"]
 const sampleDiffText = `  [image]
 - name = "lab"  # file name of the tarball and name of the WSL distro
 + name = "cpp-lab"  # file name of the tarball and name of the WSL distro
-  release = "24.04"
+  release = "26.04"
   arch = "amd64"  # the only architecture in v1
 
   [packages]

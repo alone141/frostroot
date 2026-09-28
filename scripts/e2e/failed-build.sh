@@ -12,7 +12,7 @@ e2e_begin failed-build
 e2e_require_bootstrap
 e2e_build_frostroot
 lab=$LAB/lab
-e2e_recipe "$lab" e2e-broken 24.04 "ninja-buld"
+e2e_recipe "$lab" e2e-broken "$E2E_RELEASE" "ninja-buld"
 
 e2e_run build "$lab" "$FROSTROOT" build --plain
 e2e_check "the build fails as a build failure, exit 2" test "$e2eStatus" -eq 2
@@ -21,5 +21,5 @@ e2e_check "it points at the line of the log that explains it" e2e_contains "$LAB
 e2e_check "and that line is apt's" e2e_contains "$LAB/build.err" "Unable to locate package ninja-buld"
 e2e_check "it keeps the work directory to look at" e2e_contains "$LAB/build.err" "work directory kept at"
 e2e_check "no lock was written" test ! -e "$lab/frostroot.lock"
-e2e_check "no tarball was written" test ! -e "$lab/dist/e2e-broken-ubuntu-24.04-amd64.tar.gz"
+e2e_check "no tarball was written" test ! -e "$lab/dist/e2e-broken-ubuntu-$E2E_RELEASE-amd64.tar.gz"
 e2e_end

@@ -5,7 +5,7 @@
 #
 # usage: scripts/integration.sh [GO-TEST-ARGS...]
 #
-#   With no arguments every integration test runs (four real bootstraps and
+#   With no arguments every integration test runs (five real bootstraps and
 #   the real index of every release: 10 to 15 minutes), and the run fails
 #   unless each test CI requires was seen to pass. Arguments replace ./...,
 #   e.g. -run TestIntegrationPython ./internal/builder/; a subset cannot
@@ -30,6 +30,7 @@ cd "$(dirname "$0")/.." || exit 2
 # run knows what it is for.
 requiredTests=(
 	TestIntegrationNobleTiny
+	TestIntegrationResoluteTiny
 	TestIntegrationOfflineRebuild
 	TestIntegrationPython
 	TestIntegrationCatalogExistsInEveryRelease
@@ -62,7 +63,7 @@ fi
 
 # No -race: these tests spend their time in mmdebstrap and apt, not in Go,
 # and scripts/check.sh already runs the race detector over the same
-# packages. The default 10m timeout is not enough for four real bootstraps.
+# packages. The default 10m timeout is not enough for five real bootstraps.
 timeout=${FROSTROOT_INTEGRATION_TIMEOUT:-40m}
 go test -tags=integration -timeout "$timeout" -v "${testArgs[@]}" 2>&1 | tee "$log"
 status=${PIPESTATUS[0]}

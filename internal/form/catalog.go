@@ -22,7 +22,7 @@ var catalog = []Entry{
 	{"C/C++", "valgrind", "memory error detector and profiler"},
 	{"C/C++", "ninja-build", "small, fast build tool CMake can drive"},
 	{"Python", "python3", "the interpreter"},
-	{"Python", "python3-pip", "package installer (use a venv on 24.04)"},
+	{"Python", "python3-pip", "package installer (use a venv on 24.04 and later)"},
 	{"Python", "python3-venv", "virtual environments"},
 	{"Python", "ipython3", "interactive shell"},
 	{"Version control", "git", "distributed version control"},

@@ -82,6 +82,9 @@ Hand-typed alternatives break in ways that are easy to miss:
   - capture: `capture-roundtrip`
   - what the imported distribution does at first login: `wsl-boot`, which
     also stands in for the README's manual release check
+  - a new Ubuntu release: every one of them with `E2E_RELEASE` naming it,
+    after a spike like the one in
+    `docs/superpowers/specs/2026-09-28-frostroot-resolute.md`
 - A new recipe field needs a form field, a mapping in `FromRecipe` and
   `ToRecipe`, and a line in the recipe template in `internal/cli/init.go`.
   Otherwise `edit` silently drops it. `TestRecipeRoundTrip` and
@@ -197,7 +200,7 @@ Hand-typed alternatives break in ways that are easy to miss:
   `Getenv`.
 - Integration tests carry the `integration` build tag, are named
   `TestIntegration*`, and call `skipUnlessMmdebstrapAvailable`.
-  `scripts/integration.sh` requires five of them by name, so renaming one
+  `scripts/integration.sh` requires six of them by name, so renaming one
   means editing that list.
 - A fake implements the real interface and lives in the test file that uses
   it. `builder` and `cli` each have their own `fakeBootstrapper`.

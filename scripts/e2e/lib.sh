@@ -24,6 +24,9 @@ set -uo pipefail
 
 e2eRepo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 E2E_ROOT=${FROSTROOT_E2E_ROOT:-/var/tmp/frostroot-e2e-$(id -u)}
+# The Ubuntu release the scenarios build, 24.04 unless E2E_RELEASE names
+# another: the release the runs the README records were made with.
+E2E_RELEASE=${E2E_RELEASE:-24.04}
 e2eChecks=0
 e2eFailures=0
 e2eStatus=0

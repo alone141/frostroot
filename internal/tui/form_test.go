@@ -116,8 +116,8 @@ func TestFormModelTakesTypedAndChosenAnswers(t *testing.T) {
 	if got := values.String(form.KeyImageName); got != "cpp-lab" {
 		t.Errorf("image name = %q, want cpp-lab", got)
 	}
-	if got := values.String(form.KeyRelease); got != "22.04" {
-		t.Errorf("release = %q, want 22.04, one step up from 24.04", got)
+	if got := values.String(form.KeyRelease); got != "24.04" {
+		t.Errorf("release = %q, want 24.04, one step up from 26.04", got)
 	}
 }
 
@@ -125,7 +125,7 @@ func TestFormModelShowsSummaryBeforeWriting(t *testing.T) {
 	d := newFormDriver(t, form.Defaults(noHost))
 	d.pressEnterUntil(stageSummary)
 	view := d.model.View()
-	for _, wantText := range []string{"Summary", "lab, Ubuntu 24.04 amd64", "student, passwordless sudo", "Write frostroot.toml?"} {
+	for _, wantText := range []string{"Summary", "lab, Ubuntu 26.04 amd64", "student, passwordless sudo", "Write frostroot.toml?"} {
 		if !strings.Contains(view, wantText) {
 			t.Errorf("summary page lacks %q:\n%s", wantText, view)
 		}
