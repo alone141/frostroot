@@ -306,6 +306,24 @@ func TestFormFrames(t *testing.T) {
 			d.press(tea.WindowSizeMsg{Width: size.cols, Height: size.rows})
 			assertFrame(t, frameName("form-first-page", size.cols, size.rows), d.model.View())
 		})
+		// Fedora chosen on the Image page: the release below follows it.
+		t.Run(frameName("form-fedora-image", size.cols, size.rows), func(t *testing.T) {
+			d := newFormDriver(t, form.Defaults(noHost))
+			d.press(tea.WindowSizeMsg{Width: size.cols, Height: size.rows})
+			d.press(pressEnter) // past the name
+			d.press(pressRight) // Ubuntu to Fedora
+			assertFrame(t, frameName("form-fedora-image", size.cols, size.rows), d.model.View())
+		})
+		// Fedora's own Packages page, straight after the System page: the
+		// Sources page is Ubuntu's.
+		t.Run(frameName("form-fedora-packages", size.cols, size.rows), func(t *testing.T) {
+			d := newFormDriver(t, form.Defaults(noHost))
+			d.press(tea.WindowSizeMsg{Width: size.cols, Height: size.rows})
+			d.press(pressEnter)
+			d.press(pressRight)
+			d.pressEnterUntilField(form.KeyPackages)
+			assertFrame(t, frameName("form-fedora-packages", size.cols, size.rows), d.model.View())
+		})
 		for _, scenario := range summaryScenarios {
 			t.Run(frameName(scenario.name, size.cols, size.rows), func(t *testing.T) {
 				d := newFormDriverWithPreview(t, form.Defaults(noHost), scenario.preview)

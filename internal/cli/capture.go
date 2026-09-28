@@ -75,7 +75,7 @@ func (a *App) runCapture(args []string) int {
 		removeCapturedCertificates(writtenCertificates)
 		return exitUserError
 	}
-	if exitCode := a.runRecipeForm("capture", form.FromRecipe(snapshot.Recipe()), recipePath, *overwrite, *plain, snapshot.Keys, intro, indexes); exitCode != exitSuccess {
+	if exitCode := a.runRecipeForm("capture", form.FromRecipe(snapshot.Recipe()), recipePath, *overwrite, *plain, false, snapshot.Keys, intro, indexes); exitCode != exitSuccess {
 		// The form can fail after the recipe is on disk: a key it then
 		// fetches may not come. That recipe names these files, and a
 		// certificate read off a machine cannot be fetched again the way a

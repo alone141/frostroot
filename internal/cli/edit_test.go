@@ -59,23 +59,33 @@ func TestEditKeepsTheRecipeFamily(t *testing.T) {
 	}
 }
 
-// TestEditRefusesAFedoraRecipe: the form knows Ubuntu's releases and
-// packages only, and would give a Fedora recipe one of each.
-func TestEditRefusesAFedoraRecipe(t *testing.T) {
+// TestEditKeepsAnUnchangedFedoraRecipe: edit opens a Fedora recipe with
+// Fedora's questions, which are Ubuntu's without the sources, Python and
+// certificates, and writes back what it read.
+func TestEditKeepsAnUnchangedFedoraRecipe(t *testing.T) {
 	recipeDir := newRecipeDir(t, "fedora.toml")
-	before, err := os.ReadFile(filepath.Join(recipeDir, "frostroot.toml"))
-	if err != nil {
-		t.Fatal(err)
+	original := loadWrittenRecipe(t, recipeDir)
+	exitCode, stdout, stderr, prompt := runEditWithAnswers(recipeDir, nil)
+	if exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr)
 	}
-	exitCode, _, stderr, prompt := runEditWithAnswers(recipeDir, nil)
-	if exitCode != exitUserError || !strings.Contains(stderr, "edit does not know Fedora recipes yet") {
-		t.Errorf("exit code = %d, stderr %q", exitCode, stderr)
+	want := []string{"Image name", "Fedora release (number or value)", "User name", "Passwordless sudo (y/n)", "Timezone", "Locale (number or value)", "Boot with systemd (y/n)", "Packages (numbers or names, separated by spaces or commas)", "Other packages", "Write frostroot.toml? (y/n)"}
+	if !slices.Equal(prompt.questionsAsked, want) {
+		t.Errorf("questions =\n%q\nwant\n%q", prompt.questionsAsked, want)
 	}
-	if len(prompt.questionsAsked) != 0 {
-		t.Errorf("asked %d questions of a recipe it cannot edit", len(prompt.questionsAsked))
+	// The recipe's own values are the defaults: its release, and its
+	// packages split into the catalog's and the rest.
+	if got := prompt.defaultsOffered[1]; got != "44" {
+		t.Errorf("release default = %q", got)
 	}
-	if after, err := os.ReadFile(filepath.Join(recipeDir, "frostroot.toml")); err != nil || string(after) != string(before) {
-		t.Errorf("the recipe changed: %v", err)
+	if got := prompt.defaultsOffered[7] + " | " + prompt.defaultsOffered[8]; got != "git gcc | NetworkManager-tui perl-File-Temp" {
+		t.Errorf("packages defaults = %q", got)
+	}
+	if !strings.Contains(stdout, "Image     fedora-lab, Fedora 44 amd64") || strings.Contains(stdout, "Sources ") {
+		t.Errorf("the summary does not describe a Fedora recipe:\n%s", stdout)
+	}
+	if got := loadWrittenRecipe(t, recipeDir); !reflect.DeepEqual(got, original) {
+		t.Errorf("edit changed a recipe nobody touched:\n got %+v\nwant %+v", got, original)
 	}
 }
 

@@ -8,6 +8,7 @@ package form
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"frostroot/internal/distro"
@@ -46,8 +47,12 @@ type Option struct {
 
 // Field is one question.
 type Field struct {
-	Key         string // the Values key; stable, lowercase
-	Page        string // fields with the same page are shown together
+	Key  string // the Values key; stable, lowercase
+	Page string // fields with the same page are shown together
+	// Families are the families the field is asked for; none means every
+	// one. Two fields may share a key when their families differ: each
+	// family asks its release, and chooses its packages, its own way.
+	Families    []distro.Family
 	Title       string
 	Description string // one line under the title, or empty
 	Kind        Kind
@@ -66,6 +71,25 @@ type Field struct {
 	// whatever the recipe adds, and a field that said otherwise would throw
 	// away a download of it every time a source was ticked.
 	Sourced bool
+}
+
+// AskedFor reports whether the field is a question of family.
+func (f Field) AskedFor(family distro.Family) bool {
+	return len(f.Families) == 0 || slices.Contains(f.Families, family)
+}
+
+// FieldsFor returns the questions of a family already chosen: the fields
+// asked for it, without the question that chooses it. It is what the plain
+// interface asks, and the full-screen one when the family is not a
+// question: capture's, and init's with --distro.
+func FieldsFor(fields []Field, family distro.Family) []Field {
+	var asked []Field
+	for _, field := range fields {
+		if field.Key != KeyDistro && field.AskedFor(family) {
+			asked = append(asked, field)
+		}
+	}
+	return asked
 }
 
 // DisplayLabel returns the option's display text: Label, or Value when there
@@ -109,10 +133,13 @@ const (
 	// by hand, and the form must give it back unchanged rather than drop it
 	// the first time someone runs frostroot edit.
 	keyPythonIndexURL = "python_index_url"
-	// keyDistro is not a field yet: [image] distro, carried through an edit
-	// so that a recipe which names its family keeps naming it. Ubuntu is
-	// the only family until the form offers a choice.
-	keyDistro = "distro"
+	// KeyDistro is the family, such as "ubuntu": the full-screen form asks
+	// it first thing, and the questions after it are that family's.
+	KeyDistro = "distro"
+	// keyOriginalDistro is not a field: [image] distro as the recipe wrote
+	// it, so that a recipe which names its family keeps naming it, and one
+	// that names none is written back without the line.
+	keyOriginalDistro = "original_distro"
 )
 
 // The pages fields are grouped on, in order.
@@ -155,7 +182,15 @@ type Host struct {
 	OpenPythonIndex IndexOpener
 }
 
-// Fields returns every question, in the order they are asked.
+// The families of the fields only one family asks.
+var (
+	ubuntuOnly = []distro.Family{distro.Ubuntu}
+	fedoraOnly = []distro.Family{distro.Fedora}
+)
+
+// Fields returns every question of every family, in the order they are
+// asked: the family's own after the question that chooses it. FieldsFor
+// picks one family's.
 func Fields(host Host) []Field {
 	return []Field{
 		{
@@ -166,9 +201,19 @@ func Fields(host Host) []Field {
 			Validate:    recipe.CheckImageName,
 		},
 		{
-			Key: KeyRelease, Page: PageImage, Kind: KindSelect,
+			Key: KeyDistro, Page: PageImage, Kind: KindSelect,
+			Title:   "Distribution",
+			Options: familyOptions(),
+		},
+		{
+			Key: KeyRelease, Page: PageImage, Kind: KindSelect, Families: ubuntuOnly,
 			Title:   "Ubuntu release",
-			Options: releaseOptions(),
+			Options: releaseOptions(distro.Ubuntu),
+		},
+		{
+			Key: KeyRelease, Page: PageImage, Kind: KindSelect, Families: fedoraOnly,
+			Title:   "Fedora release",
+			Options: releaseOptions(distro.Fedora),
 		},
 		{
 			Key: KeyUserName, Page: PageUser, Kind: KindInput,
@@ -202,26 +247,26 @@ func Fields(host Host) []Field {
 			Description: "Needed for services, snapd and most tutorials",
 		},
 		{
-			Key: KeySources, Page: PageSources, Kind: KindMultiSelect,
+			Key: KeySources, Page: PageSources, Kind: KindMultiSelect, Families: ubuntuOnly,
 			Title:       "Third-party apt sources",
 			Description: "Repositories besides Ubuntu's archive; their signing keys are fetched and checked when the recipe is written",
 			Options:     sourceOptions(),
 		},
 		{
-			Key: KeyPPAs, Page: PageSources, Kind: KindInput,
+			Key: KeyPPAs, Page: PageSources, Kind: KindInput, Families: ubuntuOnly,
 			Title:       "Other PPAs",
 			Description: "Launchpad PPAs as owner/name, separated by spaces or commas",
 			Placeholder: "none",
 			Validate:    checkPPAList,
 		},
 		{
-			Key: KeyPackages, Page: PagePackages, Kind: KindMultiSelect, Filterable: true,
+			Key: KeyPackages, Page: PagePackages, Kind: KindMultiSelect, Filterable: true, Families: ubuntuOnly,
 			Title:       "Packages",
 			Description: "Space selects, Enter continues, / filters",
 			Options:     catalogOptions(distro.Ubuntu),
 		},
 		{
-			Key: KeyOtherPackages, Page: PagePackages, Kind: KindSearch,
+			Key: KeyOtherPackages, Page: PagePackages, Kind: KindSearch, Families: ubuntuOnly,
 			Title:       "Other packages",
 			Description: "type to search the archive and the sources above, or a name; Space adds",
 			Placeholder: "none",
@@ -230,7 +275,7 @@ func Fields(host Host) []Field {
 			Sourced:     true,
 		},
 		{
-			Key: KeyPythonPackages, Page: PagePackages, Kind: KindSearch,
+			Key: KeyPythonPackages, Page: PagePackages, Kind: KindSearch, Families: ubuntuOnly,
 			Title:       "Python packages",
 			Description: "type to search PyPI, or a name; installed into the image's virtual environment",
 			Placeholder: "none",
@@ -238,8 +283,24 @@ func Fields(host Host) []Field {
 			OpenIndex:   host.OpenPythonIndex,
 			Summaries:   true,
 		},
+		// Fedora's packages come from Fedora's own repositories, and its
+		// Python packages are Fedora's python3-* ones: there is no PyPI field.
 		{
-			Key: KeyCertificates, Page: PageTrust, Kind: KindInput,
+			Key: KeyPackages, Page: PagePackages, Kind: KindMultiSelect, Filterable: true, Families: fedoraOnly,
+			Title:       "Packages",
+			Description: "Space selects, Enter continues, / filters",
+			Options:     catalogOptions(distro.Fedora),
+		},
+		{
+			Key: KeyOtherPackages, Page: PagePackages, Kind: KindSearch, Families: fedoraOnly,
+			Title:       "Other packages",
+			Description: "type to search Fedora's packages, or a name; Space adds",
+			Placeholder: "none",
+			Validate:    checkRPMList,
+			OpenIndex:   host.OpenIndex,
+		},
+		{
+			Key: KeyCertificates, Page: PageTrust, Kind: KindInput, Families: ubuntuOnly,
 			Title:       "Certificate authorities",
 			Description: "PEM files next to the recipe, separated by spaces or commas. The image trusts them, and so does the build: what a network that inspects TLS needs",
 			Placeholder: "none",
@@ -304,11 +365,25 @@ func checkPPAList(text string) error {
 	return nil
 }
 
-// releaseOptions lists the supported Ubuntu releases, marking the one past
-// its standard support.
-func releaseOptions() []Option {
+// familyOptions lists the families frostroot builds, in the order the
+// table gives them.
+func familyOptions() []Option {
 	var options []Option
-	for _, version := range distro.SupportedVersions(distro.Ubuntu) {
+	for _, family := range distro.Families() {
+		options = append(options, Option{Value: string(family), Label: family.Name()})
+	}
+	return options
+}
+
+// releaseOptions lists the releases of a family that frostroot builds,
+// marking an Ubuntu one past its standard support.
+func releaseOptions(family distro.Family) []Option {
+	var options []Option
+	for _, version := range distro.SupportedVersions(family) {
+		if family != distro.Ubuntu {
+			options = append(options, Option{Value: version, Label: family.Name() + " " + version})
+			continue
+		}
 		release, err := distro.Lookup(version, distro.SupportedArch)
 		if err != nil {
 			continue // SupportedVersions only lists what Lookup knows
@@ -322,11 +397,23 @@ func releaseOptions() []Option {
 	return options
 }
 
-// checkPackageList validates a free-text list of package names separated by
-// spaces or commas. An empty list is fine.
+// checkPackageList validates a free-text list of apt package names
+// separated by spaces or commas. An empty list is fine.
 func checkPackageList(text string) error {
+	return checkNames(text, recipe.CheckPackageName)
+}
+
+// checkRPMList is the same for Fedora's package names, which may hold
+// capitals and underscores (NetworkManager, perl-File-Temp): the rule a
+// Fedora recipe's are validated by.
+func checkRPMList(text string) error {
+	return checkNames(text, recipe.CheckRPMName)
+}
+
+// checkNames reports the first name in text that check refuses.
+func checkNames(text string, check func(string) error) error {
 	for _, packageName := range splitPackageList(text) {
-		if err := recipe.CheckPackageName(packageName); err != nil {
+		if err := check(packageName); err != nil {
 			return err
 		}
 	}

@@ -1,0 +1,21 @@
+Packages
+┃ Packages
+┃ Space selects, Enter continues, / filters
+┃ > [ ] gcc  the GNU C compiler, with make and C headers
+┃   [ ] gcc-c++  the GNU C++ compiler
+┃   [ ] make  GNU make
+┃   [ ] cmake  cross-platform build system
+┃   [ ] gdb  the GNU debugger
+┃   [ ] pkgconf-pkg-config  pkg-config: library build flags
+┃   [ ] clang  the LLVM C/C++ compiler
+┃   [ ] clang-tools-extra  clang-format, clang-tidy, clangd
+┃   [ ] valgrind  memory error detector and profiler
+┃   [ ] ninja-build  small, fast build tool CMake can drive
+
+  Other packages
+  type to search Fedora's packages, or a name; Space adds
+  > type to search, or a name
+  no package index: names are added as typed and checked by…
+  nothing chosen yet
+
+x toggle • ↑ up • ↓ down • / filter • shift+tab back …

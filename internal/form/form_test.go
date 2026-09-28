@@ -31,16 +31,19 @@ var noHost = fakeHost(nil)
 
 func TestFieldsAreWellFormed(t *testing.T) {
 	fields := Fields(noHost)
-	seenKeys := map[string]bool{}
 	pages := Pages()
 	lastPageIndex := 0
 	for _, field := range fields {
-		if field.Key == "" || strings.ToLower(field.Key) != field.Key || seenKeys[field.Key] {
-			t.Errorf("field key %q must be lowercase and unique", field.Key)
+		if field.Key == "" || strings.ToLower(field.Key) != field.Key {
+			t.Errorf("field key %q must be lowercase", field.Key)
 		}
-		seenKeys[field.Key] = true
 		if field.Title == "" {
 			t.Errorf("%s has no title", field.Key)
+		}
+		for _, family := range field.Families {
+			if !slices.Contains(distro.Families(), family) {
+				t.Errorf("%s is asked for %q, which is no family", field.Key, family)
+			}
 		}
 		pageIndex := slices.Index(pages, field.Page)
 		if pageIndex < 0 {
@@ -69,16 +72,25 @@ func TestFieldsAreWellFormed(t *testing.T) {
 		case KindConfirm:
 		}
 	}
-	// Every default answers a field, and every answer is one of the options.
-	defaults := Defaults(noHost)
-	for _, field := range fields {
-		answer, answered := defaults[field.Key]
-		if !answered {
-			t.Errorf("no default for %s", field.Key)
-			continue
-		}
-		if field.Kind == KindSelect && !slices.ContainsFunc(field.Options, func(option Option) bool { return option.Value == answer }) {
-			t.Errorf("default %v for %s is not an option", answer, field.Key)
+	// Each family asks each key once, and every answer it starts from is a
+	// field's, and one of the options of a select.
+	for _, family := range distro.Families() {
+		asked := FieldsFor(fields, family)
+		seenKeys := map[string]bool{}
+		defaults := ForFamily(Defaults(noHost), family)
+		for _, field := range asked {
+			if seenKeys[field.Key] {
+				t.Errorf("%s asks %s twice", family, field.Key)
+			}
+			seenKeys[field.Key] = true
+			answer, answered := defaults[field.Key]
+			if !answered {
+				t.Errorf("no default for %s of %s", field.Key, family)
+				continue
+			}
+			if field.Kind == KindSelect && !slices.ContainsFunc(field.Options, func(option Option) bool { return option.Value == answer }) {
+				t.Errorf("default %v for %s of %s is not an option", answer, field.Key, family)
+			}
 		}
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +28,7 @@ var (
 	pressEnter = tea.KeyMsg{Type: tea.KeyEnter}
 	pressUp    = tea.KeyMsg{Type: tea.KeyUp}
 	pressLeft  = tea.KeyMsg{Type: tea.KeyLeft}
+	pressRight = tea.KeyMsg{Type: tea.KeyRight}
 	pressEsc   = tea.KeyMsg{Type: tea.KeyEsc}
 	pressCtrlC = tea.KeyMsg{Type: tea.KeyCtrlC}
 )
@@ -63,6 +65,19 @@ func (d *formDriver) pressEnterUntil(stage formStage) {
 	}
 }
 
+// pressEnterUntilField presses Enter until the field of key has the focus,
+// or the press budget runs out.
+func (d *formDriver) pressEnterUntilField(key string) {
+	d.t.Helper()
+	for range maxKeyPresses {
+		if focused := d.model.pages.GetFocusedField(); focused != nil && focused.GetKey() == key {
+			return
+		}
+		d.press(pressEnter)
+	}
+	d.t.Fatalf("%s never had the focus after %d Enter presses", key, maxKeyPresses)
+}
+
 func TestFormBindingCoversEveryField(t *testing.T) {
 	fields := form.Fields(noHost)
 	binding := newFormBinding(context.Background(), fields, form.Defaults(noHost), unicodeGlyphs)
@@ -75,14 +90,15 @@ func TestFormBindingCoversEveryField(t *testing.T) {
 			t.Errorf("widget for %s has key %q", field.Key, huhField.GetKey())
 		}
 	}
-	// One group per page that has a field: the Captured page has none
-	// unless capture puts its note there.
-	pagesWithFields := map[string]bool{}
-	for _, field := range fields {
-		pagesWithFields[field.Page] = true
+	// One group per page every family asks alike, and one per family for
+	// the pages only Ubuntu asks or each family asks its own way. The
+	// Captured page has none unless capture puts its note there.
+	var titles []string
+	for _, group := range binding.groups() {
+		titles = append(titles, strings.TrimSpace(frameOf(group.Header())))
 	}
-	if groups := binding.groups(); len(groups) != len(pagesWithFields) {
-		t.Errorf("%d groups, want one per page with a field (%d)", len(groups), len(pagesWithFields))
+	if want := []string{"Image", "User", "System", "Sources", "Packages", "Packages", "Trust"}; !slices.Equal(titles, want) {
+		t.Errorf("groups %q, want %q", titles, want)
 	}
 	// Untouched, the binding gives back what it started from.
 	defaults := form.Defaults(noHost)
@@ -110,6 +126,7 @@ func TestFormModelTakesTypedAndChosenAnswers(t *testing.T) {
 	}
 	d.press(typeText("cpp-lab"))
 	d.press(pressEnter)
+	d.press(pressEnter) // Ubuntu stays the family
 	d.press(pressUp)
 	d.pressEnterUntil(stageDone)
 	values := d.model.binding.values()

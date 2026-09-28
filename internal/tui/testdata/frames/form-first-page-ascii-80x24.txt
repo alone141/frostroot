@@ -3,15 +3,15 @@ Image
 | Names the tarball and the WSL distribution
 | > lab
 
+| Distribution
+| <Ubuntu>
+
 | Ubuntu release
+|   Ubuntu 20.04 LTS (focal)  (past standard support: security fixes only with
+|   Ubuntu Pro)
+|   Ubuntu 22.04 LTS (jammy)
 |   Ubuntu 24.04 LTS (noble)
 | > Ubuntu 26.04 LTS (resolute)
-|
-|
-|
-|
-|
-
 
 
 

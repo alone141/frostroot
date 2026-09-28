@@ -188,19 +188,17 @@ func parseYesNo(answer string) (decision, understood bool) {
 	return false, false
 }
 
-// resolveOption finds the option answer names, by 1-based number or by
-// value.
+// resolveOption finds the option answer names, by value or by 1-based
+// number. The value is tried first: Fedora's releases are numbers, and 44
+// is the release, not the 44th option.
 func resolveOption(options []form.Option, answer string) (value string, found bool) {
-	if number, err := strconv.Atoi(answer); err == nil {
-		if number >= 1 && number <= len(options) {
-			return options[number-1].Value, true
-		}
-		return "", false
-	}
 	for _, option := range options {
 		if option.Value == answer {
 			return option.Value, true
 		}
+	}
+	if number, err := strconv.Atoi(answer); err == nil && number >= 1 && number <= len(options) {
+		return options[number-1].Value, true
 	}
 	return "", false
 }

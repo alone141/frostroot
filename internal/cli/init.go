@@ -9,6 +9,7 @@ import (
 	"strings"
 	"text/template"
 
+	"frostroot/internal/distro"
 	"frostroot/internal/export"
 	"frostroot/internal/form"
 	"frostroot/internal/recipe"
@@ -76,9 +77,14 @@ url = {{tomlQuote .URL}}
 {{end}}key = {{tomlQuote .Key}}
 {{end}}{{end}}`))
 
-const initUsageText = `usage: frostroot init [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE | --insecure] [--refresh-index]
+const initUsageText = `usage: frostroot init [--distro ubuntu|fedora] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE | --insecure] [--refresh-index]
 
 Answer a few questions and write frostroot.toml in the current directory.
+
+The full-screen form asks for the distribution first, and the questions
+after it are that distribution's: Fedora's have no apt sources, Python
+packages or certificate authorities. --distro answers it, and --plain,
+which never asks it, writes an Ubuntu recipe unless --distro says Fedora.
 
 ` + indexUsageText
 
@@ -86,9 +92,20 @@ func (a *App) runInit(args []string) int {
 	flags := a.newFlagSet("init", initUsageText)
 	overwrite := flags.Bool("force", false, "overwrite an existing frostroot.toml")
 	plain := flags.Bool("plain", false, "ask line by line instead of showing the full-screen form")
+	distroName := flags.String("distro", "", "write a recipe of this `distribution`, ubuntu or fedora, without asking")
 	indexOptions := addIndexFlags(flags)
 	if exitCode, stop := a.parseFlags(flags, args); stop {
 		return exitCode
+	}
+	initial := form.Defaults(a.host())
+	askFamily := *distroName == ""
+	if !askFamily {
+		family, err := distro.FamilyOf(*distroName)
+		if err != nil {
+			a.stderrf("frostroot init: --distro: %v\n", err)
+			return exitUserError
+		}
+		initial = form.ForFamily(initial, family)
 	}
 	recipePath := filepath.Join(a.RecipeDir, recipeFileName)
 	if _, err := os.Stat(recipePath); err == nil && !*overwrite {
@@ -99,7 +116,7 @@ func (a *App) runInit(args []string) int {
 	if !ok {
 		return exitUserError
 	}
-	return a.runRecipeForm("init", form.Defaults(a.host()), recipePath, *overwrite, *plain, nil, nil, indexes)
+	return a.runRecipeForm("init", initial, recipePath, *overwrite, *plain, askFamily, nil, nil, indexes)
 }
 
 // renderRecipe returns imageRecipe as the file init and edit write, byte

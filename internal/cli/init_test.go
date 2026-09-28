@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -420,5 +421,59 @@ func TestInitLeavesARecipeThatAppearedWhileTheFormWasOpen(t *testing.T) {
 	}
 	if len(leftovers) != 0 {
 		t.Errorf("temporary files left behind: %q", leftovers)
+	}
+}
+
+// TestInitWithDistroFedora: --distro answers the family, and the plain
+// questions of a Fedora recipe are Ubuntu's without the sources, Python and
+// certificates. The recipe names its family; Fedora's release is chosen by
+// its value, 44, which is also a number.
+func TestInitWithDistroFedora(t *testing.T) {
+	recipeDir := t.TempDir()
+	var stdout bytes.Buffer
+	prompt := &scriptedPrompt{answers: []string{"fedora-lab", "44", "", "", "", "tr_TR.UTF-8", "", "gcc 2 git", "NetworkManager-tui", ""}}
+	app := App{Stdout: &stdout, Stderr: io.Discard, RecipeDir: recipeDir, Prompt: prompt, ReadFile: noHostFile}
+	if exitCode := app.Run([]string{"init", "--distro", "fedora"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d\n%s", exitCode, stdout.String())
+	}
+	wantQuestions := []string{"Image name", "Fedora release (number or value)", "User name", "Passwordless sudo (y/n)", "Timezone", "Locale (number or value)", "Boot with systemd (y/n)", "Packages (numbers or names, separated by spaces or commas)", "Other packages", "Write frostroot.toml? (y/n)"}
+	if !slices.Equal(prompt.questionsAsked, wantQuestions) {
+		t.Errorf("questions =\n%q\nwant\n%q", prompt.questionsAsked, wantQuestions)
+	}
+	want := recipe.Recipe{
+		Image:    recipe.Image{Name: "fedora-lab", Distro: "fedora", Release: "44", Arch: "amd64"},
+		User:     recipe.User{Name: "student", Sudo: true},
+		WSL:      recipe.WSL{Systemd: true, DefaultUser: "student"},
+		Locale:   recipe.Locale{Lang: "tr_TR.UTF-8", Timezone: "UTC"},
+		Packages: recipe.Packages{Include: []string{"gcc", "gcc-c++", "git", "NetworkManager-tui"}},
+	}
+	if got := loadWrittenRecipe(t, recipeDir); !reflect.DeepEqual(got, want) {
+		t.Errorf("recipe:\n got %+v\nwant %+v", got, want)
+	}
+	for _, wantText := range []string{"Fedora 44", "Image     fedora-lab, Fedora 44 amd64", "gcc-c++  the GNU C++ compiler"} {
+		if !strings.Contains(stdout.String(), wantText) {
+			t.Errorf("stdout lacks %q:\n%s", wantText, stdout.String())
+		}
+	}
+	for _, unwanted := range []string{"build-essential", "Sources ", "PEP 668"} {
+		if strings.Contains(stdout.String(), unwanted) {
+			t.Errorf("stdout mentions %q, which is Ubuntu's:\n%s", unwanted, stdout.String())
+		}
+	}
+}
+
+func TestInitRefusesAnUnknownDistro(t *testing.T) {
+	recipeDir := t.TempDir()
+	prompt := &scriptedPrompt{}
+	var stderr bytes.Buffer
+	app := App{Stdout: io.Discard, Stderr: &stderr, RecipeDir: recipeDir, Prompt: prompt, ReadFile: noHostFile}
+	if exitCode := app.Run([]string{"init", "--distro", "gentoo"}); exitCode != exitUserError {
+		t.Errorf("exit code = %d, want a user error", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "--distro") || !strings.Contains(stderr.String(), "ubuntu, fedora") || len(prompt.questionsAsked) != 0 {
+		t.Errorf("stderr %q after %d questions; want the flag and the families named, and nothing asked", stderr.String(), len(prompt.questionsAsked))
+	}
+	if _, err := os.Stat(filepath.Join(recipeDir, "frostroot.toml")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a recipe was written: %v", err)
 	}
 }

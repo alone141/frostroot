@@ -51,13 +51,19 @@ func isCharacterDevice(stream any) bool {
 // providedKeys are armored signing keys by source name that the caller
 // already has (capture read them from the machine); other missing keys are
 // fetched. intro is shown before the questions: what capture has to say,
-// or nothing.
-func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath string, replace, plainRequested bool, providedKeys map[string][]byte, intro []form.Field, indexes *packageIndexes) int {
+// or nothing. askFamily says whether the full-screen form asks the family,
+// which then decides the questions after it; the plain interface never
+// does, because people pipe answers into it, and asks initial's family's.
+func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath string, replace, plainRequested, askFamily bool, providedKeys map[string][]byte, intro []form.Field, indexes *packageIndexes) int {
 	host := a.host()
 	host.OpenIndex = indexes.Open
 	host.OpenPythonIndex = indexes.OpenPython
-	fields := slices.Concat(intro, form.Fields(host))
 	fullScreen := a.useFullScreen(plainRequested)
+	questions := form.Fields(host)
+	if !fullScreen || !askFamily {
+		questions = form.FieldsFor(questions, form.Family(initial))
+	}
+	fields := slices.Concat(intro, questions)
 	preview := recipePreview(recipePath, indexes)
 	var values form.Values
 	var problems []string
