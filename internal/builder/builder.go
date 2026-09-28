@@ -11,11 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"time"
 
 	"frostroot/internal/deb"
-	"frostroot/internal/distro"
 	"frostroot/internal/export"
 	"frostroot/internal/pool"
 	"frostroot/internal/recipe"
@@ -149,16 +147,20 @@ type Builder struct {
 }
 
 // Build builds imageRecipe, which the caller has already checked with
-// recipe.Validate. It resolves the release, bootstraps the image and, only if
-// everything succeeded, places the tarball and then the lock. A failed build
-// writes no lock, no tarball and no temporary file, and keeps its work
-// directory for debugging.
+// recipe.Validate. It resolves the family and the release, bootstraps the
+// image and, only if everything succeeded, places the tarball and then the
+// lock. A failed build writes no lock, no tarball and no temporary file, and
+// keeps its work directory for debugging.
 //
 // With Options.Offline the image is rebuilt from frostroot.lock and
 // vendor/debs instead: the lock must still describe the recipe, the pool must
 // hold every locked file intact, mmdebstrap installs from a local repository
 // of exactly those files, and the result must list exactly the lock's
 // packages. The lock is read, never written.
+//
+// What depends on the family is asked of a familyBuild. What every family
+// shares stays here: the frozen instant, the work directory, and placing
+// the tarball and the lock so that a failed build leaves neither.
 func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options Options) (Result, error) {
 	operatingSystem := options.GOOS
 	if operatingSystem == "" {
@@ -171,30 +173,8 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if getenv == nil {
 		getenv = os.Getenv
 	}
-	release, err := distro.Lookup(imageRecipe.Image.Release, imageRecipe.Image.Arch)
-	if err != nil {
-		return Result{}, err
-	}
-	archiveURL := release.ArchiveURL
-	if options.MirrorURL != "" {
-		archiveURL = options.MirrorURL
-	}
-	var offline *offlinePlan
-	if options.Offline {
-		if options.MirrorURL != "" {
-			return Result{}, errors.New("an offline build takes no mirror: it installs from vendor/debs")
-		}
-		if offline, err = planOffline(options.RecipeDir, imageRecipe, release); err != nil {
-			return Result{}, err
-		}
-	}
-	// The keys a build will trust are read before anything else is done.
-	sourceKeys, err := readSourceKeys(options.RecipeDir, imageRecipe.Sources)
-	if err != nil {
-		return Result{}, err
-	}
-	// So are the certificate authorities, for the same reason.
-	certificates, err := ReadCertificates(options.RecipeDir, imageRecipe.CertificatePaths())
+	progress := progressOrDiscard(options.Progress)
+	image, offline, err := b.newFamilyBuild(imageRecipe, options, progress)
 	if err != nil {
 		return Result{}, err
 	}
@@ -207,41 +187,8 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if err != nil {
 		return Result{}, err
 	}
-	// Apt splits a "deb" line on whitespace and reads options out of
-	// brackets, and every build hands it a path under the work root: the
-	// signed-by path of an extra source, and the copy:// URL of the
-	// vendored pool an offline build installs from. Neither can be quoted,
-	// so a work root holding one of these characters is refused before
-	// anything is built, whatever the recipe asks for.
-	if strings.ContainsAny(workRoot, " \t[]") {
-		return Result{}, fmt.Errorf("%w: %s contains a space or a bracket, which an apt source line cannot carry; set XDG_CACHE_HOME to another directory", ErrBadWorkRoot, workRoot)
-	}
-	progress := progressOrDiscard(options.Progress)
-	// The lines the image keeps: keys under /etc/apt/keyrings. The lines
-	// mmdebstrap gets name the staged keys instead, once the stage exists.
-	imageSourceLines := SourceLines(release, options.MirrorURL, imageRecipe.Sources, ImageKeyringDir)
-	bootstrapSpec := BootstrapSpec{
-		Suite:             release.Suite,
-		SourceLines:       imageSourceLines,
-		Include:           PackagesToInstall(imageRecipe),
-		Arch:              imageRecipe.Image.Arch,
-		InstallRecommends: true,
-		KeyringPath:       UbuntuArchiveKeyring,
-		WorkDir:           workRoot,
-		SourceDateEpoch:   instant.epoch,
-		Progress:          progress,
-	}
-	if offline != nil {
-		// Every locked package, so that the outcome does not depend on the
-		// priorities in the local index; see the v0.4 spec.
-		bootstrapSpec.Include = offline.packageNames()
-		bootstrapSpec.Trusted = true
-		bootstrapSpec.KeyringPath = ""
-	}
-	if preflighter, ok := b.Bootstrapper.(Preflighter); ok {
-		if err := preflighter.Preflight(bootstrapSpec); err != nil {
-			return Result{}, err
-		}
+	if err := image.preflight(workRoot, instant); err != nil {
+		return Result{}, err
 	}
 	if err := checkOutputWritable(options.RecipeDir); err != nil {
 		return Result{}, err
@@ -259,24 +206,11 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		return Result{}, err
 	}
 
-	// apt fetches a recipe's extra sources on the build host, so an HTTPS
-	// source behind a proxy that inspects TLS needs the authority here too.
-	// Offline there is no source to fetch and no network to inspect.
-	if offline == nil {
-		buildTrustPEM := append(append([]byte(nil), certificates.PEM...), options.ExtraTrustPEM...)
-		caInfoPath, err := writeAptCaInfo(workDir, buildTrustPEM)
-		if err != nil {
-			return Result{WorkDir: workDir}, err
-		}
-		bootstrapSpec.CaInfoPath = caInfoPath
-		bootstrapSpec.Insecure = options.Insecure
-	}
-
 	// From here on every failure keeps the work directory: it is the only
 	// debugging evidence. Nothing in dist/ or the lock is touched until the
 	// bootstrap has fully succeeded.
 	result := Result{WorkDir: workDir, Offline: offline != nil, SourceDateEpoch: instant.epoch, Reproducible: instant.fromLock}
-	var temporaryLockPath, stagedTarballPath string
+	var builtTarballPath, temporaryLockPath, stagedTarballPath string
 	failBuild := func(err error) (Result, error) {
 		// Best effort throughout: the build has already failed, and that
 		// error is the one returned.
@@ -287,156 +221,31 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 			// The image is beside its destination under a temporary name,
 			// waiting for the lock to land. It goes back to the work
 			// directory, which a failed build keeps, and dist/ is as it was.
-			export.Unstage(stagedTarballPath, bootstrapSpec.TarballPath)
+			export.Unstage(stagedTarballPath, builtTarballPath)
 		}
 		return result, err
 	}
 
-	stageOptions := StageOptions{
-		RecordForLock: offline == nil,
-		SourceLines:   imageSourceLines,
-		Python:        PythonOptions{Offline: offline != nil, SourceDateEpoch: instant.epoch, Insecure: options.Insecure},
-	}
-	if offline != nil {
-		stageOptions.SourceLines = offline.lock.Sources
-		// apt marks nothing on its own offline, since every locked package
-		// is asked for by name; the lock says what the online apt marked.
-		stageOptions.AutoMarks = RenderExtendedStates(offline.lock.Packages, offline.lock.Arch)
-		if len(offline.wheelEntries) > 0 {
-			stageOptions.Requirements = RenderRequirements(offline.lock)
-			stageOptions.WheelsDir = filepath.Join(workDir, PythonWheelsDirName)
-			// The pip the lock records, not the one this frostroot pins: it
-			// is what the pool holds, and what the online build resolved with.
-			stageOptions.Python.Pip = LockedPip(offline.lock)
-		}
-	}
-	if len(certificates.Files) > 0 {
-		stageOptions.Certificates = certificates.Files
-		// The recipe's authorities are in the image's own store by the time
-		// the Python step runs, so pointing pip at that store is what lets
-		// it fetch through the proxy that signs with them.
-		stageOptions.Python.TrustImageCertificates = true
-	}
-	if len(options.ExtraTrustPEM) > 0 {
-		stageOptions.ExtraTrust = options.ExtraTrustPEM
-		stageOptions.Python.ExtraTrust = true
-	}
-	if len(sourceKeys) > 0 {
-		stageOptions.Keys = map[string][]byte{}
-		for name, key := range sourceKeys {
-			stageOptions.Keys[name] = key.binary
-		}
-	}
-	stage, err := WriteStage(filepath.Join(workDir, "stage"), imageRecipe, stageOptions)
-	if err != nil {
-		return failBuild(err)
-	}
-	switch {
-	case offline != nil:
-		repositoryDir := filepath.Join(workDir, "pool")
-		if err := stageRepository(offline, repositoryDir, progress); err != nil {
-			return failBuild(err)
-		}
-		if stage.WheelsDir != "" {
-			if err := pool.StageFiles(offline.wheelPoolDir, offline.wheelEntries, stage.WheelsDir, nil); err != nil {
-				return failBuild(fmt.Errorf("staging the vendored wheels: %w", err))
-			}
-		}
-		bootstrapSpec.SourceLines = []string{"deb [trusted=yes] copy://" + repositoryDir + " ./"}
-	case len(imageRecipe.Sources) > 0:
-		// apt run by mmdebstrap resolves signed-by on the host (see the v0.5
-		// spec's spike), so the lines it gets name the staged keys.
-		bootstrapSpec.SourceLines = SourceLines(release, options.MirrorURL, imageRecipe.Sources, stage.KeyringDir)
-	}
-	bootstrapSpec.CustomizeHooks = CustomizeHooks(stage)
-	bootstrapSpec.TarballPath = filepath.Join(workDir, "image.tar.gz")
-	bootstrapSpec.WorkDir = workDir
-	if err := b.Bootstrapper.Run(ctx, bootstrapSpec); err != nil {
-		return failBuild(err)
-	}
-
-	installedPackages, err := readDpkgStatus(stage.DpkgStatusPath)
+	builtTarballPath, err = image.bootstrap(ctx, workDir)
 	if err != nil {
 		return failBuild(err)
 	}
 	lockPath := filepath.Join(options.RecipeDir, LockFileName)
+	var counts packageCounts
 	if offline != nil {
 		progress.Report(ProgressEvent{Phase: PhaseCheckLock, Kind: EventPhaseStarted})
-		if err := compareWithLock(offline.lock, installedPackages); err != nil {
+		if counts, err = image.checkAgainstLock(); err != nil {
 			return failBuild(err)
 		}
-		if stage.PipListPath != "" {
-			installedWheels, err := readPipList(stage.PipListPath)
-			if err != nil {
-				return failBuild(err)
-			}
-			if err := ComparePythonWithLock(offline.lock, installedWheels); err != nil {
-				return failBuild(err)
-			}
-			result.PythonPackageCount = len(offline.lock.PyPI)
-		}
+		result.PythonPackageCount = counts.python
 		progress.Report(ProgressEvent{Phase: PhaseCheckLock, Kind: EventPhaseFinished})
 	} else {
 		progress.Report(ProgressEvent{Phase: PhaseWriteLock, Kind: EventPhaseStarted})
-		if err := recordChecksums(stage.AptListsDir, installedPackages, indexOrigins(release, archiveURL, imageRecipe.Sources)); err != nil {
+		var lock recipe.Lockfile
+		if lock, counts, err = image.composeLock(); err != nil {
 			return failBuild(err)
 		}
-		autoMarks, err := readExtendedStates(stage.ExtendedStatesPath)
-		if err != nil {
-			return failBuild(err)
-		}
-		markAutoInstalled(installedPackages, autoMarks, imageRecipe.Image.Arch)
-		requestedPackages := imageRecipe.Packages.Include
-		if requestedPackages == nil {
-			requestedPackages = []string{}
-		}
-		lock := recipe.Lockfile{
-			Version:          1,
-			Distro:           "ubuntu",
-			Release:          imageRecipe.Image.Release,
-			Suite:            release.Suite,
-			Arch:             imageRecipe.Image.Arch,
-			Mirror:           archiveURL,
-			Sources:          imageSourceLines,
-			FrostrootVersion: Version,
-			Requested:        requestedPackages,
-			SourceDateEpoch:  instant.epoch,
-			Repositories:     lockRepositories(release, imageRecipe.Sources, sourceKeys),
-			Certificates:     certificates.Locked,
-			Packages:         installedPackages,
-		}
-		if stage.PipReportPath != "" {
-			pythonResult, err := readPipReport(stage.PipReportPath, imageRecipe.PythonPackages())
-			if err != nil {
-				return failBuild(err)
-			}
-			lock.Python = &recipe.LockPython{
-				Requested:   imageRecipe.PythonPackages(),
-				Venv:        PythonVenvPath,
-				Interpreter: pythonResult.Interpreter,
-				PipVersion:  pythonResult.PipVersion,
-				IndexURL:    imageRecipe.PythonIndexURL(),
-			}
-			// Nothing but TLS stands between a resolve and whoever is on
-			// the path, and the hashes below are then what every rebuild
-			// verifies against. A lock is fact, and this is one.
-			if options.Insecure {
-				lock.Python.Transport = recipe.TransportUnverified
-			}
-			// A build resolving from an index named by the recipe installed
-			// pip from there too, and only the pinned step's own report says
-			// at what URL. Recording the constant's PyPI address instead
-			// would send vendor to the host such a network blocks.
-			if stage.PipPinReportPath != "" {
-				pin, err := readPinReport(stage.PipPinReportPath)
-				if err != nil {
-					return failBuild(err)
-				}
-				pythonResult.Wheels = withResolvedPin(pythonResult.Wheels, pin)
-			}
-			lock.PyPI = pythonResult.Wheels
-			result.PythonPackageCount = len(pythonResult.Wheels)
-		}
+		result.PythonPackageCount = counts.python
 		temporaryLockPath, err = writeTemporaryLock(options.RecipeDir, lock)
 		if err != nil {
 			return failBuild(err)
@@ -446,8 +255,8 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 
 	// mmdebstrap creates its output file before it starts, so existence alone
 	// proves nothing.
-	if builtTarball, err := os.Stat(bootstrapSpec.TarballPath); err != nil || builtTarball.Size() == 0 {
-		return failBuild(fmt.Errorf("bootstrap reported success but left no tarball at %s", bootstrapSpec.TarballPath))
+	if builtTarball, err := os.Stat(builtTarballPath); err != nil || builtTarball.Size() == 0 {
+		return failBuild(fmt.Errorf("bootstrap reported success but left no tarball at %s", builtTarballPath))
 	}
 	progress.Report(ProgressEvent{Phase: PhasePlaceTarball, Kind: EventPhaseStarted})
 	tarballPath := filepath.Join(options.RecipeDir, export.TarballRelPath(imageRecipe.Image.Name, imageRecipe.Image.Release, imageRecipe.Image.Arch))
@@ -464,7 +273,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	// For the instant between the two renames the lock describes an image
 	// that is beside it under a temporary name, and should the tarball's
 	// rename fail then, the previous lock is put back.
-	stagedTarballPath, err = export.Stage(bootstrapSpec.TarballPath, tarballPath, reportCopied)
+	stagedTarballPath, err = export.Stage(builtTarballPath, tarballPath, reportCopied)
 	if err != nil {
 		return failBuild(fmt.Errorf("placing tarball: %w", err))
 	}
@@ -490,12 +299,12 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	stagedTarballPath = ""
 	// A copy across filesystems left the source in the work directory, a
 	// rename left nothing; tidying either way, not part of placing.
-	_ = os.Remove(bootstrapSpec.TarballPath)
+	_ = os.Remove(builtTarballPath)
 	progress.Report(ProgressEvent{Phase: PhasePlaceTarball, Kind: EventPhaseFinished})
 
 	result.LockPath = lockPath
 	result.TarballPath = tarballPath
-	result.InstalledPackageCount = len(installedPackages)
+	result.InstalledPackageCount = counts.installed
 	if options.KeepWork {
 		return result, nil
 	}

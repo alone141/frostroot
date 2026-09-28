@@ -132,7 +132,7 @@ func TestDefaultsMakeAValidRecipe(t *testing.T) {
 func TestDefaultsStartOnTheNewestRelease(t *testing.T) {
 	// A new recipe starts on the newest release the table knows, so adding
 	// the next release moves the default with it.
-	if got, want := Defaults(noHost).String(KeyRelease), distro.NewestVersion(); got != want {
+	if got, want := Defaults(noHost).String(KeyRelease), distro.NewestVersion(distro.Ubuntu); got != want {
 		t.Errorf("release default = %q, want the newest supported release, %q", got, want)
 	}
 }

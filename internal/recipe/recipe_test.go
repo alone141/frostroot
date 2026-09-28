@@ -120,6 +120,8 @@ func TestValidateReportsProblem(t *testing.T) {
 		breakRecipe func(*Recipe)
 		wantMessage string
 	}{
+		{"unknown distro", func(imageRecipe *Recipe) { imageRecipe.Image.Distro = "debian" }, `unknown distro: "debian" (known: ubuntu)`},
+		{"distro in capitals", func(imageRecipe *Recipe) { imageRecipe.Image.Distro = "Ubuntu" }, "unknown distro"},
 		{"unknown release", func(imageRecipe *Recipe) { imageRecipe.Image.Release = "18.04" }, "unknown ubuntu release"},
 		{"empty release", func(imageRecipe *Recipe) { imageRecipe.Image.Release = "" }, "unknown ubuntu release"},
 		{"empty arch", func(imageRecipe *Recipe) { imageRecipe.Image.Arch = "" }, "amd64"},
@@ -170,6 +172,30 @@ func TestValidateReportsReleaseAndArchSeparately(t *testing.T) {
 		if strings.Contains(problem, "\n") {
 			t.Errorf("each problem should be one line: %q", problem)
 		}
+	}
+}
+
+// TestValidateNamedFamily: a recipe may name its family, and one that names
+// none is Ubuntu. An unknown family is one problem: its release and arch
+// cannot be checked against a table there is none of.
+func TestValidateNamedFamily(t *testing.T) {
+	imageRecipe, err := Load(testdataPath("distro.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imageRecipe.Image.Distro != "ubuntu" {
+		t.Fatalf("Image.Distro = %q, want ubuntu", imageRecipe.Image.Distro)
+	}
+	if problems := Validate(imageRecipe); len(problems) != 0 {
+		t.Errorf("Validate(distro = ubuntu) = %q, want none", problems)
+	}
+	imageRecipe, err = Load(testdataPath("bad-distro.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	problems := Validate(imageRecipe)
+	if len(problems) != 1 || !strings.Contains(problems[0], `unknown distro: "debian"`) {
+		t.Errorf("Validate(distro = debian) = %q, want exactly the unknown distro", problems)
 	}
 }
 

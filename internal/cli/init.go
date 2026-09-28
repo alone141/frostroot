@@ -27,7 +27,8 @@ var recipeTemplate = template.Must(template.New("recipe").Funcs(template.FuncMap
 
 [image]
 name = {{tomlQuote .Image.Name}}  # file name of the tarball and name of the WSL distro
-# 20.04 | 22.04 | 24.04 | 26.04. 20.04 is past standard support: its
+{{if .Image.Distro}}distro = {{tomlQuote .Image.Distro}}
+{{end}}# 20.04 | 22.04 | 24.04 | 26.04. 20.04 is past standard support: its
 # packages carry known security vulnerabilities that only Ubuntu Pro fixes.
 release = {{tomlQuote .Image.Release}}
 arch = {{tomlQuote .Image.Arch}}  # the only architecture in v1

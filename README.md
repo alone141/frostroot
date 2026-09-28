@@ -315,6 +315,7 @@ them again before their week is up.
 | Field | Rules | `init` default |
 |---|---|---|
 | `image.name` | letters, digits, `.` `_` `-`; names the tarball and the WSL distro | `lab` |
+| `image.distro` | `ubuntu`, the only family so far; may be omitted, which means `ubuntu` | omitted |
 | `image.release` | `20.04`, `22.04`, `24.04` or `26.04` | `26.04`, the newest |
 | `image.arch` | `amd64` | `amd64` |
 | `user.name` | lowercase, digits, `_` `-`, 1 to 32 characters, not `root` | `student` |
@@ -1335,6 +1336,28 @@ CI, where nothing re-signs, ran all seven required tests to a pass as an
 unprivileged user on 3d9eeee. The first login of a 26.04 image,
 `wsl-boot` with `E2E_RELEASE=26.04`, needs Windows and is still to run.
 
+For v0.15.0, the seam Fedora fits behind went in first, as a pull request
+of its own, held to changing no byte of an Ubuntu image. `master`'s binary
+(9e2b43f) built a 24.04 recipe with `git`, `curl`, `build-essential`, the
+`tr_TR.UTF-8` locale and `six` from PyPI (354 packages, and 2 in the
+virtual environment), vendored its lock and rebuilt it offline; the
+branch's binary (47fa517) rebuilt the same lock offline to the same
+SHA-256, and neither rebuild touched the lock. Built online at the instant
+that lock records, the branch's binary wrote the same lock as `master`'s,
+and a tarball of the same SHA-256 as `master`'s own second build at that
+instant. With the branch's binary, `offline-identical` passed its 12
+checks, `certificates` its 21, the rebuilds with and without `--ca-bundle`
+one SHA-256, `no-build-leaks` its 15 and `capture-roundtrip` its 10. The
+online builds with Python packages, in those scenarios and above, were
+given the container's authority with `--ca-bundle`, as such a network
+needs. Each new refusal (a family frostroot does not build, a lock of
+another family offline and in `vendor`) is pinned by a test that fails
+with it broken, run with `scripts/mutate.sh` and recorded in the commits.
+`scripts/check.sh` ran every step, and `scripts/integration.sh` as root
+passed every required test but `TestIntegrationPython`, whose pip refused
+PyPI's re-signed certificate as before; CI ran all seven to a pass on
+16b2307.
+
 
 ## Documentation
 
@@ -1380,8 +1403,8 @@ internal/sources/   the catalog of third-party repositories, PPAs, and fetching 
 internal/pgp/       OpenPGP public keys: armor, the fingerprint of every primary key; nothing else
 internal/tui/       the full-screen form with its package picker, and the progress screen (the only package using the Charm libraries)
 internal/recipe/    frostroot.toml and frostroot.lock: types, strict parsing, validation
-internal/distro/    Ubuntu releases, archive URL, components, the three pocket lines
-internal/builder/   orchestration, mmdebstrap runner and progress parser, provisioning, the Python step, dpkg status, lock checksums, offline builds
+internal/distro/    the families frostroot builds, and Ubuntu's releases, archive URL, components, the three pocket lines
+internal/builder/   orchestration and what depends on the family; for Ubuntu, the mmdebstrap runner and progress parser, provisioning, the Python step, dpkg status, lock checksums, offline builds
 internal/pool/      the vendored pools: manifests from the lock, verify, fetch, prune, stage as a flat repository or a directory of wheels
 internal/deb/       Debian formats: control stanzas, Packages indexes, .deb control files, flat repository index
 internal/export/    tarball naming and atomic placement

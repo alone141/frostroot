@@ -12,7 +12,7 @@ import (
 // It is written by build and committed next to the recipe.
 type Lockfile struct {
 	Version          int      `toml:"version"` // lock format version
-	Distro           string   `toml:"distro"`
+	Distro           string   `toml:"distro"`  // the recipe's family; every lock so far says "ubuntu"
 	Release          string   `toml:"release"`
 	Suite            string   `toml:"suite"`
 	Arch             string   `toml:"arch"`

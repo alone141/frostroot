@@ -109,6 +109,10 @@ const (
 	// by hand, and the form must give it back unchanged rather than drop it
 	// the first time someone runs frostroot edit.
 	keyPythonIndexURL = "python_index_url"
+	// keyDistro is not a field yet: [image] distro, carried through an edit
+	// so that a recipe which names its family keeps naming it. Ubuntu is
+	// the only family until the form offers a choice.
+	keyDistro = "distro"
 )
 
 // The pages fields are grouped on, in order.
@@ -304,7 +308,7 @@ func checkPPAList(text string) error {
 // its standard support.
 func releaseOptions() []Option {
 	var options []Option
-	for _, version := range distro.SupportedVersions() {
+	for _, version := range distro.SupportedVersions(distro.Ubuntu) {
 		release, err := distro.Lookup(version, distro.SupportedArch)
 		if err != nil {
 			continue // SupportedVersions only lists what Lookup knows

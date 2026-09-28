@@ -11,6 +11,7 @@ import (
 	"path"
 	"strings"
 
+	"frostroot/internal/distro"
 	"frostroot/internal/recipe"
 	"frostroot/internal/sources"
 )
@@ -62,12 +63,17 @@ func (e Entry) DownloadURL() string {
 }
 
 // Manifest lists what a complete pool for lock holds, in the lock's order.
-// It refuses locks of another format version, locks without checksums,
-// packages from a repository the lock does not describe, and file names
-// that could escape the pool directory.
+// It refuses locks of another format version or of a family it cannot
+// vendor, locks without checksums, packages from a repository the lock does
+// not describe, and file names that could escape the pool directory.
 func Manifest(lock recipe.Lockfile) ([]Entry, error) {
 	if lock.Version != 1 {
 		return nil, fmt.Errorf("%w: format version %d, want 1", ErrBadLock, lock.Version)
+	}
+	// Only an Ubuntu lock names .deb files, and a lock that names no family
+	// is Ubuntu's, as a recipe that names none is.
+	if _, err := distro.FamilyOf(lock.Distro); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrBadLock, err)
 	}
 	if !lock.HasChecksums() {
 		return nil, ErrNoChecksums
@@ -153,7 +159,7 @@ func WheelManifest(lock recipe.Lockfile) ([]Entry, error) {
 func FallbackURL(lock recipe.Lockfile) func(Entry) string {
 	return func(entry Entry) string {
 		if entry.Source == "" {
-			if lock.Distro == "ubuntu" {
+			if family, err := distro.FamilyOf(lock.Distro); err == nil && family == distro.Ubuntu {
 				return LaunchpadURL(entry)
 			}
 			return ""

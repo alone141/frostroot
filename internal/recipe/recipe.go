@@ -64,11 +64,14 @@ func (s Source) Equal(other Source) bool {
 	return s.Name == other.Name && s.URL == other.URL && s.Suite == other.Suite && s.Key == other.Key && slices.Equal(s.Components, other.Components)
 }
 
-// Image is the [image] table: which Ubuntu release to build and what to call
-// the result.
+// Image is the [image] table: which distribution and release to build and
+// what to call the result.
 type Image struct {
-	Name    string `toml:"name"`    // tarball file name and WSL distribution name
-	Release string `toml:"release"` // Ubuntu version, such as "24.04"
+	Name string `toml:"name"` // tarball file name and WSL distribution name
+	// Distro is the family, such as "ubuntu". Every recipe written before
+	// there was a second family names none, and is Ubuntu.
+	Distro  string `toml:"distro,omitempty"`
+	Release string `toml:"release"` // the family's version, such as Ubuntu's "24.04"
 	Arch    string `toml:"arch"`    // CPU architecture; only "amd64" in v1
 }
 

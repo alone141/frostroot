@@ -16,7 +16,7 @@ import (
 // catalog entry is found by its exact name first, a slip of the fingers
 // finds its way back, and a search is fast enough to run on every key.
 func TestIntegrationOpenEveryRelease(t *testing.T) {
-	for _, version := range distro.SupportedVersions() {
+	for _, version := range distro.SupportedVersions(distro.Ubuntu) {
 		release, err := distro.Lookup(version, distro.SupportedArch)
 		if err != nil {
 			t.Fatal(err)
