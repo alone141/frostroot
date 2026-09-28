@@ -182,13 +182,26 @@ stay as they are, one question longer.
     - Golden frames: Ubuntu's Image page is re-recorded with the new
       question; new frames show Fedora's Image and Packages pages; each is
       read before it is committed.
+    - (Built with the release as one widget holding a select per family,
+      not `OptionsFunc`: huh restores options it has cached without
+      moving the cursor, so a switch back to Ubuntu landed on 20.04. Each
+      family's fields keep variables of their own, so a switch and back
+      finds every answer where it was. A select of one or two options is
+      shown on one line, and the plain interface matches an option's
+      value before its number, or Fedora's 44 was the 44th option.)
 16. **The Fedora catalog.** The packages a lab asks for, as Fedora names
     them (`gcc`, `gcc-c++` and `make` where Ubuntu has `build-essential`,
     `java-latest-openjdk-devel` for `default-jdk`, `golang` for
     `golang-go`), in the categories Ubuntu's has, and
     `TestIntegrationFedoraCatalogExistsInEveryRelease`, which opens
     Fedora's index for every release the table knows and requires each
-    name in it; `scripts/integration.sh` requires it.
+    name in it; `scripts/integration.sh` requires it. (Built with
+    `java-25-openjdk-devel`: on Fedora 44 `java-latest-openjdk-devel` is
+    OpenJDK 27's early-access build. `nodejs24-bin` and
+    `nodejs24-npm-bin` stand for Node, because `nodejs24` puts only
+    `node-24` on PATH. A real build of all 33 names proved they install
+    together. The test lives beside `TestIntegrationOpenEveryRelease`, in
+    `internal/index`.)
 17. **Searching Fedora's index.** `internal/index` gains `OpenFedora`:
     for each repository of the release, `repomd.xml` from its base URL,
     then the `primary` file it names, bounded by the size `repomd.xml`
@@ -202,11 +215,18 @@ stay as they are, one question longer.
     for a Fedora recipe, and the warnings on the last page name what it
     lacks. `repomd.xml` is not signed; the index only suggests names, as it
     does for Ubuntu, and `internal/builder` still never imports it.
+    (Built before 15 and 16, which use it, and cached per release: the two
+    repositories are one index, the updates repository's packages in
+    place of the release's, as an Ubuntu release's pockets are. A name
+    listed twice in one repository keeps its newest version, compared as
+    rpm compares them: Fedora 44 lists two `rubygem-bundler`.)
 18. **Docs and the version.** The README (Fedora in Quick start and the
     recipe's fields, `init --distro`, what the form offers each family,
     the Verification paragraph), `init`'s and `edit`'s usage text,
     AGENTS.md (the boundaries, the form's rule for a field of one family),
     and `builder.Version` 0.15.0. Pushing the tag stays the owner's.
+    (The recipe template's comments, which named Ubuntu's releases and apt
+    above a Fedora recipe's, follow the family too.)
 
 **For and against, as the owner asked to be told before the work:** for,
 a Fedora image never needs its recipe written by hand, and Ubuntu's form

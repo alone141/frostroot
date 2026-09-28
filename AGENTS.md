@@ -78,7 +78,7 @@ Hand-typed alternatives break in ways that are easy to miss:
   - anything the build uses but must not ship: `no-build-leaks`
   - hook text: `apt-trust`
   - pip's trust flags: `pip-trust`
-  - the form: `tui`
+  - the form: `tui`, and `tui` with `E2E_DISTRO=fedora`
   - capture: `capture-roundtrip`
   - what the imported distribution does at first login: `wsl-boot`, which
     also stands in for the README's manual release check
@@ -90,7 +90,10 @@ Hand-typed alternatives break in ways that are easy to miss:
 - A new recipe field needs a form field, a mapping in `FromRecipe` and
   `ToRecipe`, and a line in the recipe template in `internal/cli/init.go`.
   Otherwise `edit` silently drops it. `TestRecipeRoundTrip` and
-  `TestFormBindingCoversEveryField` catch most of this.
+  `TestFormBindingCoversEveryField` catch most of this. A field only one
+  family asks names it in `Field.Families`, and `ToRecipe` leaves its
+  answer out of the other family's recipe: an edit that switches the
+  family carries every answer into the switch.
 - A user-visible change updates the README and the command's usage text in
   `internal/cli` together.
 
@@ -187,7 +190,8 @@ Hand-typed alternatives break in ways that are easy to miss:
   stderr.
 - mmdebstrap's process group gets SIGINT, never SIGKILL.
 - The plain interface asks the same questions in the same order, because
-  people pipe answers into it.
+  people pipe answers into it. It never asks the family: `init --distro`
+  answers it, and `form.FieldsFor` gives that family's questions.
 
 **Package boundaries**
 
