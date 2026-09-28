@@ -639,6 +639,74 @@ func TestIntegrationUnreachableWorkRootFailsFast(t *testing.T) {
 	}
 }
 
+// TestIntegrationHostThatCannotMountFailsFast checks that a build is stopped
+// as soon as mmdebstrap says it will install with nothing mounted at /proc,
+// /sys and /dev, rather than going on to an image without what
+// systemd-tmpfiles makes there. mmdebstrap runs mount --version to decide,
+// and here the first mount on its PATH exits 1, so it prints "cannot execute
+// mount" in root and unshare mode alike: the test runs as any user, and
+// holds the watch to the wording of the mmdebstrap installed.
+func TestIntegrationHostThatCannotMountFailsFast(t *testing.T) {
+	skipUnlessMmdebstrapAvailable(t)
+	brokenMountDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(brokenMountDir, "mount"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	brokenMountPath := "PATH=" + brokenMountDir + string(os.PathListSeparator) + os.Getenv("PATH")
+
+	// Reachable from mmdebstrap's user namespace, as in testTinyImage.
+	cacheHome, err := os.MkdirTemp("/var/tmp", "frostroot-integration-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(cacheHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(cacheHome) })
+
+	imageRecipe := recipe.Recipe{
+		Image:    recipe.Image{Name: "tiny", Release: "24.04", Arch: "amd64"},
+		User:     recipe.User{Name: "student", Sudo: true},
+		WSL:      recipe.WSL{Systemd: true, DefaultUser: "student"},
+		Locale:   recipe.Locale{Lang: "en_US.UTF-8", Timezone: "UTC"},
+		Packages: recipe.Packages{Include: []string{"bash"}},
+	}
+	if problems := recipe.Validate(imageRecipe); len(problems) != 0 {
+		t.Fatal(problems)
+	}
+	recipeDir := t.TempDir()
+	builder := Builder{Bootstrapper: &Mmdebstrap{
+		// Of two PATHs in a command's environment, it gets the last.
+		RunCommand: func(ctx context.Context, program string, args, environment []string, stdout, stderr io.Writer) error {
+			return runInterruptibly(ctx, program, args, append(environment, brokenMountPath), stdout, stderr)
+		},
+	}}
+	progress := &testLogProgress{t: t}
+	started := time.Now()
+	result, err := builder.Build(context.Background(), imageRecipe, Options{
+		RecipeDir: recipeDir,
+		GOOS:      "linux",
+		Getenv:    fakeEnvironment(map[string]string{"XDG_CACHE_HOME": cacheHome}),
+		Progress:  progress,
+	})
+	t.Logf("the build ended after %s", time.Since(started).Round(time.Millisecond))
+	if !errors.Is(err, ErrCannotMount) || !strings.Contains(err.Error(), `"W: cannot execute mount"`) {
+		t.Fatalf("Build error = %v, want ErrCannotMount quoting mmdebstrap's warning", err)
+	}
+	if slices.Contains(progress.started, PhaseDownload) {
+		t.Errorf("phases started = %v, want the build stopped before it downloads packages", progress.started)
+	}
+	if result.WorkDir == "" {
+		t.Error("a failed build keeps its work directory")
+	}
+	if _, err := os.Stat(filepath.Join(recipeDir, LockFileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a lock was written, or cannot be looked for: %v", err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(recipeDir, "dist")); len(entries) != 0 {
+		t.Errorf("dist/ holds %v, want no tarball", entries)
+	}
+}
+
 // testLogProgress sends mmdebstrap's output to the test log and records what
 // the parser made of it.
 type testLogProgress struct {

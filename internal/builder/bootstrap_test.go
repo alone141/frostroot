@@ -390,6 +390,64 @@ func TestMmdebstrapRunInterruptedReportsCanceled(t *testing.T) {
 	}
 }
 
+func TestMmdebstrapRunStopsWhenItCannotMount(t *testing.T) {
+	testCases := []struct {
+		warning     string
+		wantInError string // the remedy
+	}{
+		{"W: cannot execute mount", "sudo apt install --reinstall mount"},
+		{"W: cannot mount because CAP_SYS_ADMIN is not in the effective set", "docker run --privileged"},
+		{"W: cannot mount because CAP_SYS_ADMIN is not in the bounding set", "build as a normal user"},
+		{"W: cannot mount because unshare --mount failed", "CAP_SYS_ADMIN"},
+		{"W: skipping mount sysfs", "the lines before it in " + LogFileName},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.warning, func(t *testing.T) {
+			stopped := false
+			bootstrapper := Mmdebstrap{
+				CurrentUID: uidFunc(0),
+				RunCommand: func(ctx context.Context, _ string, _, _ []string, _, stderr io.Writer) error {
+					_, _ = fmt.Fprintln(stderr, testCase.warning)
+					select {
+					case <-ctx.Done():
+						stopped = true
+						return errors.New("signal: interrupt")
+					case <-time.After(5 * time.Second):
+						return nil // gone on to build an image without mounts
+					}
+				},
+			}
+			err := bootstrapper.Run(context.Background(), runnableSpec(t))
+			if !stopped {
+				t.Error("mmdebstrap was not stopped when it said it could not mount")
+			}
+			if !errors.Is(err, ErrCannotMount) || errors.Is(err, context.Canceled) {
+				t.Fatalf("Run error = %v, want ErrCannotMount, which is not an interrupt", err)
+			}
+			for _, want := range []string{testCase.warning, testCase.wantInError} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Run error = %v, want it to mention %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+func TestMmdebstrapRunRefusesAnImageInstalledWithoutMounts(t *testing.T) {
+	// The stop can land after mmdebstrap has finished, and the image is no
+	// better for it.
+	bootstrapper := Mmdebstrap{
+		CurrentUID: uidFunc(1000),
+		RunCommand: func(_ context.Context, _ string, _, _ []string, _, stderr io.Writer) error {
+			_, _ = fmt.Fprintln(stderr, "W: skipping mount proc")
+			return nil
+		},
+	}
+	if err := bootstrapper.Run(context.Background(), runnableSpec(t)); !errors.Is(err, ErrCannotMount) {
+		t.Fatalf("Run error = %v, want ErrCannotMount", err)
+	}
+}
+
 func TestMmdebstrapTrustedSpecNeedsNoKeyring(t *testing.T) {
 	// An offline build's local repository carries [trusted=yes]; frostroot
 	// verified its files against the lock, and no keyring is involved.
@@ -432,10 +490,17 @@ func TestMmdebstrapRunWithoutKeyring(t *testing.T) {
 func TestMmdebstrapPreflight(t *testing.T) {
 	mmdebstrapFound := func(string) (string, error) { return "/usr/bin/mmdebstrap", nil }
 	mmdebstrapMissing := func(string) (string, error) { return "", errors.New("not found") }
+	mountMissing := func(program string) (string, error) {
+		if program == "mount" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + program, nil
+	}
 	reachableWorkRoot := filepath.Join(createReachableDir(t), "frostroot") // not created yet
 
 	testCases := []struct {
 		name        string
+		mode        string // mmdebstrap's --mode; unshare when empty, as for uid 1000
 		lookPath    func(string) (string, error)
 		spec        BootstrapSpec
 		wantError   error
@@ -447,6 +512,22 @@ func TestMmdebstrapPreflight(t *testing.T) {
 			spec:        BootstrapSpec{KeyringPath: createKeyringFile(t), WorkDir: reachableWorkRoot},
 			wantError:   ErrNoMmdebstrap,
 			wantInError: "sudo apt install mmdebstrap",
+		},
+		{
+			// mmdebstrap mounts with mount(8) in a user namespace too.
+			name:        "mount missing",
+			lookPath:    mountMissing,
+			spec:        BootstrapSpec{KeyringPath: createKeyringFile(t), WorkDir: reachableWorkRoot},
+			wantError:   ErrNoMount,
+			wantInError: "sudo apt install mount",
+		},
+		{
+			name:        "mount missing as root",
+			mode:        "root",
+			lookPath:    mountMissing,
+			spec:        BootstrapSpec{KeyringPath: createKeyringFile(t), WorkDir: reachableWorkRoot},
+			wantError:   ErrNoMount,
+			wantInError: "sudo apt install mount",
 		},
 		{
 			name:      "keyring missing",
@@ -468,7 +549,7 @@ func TestMmdebstrapPreflight(t *testing.T) {
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			bootstrapper := Mmdebstrap{LookPath: testCase.lookPath, CurrentUID: uidFunc(1000)}
+			bootstrapper := Mmdebstrap{LookPath: testCase.lookPath, CurrentUID: uidFunc(1000), Mode: testCase.mode}
 			err := bootstrapper.Preflight(testCase.spec)
 			if testCase.wantError == nil {
 				if err != nil {

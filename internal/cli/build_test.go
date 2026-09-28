@@ -533,6 +533,7 @@ func TestBuildUnwritableOutputIsUserError(t *testing.T) {
 func TestBuildPreflightFailuresAreUserErrors(t *testing.T) {
 	preflightErrors := []error{
 		fmt.Errorf("%w; install it with: sudo apt install mmdebstrap", builder.ErrNoMmdebstrap),
+		fmt.Errorf("%w; install it with: sudo apt install mount", builder.ErrNoMount),
 		fmt.Errorf("%w at /usr/share/keyrings/ubuntu-archive-keyring.gpg", builder.ErrNoKeyring),
 	}
 	for _, preflightErr := range preflightErrors {
@@ -571,6 +572,22 @@ func TestBuildBootstrapFailure(t *testing.T) {
 		t.Fatalf("exit code = %d, want %d; stderr %s", exitCode, exitBuildFailed, stderr.String())
 	}
 	for _, wantText := range []string{"mmdebstrap exploded", "work directory kept"} {
+		if !strings.Contains(stderr.String(), wantText) {
+			t.Errorf("stderr lacks %q:\n%s", wantText, stderr.String())
+		}
+	}
+	assertNoLock(t, recipeDir)
+}
+
+func TestBuildThatCannotMountIsUserError(t *testing.T) {
+	recipeDir := newRecipeDir(t, "valid.toml")
+	var stdout, stderr bytes.Buffer
+	cannotMount := fmt.Errorf("%w: it said %q", builder.ErrCannotMount, "W: cannot mount because unshare --mount failed")
+	app := newBuildApp(t, recipeDir, &fakeBootstrapper{runErr: cannotMount}, &stdout, &stderr)
+	if exitCode := app.Run([]string{"build"}); exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d; stderr %s", exitCode, exitUserError, stderr.String())
+	}
+	for _, wantText := range []string{cannotMount.Error(), "work directory kept"} {
 		if !strings.Contains(stderr.String(), wantText) {
 			t.Errorf("stderr lacks %q:\n%s", wantText, stderr.String())
 		}
