@@ -95,3 +95,23 @@ func (r Release) SourceLines(mirrorURL string) []string {
 
 // SupportedVersions lists the supported release versions, oldest first.
 func SupportedVersions() []string { return []string{"20.04", "22.04", "24.04", "26.04"} }
+
+// NewestVersion returns the newest supported release, which a new recipe
+// starts on.
+func NewestVersion() string {
+	versions := SupportedVersions()
+	return versions[len(versions)-1]
+}
+
+// VersionsInStandardSupport lists the supported releases that are not past
+// their standard support, oldest first: the ones to prefer over a release
+// that is.
+func VersionsInStandardSupport() []string {
+	var versions []string
+	for _, version := range SupportedVersions() {
+		if !releasesByVersion[version].EndOfLife {
+			versions = append(versions, version)
+		}
+	}
+	return versions
+}

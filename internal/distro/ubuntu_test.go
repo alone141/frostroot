@@ -172,3 +172,16 @@ func TestSupportedVersions(t *testing.T) {
 		t.Fatalf("SupportedVersions() = %q, want %q", got, want)
 	}
 }
+
+func TestNewestVersion(t *testing.T) {
+	if got := NewestVersion(); got != "26.04" {
+		t.Fatalf("NewestVersion() = %q, want 26.04", got)
+	}
+}
+
+func TestVersionsInStandardSupportLeavesOutEndOfLife(t *testing.T) {
+	want := []string{"22.04", "24.04", "26.04"}
+	if got := VersionsInStandardSupport(); !slices.Equal(got, want) {
+		t.Fatalf("VersionsInStandardSupport() = %q, want %q", got, want)
+	}
+}

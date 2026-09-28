@@ -451,6 +451,28 @@ func TestBuildWarnsOnEndOfLifeRelease(t *testing.T) {
 			t.Errorf("end-of-life warning should mention %q:\n%s", wantText, stderr.String())
 		}
 	}
+	// The advice names every release still in standard support, from the
+	// table, so that a new release is offered without editing this text.
+	if wantAdvice := "Prefer 22.04, 24.04 or 26.04 unless you specifically need 20.04."; !strings.Contains(stderr.String(), wantAdvice) {
+		t.Errorf("end-of-life warning should advise %q:\n%s", wantAdvice, stderr.String())
+	}
+}
+
+func TestOrList(t *testing.T) {
+	testCases := []struct {
+		choices []string
+		want    string
+	}{
+		{choices: nil, want: ""},
+		{choices: []string{"24.04"}, want: "24.04"},
+		{choices: []string{"24.04", "26.04"}, want: "24.04 or 26.04"},
+		{choices: []string{"22.04", "24.04", "26.04"}, want: "22.04, 24.04 or 26.04"},
+	}
+	for _, testCase := range testCases {
+		if got := orList(testCase.choices); got != testCase.want {
+			t.Errorf("orList(%q) = %q, want %q", testCase.choices, got, testCase.want)
+		}
+	}
 }
 
 func TestBuildDoesNotWarnOnSupportedRelease(t *testing.T) {

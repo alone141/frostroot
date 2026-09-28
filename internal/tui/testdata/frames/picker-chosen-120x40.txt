@@ -6,7 +6,7 @@ Packages
     [ ] valgrind  memory error detector and profiler
     [ ] ninja-build  small, fast build tool CMake can drive
     [ ] python3  the interpreter
-    [ ] python3-pip  package installer (use a venv on 24.04)
+    [ ] python3-pip  package installer (use a venv on 24.04 and later)
 
 ┃ Other packages
 ┃ type to search the archive and the sources above, or a name; Space adds

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"frostroot/internal/distro"
 	"frostroot/internal/recipe"
 	"frostroot/internal/sources"
 )
@@ -117,7 +118,7 @@ func TestDefaultsMakeAValidRecipe(t *testing.T) {
 		t.Fatalf("the defaults do not validate: %v", problems)
 	}
 	want := recipe.Recipe{
-		Image:    recipe.Image{Name: "lab", Release: "24.04", Arch: "amd64"},
+		Image:    recipe.Image{Name: "lab", Release: "26.04", Arch: "amd64"},
 		User:     recipe.User{Name: "student", Sudo: true},
 		WSL:      recipe.WSL{Systemd: true, DefaultUser: "student"},
 		Locale:   recipe.Locale{Lang: "en_US.UTF-8", Timezone: "UTC"},
@@ -125,6 +126,14 @@ func TestDefaultsMakeAValidRecipe(t *testing.T) {
 	}
 	if !reflect.DeepEqual(imageRecipe, want) {
 		t.Errorf("recipe from defaults:\n got %+v\nwant %+v", imageRecipe, want)
+	}
+}
+
+func TestDefaultsStartOnTheNewestRelease(t *testing.T) {
+	// A new recipe starts on the newest release the table knows, so adding
+	// the next release moves the default with it.
+	if got, want := Defaults(noHost).String(KeyRelease), distro.NewestVersion(); got != want {
+		t.Errorf("release default = %q, want the newest supported release, %q", got, want)
 	}
 }
 

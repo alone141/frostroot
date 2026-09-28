@@ -1,5 +1,5 @@
 Summary
-Image     lab, Ubuntu 24.04 amd64
+Image     lab, Ubuntu 26.04 amd64
 User      student, passwordless sudo
 System    UTC, en_US.UTF-8, systemd on
 Sources   Ubuntu's archive only

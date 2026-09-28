@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"frostroot/internal/distro"
 	"frostroot/internal/form"
 	"frostroot/internal/pgp"
 	"frostroot/internal/recipe"
@@ -120,8 +121,11 @@ func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath 
 		return exitCode
 	}
 	a.stdoutf("Next: frostroot validate, then frostroot build.\n")
-	if slices.Contains(imageRecipe.Packages.Include, "python3-pip") && imageRecipe.Image.Release == "24.04" {
-		a.stdoutf("Note: Ubuntu 24.04 enforces PEP 668, so pip install outside a virtual environment fails by design. Use: python3 -m venv .venv\n")
+	// The recipe was validated before it was written, so the release is
+	// known; were it not, there would be nothing to say about its Python.
+	release, err := distro.Lookup(imageRecipe.Image.Release, imageRecipe.Image.Arch)
+	if err == nil && release.ExternallyManagedPython && slices.Contains(imageRecipe.Packages.Include, "python3-pip") {
+		a.stdoutf("Note: Ubuntu %s enforces PEP 668, so pip install outside a virtual environment fails by design. Use: python3 -m venv .venv\n", imageRecipe.Image.Release)
 	}
 	return exitSuccess
 }

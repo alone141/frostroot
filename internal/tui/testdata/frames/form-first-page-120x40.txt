@@ -4,8 +4,8 @@ Image
 ┃ > lab
 
   Ubuntu release
-  > Ubuntu 24.04 LTS (noble)
-    Ubuntu 26.04 LTS (resolute)
+  > Ubuntu 26.04 LTS (resolute)
+
 
 
 
