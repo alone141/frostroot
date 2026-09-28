@@ -202,6 +202,69 @@ func TestPackageIndexesOpenEachReleaseOnce(t *testing.T) {
 	}
 }
 
+// fedora44Packages stand in for Fedora 44's own repository.
+var fedora44Packages = []indextest.Package{
+	{Name: "ninja-build", Version: "1.13.2-2.fc44", Description: "Small build system with a focus on speed"},
+	{Name: "NetworkManager-tui", Version: "1.54.0-1.fc44", Description: "NetworkManager curses-based UI"},
+	{Name: "git", Version: "2.55.0-1.fc44", Description: "Fast Version Control System"},
+}
+
+// TestPackageIndexesOpenFedorasRepositories: a Fedora recipe's picker
+// searches the release's own repositories, once, and never the archive
+// --mirror names, which is Ubuntu's.
+func TestPackageIndexesOpenFedorasRepositories(t *testing.T) {
+	mirror := indextest.ServeFedora(t, "44", fedora44Packages)
+	archive := indextest.Serve(t, "noble", noblePackages)
+	app := (&App{Getenv: environmentWith(map[string]string{"XDG_CACHE_HOME": t.TempDir()})}).withDefaults()
+	indexes, ok := app.packageIndexes(&indexFlags{mirror: archive.URL})
+	if !ok {
+		t.Fatal("packageIndexes refused plain flags")
+	}
+	var asked []string // the release and base URL of each opening
+	indexes.openFedora = func(ctx context.Context, options index.Options, release distro.FedoraRelease) (*index.Index, error) {
+		asked = append(asked, release.Version+" "+release.Repositories[0].BaseURL)
+		// The table's release, on the test's server.
+		return index.OpenFedora(ctx, options, mirror.Release())
+	}
+
+	request := form.IndexRequest{Family: distro.Fedora, Release: "44"}
+	if known := indexes.Known(request); known != nil {
+		t.Errorf("Known before anything is fetched or cached = %v, want nil", known)
+	}
+	opened, err := indexes.Open(context.Background(), request, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matches, total := opened.Search("ninja", "", 10); total != 1 || matches[0] != (form.Match{Name: "ninja-build", Version: "1.13.2-2.fc44", Description: "Small build system with a focus on speed"}) {
+		t.Errorf("Search = %+v of %d", matches, total)
+	}
+	if !opened.Has("NetworkManager-tui") || !strings.HasPrefix(opened.Describe(), "Fedora 44 · 3 packages") {
+		t.Errorf("Has and Describe should answer from Fedora's index: %q", opened.Describe())
+	}
+	if indexes.Known(request) == nil {
+		t.Error("Known after Open should be the opened index")
+	}
+	if _, err := indexes.Open(context.Background(), request, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The second Known and the second Open found what the first Open
+	// opened, and the release asked for is the table's.
+	release, err := distro.LookupFedora("44", distro.SupportedArch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	table := "44 " + release.Repositories[0].BaseURL
+	if !slices.Equal(asked, []string{table, table}) {
+		t.Errorf("Fedora was opened as %q, want %q for the first Known and the one Open", asked, []string{table, table})
+	}
+	if archive.Requests() != 0 {
+		t.Errorf("--mirror names an Ubuntu archive; it was asked %d times for a Fedora index", archive.Requests())
+	}
+	if _, err := indexes.Open(context.Background(), form.IndexRequest{Family: distro.Fedora, Release: "43"}, nil); !errors.Is(err, distro.ErrUnknownFedoraRelease) {
+		t.Errorf("an unknown release: err = %v", err)
+	}
+}
+
 var pypiProjects = []string{"requests", "requests-oauthlib", "numpy", "Flask-SQLAlchemy", "pytest"}
 
 func TestPlainInitWarnsAboutPythonNamesFromACachedIndex(t *testing.T) {

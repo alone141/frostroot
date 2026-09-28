@@ -1,6 +1,6 @@
 // Package indextest serves a small Ubuntu archive for tests of what reads a
 // package index: InRelease files with true sizes and digests, and the
-// Packages files they list.
+// Packages files they list; and the same of a Fedora release, and of PyPI.
 package indextest
 
 import (
@@ -9,12 +9,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"frostroot/internal/distro"
 )
 
 // Package is one package the archive offers.
@@ -116,4 +119,68 @@ func ServePyPI(t *testing.T, projects []string, summaries map[string]string) *Ar
 	t.Cleanup(server.Close)
 	archive.URL = server.URL
 	return archive
+}
+
+// FedoraMirror is a running test server holding a Fedora release's two
+// repositories.
+type FedoraMirror struct {
+	Archive
+	release distro.FedoraRelease
+}
+
+// Release is the release the mirror serves, with its repositories on it:
+// what index.OpenFedora is given in place of the table's.
+func (m *FedoraMirror) Release() distro.FedoraRelease { return m.release }
+
+// ServeFedora runs a server for a Fedora release whose own repository
+// offers packages, built for x86_64, and whose updates repository offers
+// none, each with a repomd.xml giving the true size and digest of its
+// gzip-compressed primary metadata. A package's Version is rpm's
+// version-release, such as 2.55.0-1.fc44; its Section is not used.
+func ServeFedora(t *testing.T, version string, packages []Package) *FedoraMirror {
+	t.Helper()
+	files := map[string][]byte{}
+	publish := func(repositoryPath string, offered []Package) {
+		var text strings.Builder
+		fmt.Fprintf(&text, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<metadata xmlns=\"http://linux.duke.edu/metadata/common\" xmlns:rpm=\"http://linux.duke.edu/metadata/rpm\" packages=\"%d\">\n", len(offered))
+		for _, item := range offered {
+			ver, rel, _ := strings.Cut(item.Version, "-")
+			fmt.Fprintf(&text, "<package type=\"rpm\"><name>%s</name><arch>x86_64</arch><version epoch=\"0\" ver=\"%s\" rel=\"%s\"/><summary>%s</summary></package>\n", html.EscapeString(item.Name), html.EscapeString(ver), html.EscapeString(rel), html.EscapeString(item.Description))
+		}
+		text.WriteString("</metadata>\n")
+		var compressed bytes.Buffer
+		writer := gzip.NewWriter(&compressed)
+		if _, err := writer.Write([]byte(text.String())); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(compressed.Bytes())
+		href := "repodata/" + hex.EncodeToString(digest[:]) + "-primary.xml.gz"
+		files[repositoryPath+"/"+href] = compressed.Bytes()
+		files[repositoryPath+"/repodata/repomd.xml"] = []byte(fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<repomd xmlns="http://linux.duke.edu/metadata/repo"><data type="primary"><checksum type="sha256">%s</checksum><location href="%s"/><size>%d</size><open-size>%d</open-size></data></repomd>
+`, hex.EncodeToString(digest[:]), href, compressed.Len(), text.Len()))
+	}
+	releasePath, updatesPath := "/releases/"+version+"/Everything/x86_64/os", "/updates/"+version+"/Everything/x86_64"
+	publish(releasePath, packages)
+	publish(updatesPath, nil)
+	mirror := &FedoraMirror{}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		mirror.requests.Add(1)
+		content, isServed := files[request.URL.Path]
+		if !isServed {
+			http.NotFound(writer, request)
+			return
+		}
+		_, _ = writer.Write(content)
+	}))
+	t.Cleanup(server.Close)
+	mirror.URL = server.URL
+	mirror.release = distro.FedoraRelease{Version: version, Repositories: []distro.FedoraRepository{
+		{ID: "fedora", BaseURL: server.URL + releasePath},
+		{ID: "updates", BaseURL: server.URL + updatesPath},
+	}}
+	return mirror
 }

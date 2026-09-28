@@ -36,8 +36,8 @@ func addIndexFlags(flags *flag.FlagSet) *indexFlags {
 // indexUsageText is what the usage of a command with the form says about
 // the index; the flags themselves are listed after it.
 const indexUsageText = `The form searches the release's apt archive, the sources the recipe adds
-and PyPI, each fetched once and kept under $XDG_CACHE_HOME/frostroot/index
-(or ~/.cache) for a week. They
+and PyPI, or a Fedora release's own repositories, each fetched once and kept
+under $XDG_CACHE_HOME/frostroot/index (or ~/.cache) for a week. They
 only suggest names: build checks every package against the signed archive,
 and pip resolves the Python ones. --plain never fetches; it checks names
 against the cached indexes when there are any.
@@ -58,6 +58,9 @@ type packageIndexes struct {
 	// that the packages of a source the recipe adds are packages the picker
 	// finds.
 	openSource func(ctx context.Context, options index.Options, source index.Source) (*index.Index, error)
+	// openFedora opens a Fedora release's repositories, which a Fedora
+	// recipe searches instead: it adds no source of its own.
+	openFedora func(ctx context.Context, options index.Options, release distro.FedoraRelease) (*index.Index, error)
 	options    index.Options // what every release shares: mirror, cache, trust
 	// openPyPI and pypiOptions are the same for PyPI, which is one index
 	// whatever release the image is. --mirror names an apt mirror, so it
@@ -105,6 +108,7 @@ func (a *App) packageIndexes(parsed *indexFlags) (*packageIndexes, bool) {
 	return &packageIndexes{
 		open:        index.Open,
 		openSource:  index.OpenSource,
+		openFedora:  index.OpenFedora,
 		options:     options,
 		openPyPI:    index.OpenPyPI,
 		pypiOptions: pypiOptions,
@@ -160,6 +164,9 @@ func (p *packageIndexes) get(ctx context.Context, request form.IndexRequest, pro
 		return opened, nil
 	}
 	p.mutex.Unlock()
+	if request.Family == distro.Fedora {
+		return p.fedora(ctx, request, key, progress, offline)
+	}
 	release, err := distro.Lookup(request.Release, distro.SupportedArch)
 	if err != nil {
 		return nil, err
@@ -209,6 +216,44 @@ func (p *packageIndexes) get(ctx context.Context, request form.IndexRequest, pro
 	// asking it again would miss exactly the same thing at the price of
 	// merging the whole archive afresh.
 	if _, missing := merged.Sources(); len(missing) == 0 || offline {
+		p.mutex.Lock()
+		p.opened[key] = adapted
+		p.mutex.Unlock()
+	}
+	return adapted, nil
+}
+
+// fedora opens a Fedora release's index, its repositories read as one,
+// which is all a Fedora recipe installs from. What a fetch opened whole is
+// kept as a release's archive is, so that the summary's offline look finds
+// it rather than reading the cache again; an answer is remembered as the
+// apt one is. --mirror names an Ubuntu archive and is not read.
+func (p *packageIndexes) fedora(ctx context.Context, request form.IndexRequest, key string, progress func(int64, int64), offline bool) (form.PackageIndex, error) {
+	release, err := distro.LookupFedora(request.Release, distro.SupportedArch)
+	if err != nil {
+		return nil, err
+	}
+	archiveKey := string(distro.Fedora) + " " + release.Version
+	p.mutex.Lock()
+	opened, isOpened := p.archives[archiveKey]
+	p.mutex.Unlock()
+	if !isOpened {
+		options := p.options
+		options.Progress, options.Offline = progress, offline
+		if offline {
+			options.Refresh = false
+		}
+		if opened, err = p.openFedora(ctx, options, release); err != nil {
+			return nil, err
+		}
+		if !offline && isWhole(opened) {
+			p.mutex.Lock()
+			p.archives[archiveKey] = opened
+			p.mutex.Unlock()
+		}
+	}
+	adapted := packageIndex{opened}
+	if offline || isWhole(opened) {
 		p.mutex.Lock()
 		p.opened[key] = adapted
 		p.mutex.Unlock()
