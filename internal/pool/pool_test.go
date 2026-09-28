@@ -238,7 +238,7 @@ func TestManifestRefusals(t *testing.T) {
 	}{
 		{name: "format version 2", lock: version2, wantError: ErrBadLock},
 		{name: "another family", lock: otherFamily, wantError: ErrBadLock},
-		{name: "a Fedora lock, until vendor fetches rpms", lock: fedoraLock, wantError: ErrBadLock},
+		{name: "a Fedora lock naming .deb files", lock: fedoraLock, wantError: ErrBadLock},
 		{name: "frostroot 0.3 lock", lock: oldLock, wantError: ErrNoChecksums},
 		{name: "two packages with one file name", lock: duplicate, wantError: ErrBadLock},
 	}

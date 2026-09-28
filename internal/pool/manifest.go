@@ -1,8 +1,9 @@
-// Package pool keeps the vendored .deb files a lock names: it derives from
-// the lock what should be in vendor/debs/, checks what is, downloads what is
-// missing, and turns the files into the flat repository an offline build
-// installs from. It reports progress through small callbacks rather than the
-// builder's events, because the builder imports it.
+// Package pool keeps the vendored packages a lock names, .deb files in
+// vendor/debs/ or a Fedora lock's .rpm files in vendor/rpms/: it derives from
+// the lock what should be there, checks what is, downloads what is missing,
+// and stages the files an offline build installs from. It reports progress
+// through small callbacks rather than the builder's events, because the
+// builder imports it.
 package pool
 
 import (
@@ -43,6 +44,9 @@ type Entry struct {
 	URLPath  string // the lock's filename: the path below BaseURL
 	BaseURL  string // the archive's mirror, or the extra source's URL
 	Source   string // the lock's source name; "" for the archive
+	// SourceRPM is the source package a Fedora package was built from, which
+	// names where Fedora's build system keeps it.
+	SourceRPM string
 	// URL is the whole address of the file, used instead of BaseURL and
 	// URLPath when it is set. A wheel has one: PyPI serves files from a
 	// content-addressed path, so there is no base URL to join a name to.
@@ -76,8 +80,8 @@ func Manifest(lock recipe.Lockfile) ([]Entry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBadLock, err)
 	}
-	if family != distro.Ubuntu {
-		return nil, fmt.Errorf("%w: vendor does not fetch a %s lock's packages yet", ErrBadLock, family)
+	if family == distro.Fedora {
+		return fedoraManifest(lock)
 	}
 	if !lock.HasChecksums() {
 		return nil, ErrNoChecksums
@@ -159,8 +163,19 @@ func WheelManifest(lock recipe.Lockfile) ([]Entry, error) {
 
 // FallbackURL returns the Fetch fallback for lock: Launchpad's librarian for
 // a package of the Ubuntu archive, Launchpad's PPA files for a package of a
-// PPA, nothing for other sources.
+// PPA, Fedora's build system for a Fedora package, which the updates
+// repository drops once a newer update replaces it, and nothing for other
+// sources.
 func FallbackURL(lock recipe.Lockfile) func(Entry) string {
+	if family, err := distro.FamilyOf(lock.Distro); err == nil && family == distro.Fedora {
+		keyID := fedoraKeyID(lock)
+		return func(entry Entry) string {
+			if keyID == "" {
+				return ""
+			}
+			return kojiURL(entry, keyID)
+		}
+	}
 	return func(entry Entry) string {
 		if entry.Source == "" {
 			if family, err := distro.FamilyOf(lock.Distro); err == nil && family == distro.Ubuntu {

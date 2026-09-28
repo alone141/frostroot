@@ -22,17 +22,19 @@ import (
 
 const vendorUsageText = `usage: frostroot vendor [--mirror URL] [--ca-bundle FILE | --insecure] [--prune] [--plain]
 
-Download every package frostroot.lock names into vendor/debs/, and every Python
-wheel it names into vendor/wheels/, checked against the lock's checksums, so
-that "frostroot build --offline" can rebuild the exact image without the archive
-or PyPI. Files already there and correct are kept, so rerunning resumes an
-interrupted download, and --prune removes files the lock does not name, a
-download that was cut short included. Packages the archive has since dropped
-are fetched from Launchpad, which keeps every file ever published. Both are
-HTTPS, so on a network that inspects TLS, --ca-bundle names a PEM file of
-certificate authorities to trust while fetching, and --insecure skips
-certificate verification instead. Every file is still checked against the
-lock either way.
+Download every package frostroot.lock names into vendor/debs/, or vendor/rpms/
+for a Fedora image, and every Python wheel it names into vendor/wheels/,
+checked against the lock's checksums, so that "frostroot build --offline" can
+rebuild the exact image without the archive or PyPI. Files already there and
+correct are kept, so rerunning resumes an interrupted download, and --prune
+removes files the lock does not name, a download that was cut short included.
+Packages the archive has since dropped are fetched from Launchpad, which keeps
+every file ever published, and a Fedora update its repository has dropped
+from Koji, Fedora's build system. All of them are HTTPS, so on a network that
+inspects TLS, --ca-bundle names a PEM file of certificate authorities to
+trust while fetching, and --insecure skips certificate verification instead.
+Every file is still checked against the lock either way. --mirror stands in
+for Ubuntu's archive only.
 
 A lock whose Python packages were resolved with "build --insecure" says so,
 and vendor repeats it: those hashes are only as trustworthy as that network
@@ -46,7 +48,7 @@ func (a *App) runVendor(args []string) int {
 	mirrorURL := flags.String("mirror", "", "download from this archive base `URL` instead of the one recorded in the lock")
 	caBundlePath := flags.String("ca-bundle", "", "PEM `FILE` of certificate authorities to trust while fetching, for a network that inspects TLS")
 	insecure := flags.Bool("insecure", false, insecureFlagUsage)
-	prune := flags.Bool("prune", false, "remove files in vendor/debs and vendor/wheels that the lock does not name")
+	prune := flags.Bool("prune", false, "remove files in vendor/debs, vendor/rpms and vendor/wheels that the lock does not name")
 	plain := flags.Bool("plain", false, "print progress as lines instead of showing the full-screen progress screen")
 	if exitCode, stop := a.parseFlags(flags, args); stop {
 		return exitCode
@@ -76,12 +78,23 @@ func (a *App) runVendor(args []string) int {
 		a.stderrf("frostroot: %v\n", err)
 		return exitUserError
 	}
+	poolName := pool.DirName(lock)
 	source := lock.Mirror
-	if *mirrorURL != "" {
-		source = *mirrorURL
-	}
-	if len(lock.Repositories) > 0 {
-		source += fmt.Sprintf(" and %d more", len(lock.Repositories))
+	if poolName == pool.RPMsDirName {
+		// A Fedora lock's packages come from Fedora's own server, not an
+		// archive a mirror could stand in for.
+		if *mirrorURL != "" {
+			a.stderrf("frostroot: --mirror replaces Ubuntu's archive; a Fedora lock's packages come from Fedora's own server\n")
+			return exitUserError
+		}
+		source = "Fedora's server"
+	} else {
+		if *mirrorURL != "" {
+			source = *mirrorURL
+		}
+		if len(lock.Repositories) > 0 {
+			source += fmt.Sprintf(" and %d more", len(lock.Repositories))
+		}
 	}
 	wheelEntries, err := pool.WheelManifest(lock)
 	if err != nil {
@@ -97,7 +110,8 @@ func (a *App) runVendor(args []string) int {
 	}
 	a.warnIfUnverified(lock)
 	run := &vendorRun{
-		poolDir:      filepath.Join(a.RecipeDir, filepath.FromSlash(pool.DebsDirName)),
+		poolName:     poolName,
+		poolDir:      filepath.Join(a.RecipeDir, filepath.FromSlash(poolName)),
 		entries:      entries,
 		wheelPoolDir: filepath.Join(a.RecipeDir, filepath.FromSlash(pool.WheelsDirName)),
 		wheelEntries: wheelEntries,
@@ -143,7 +157,11 @@ func (a *App) runVendor(args []string) int {
 	case outcome.Err != nil:
 		a.stderrf("frostroot vendor: %v\n", outcome.Err)
 		if errors.Is(outcome.Err, pool.ErrNotFound) {
-			a.stderrf("frostroot: the archive drops superseded packages after a while; vendor soon after building, or rebuild and vendor again\n")
+			archive := "the archive"
+			if run.poolName == pool.RPMsDirName {
+				archive = "Fedora's updates repository"
+			}
+			a.stderrf("frostroot: %s drops superseded packages after a while; vendor soon after building, or rebuild and vendor again\n", archive)
 		}
 		return exitBuildFailed
 	}
@@ -179,7 +197,7 @@ func (a *App) runVendorFullScreen(ctx context.Context, run *vendorRun, screen tu
 // reportVendorSuccess prints what each pool now holds and the next step.
 func (a *App) reportVendorSuccess(run *vendorRun) {
 	a.stdoutf("\nVendored %s into %s: %s.\n", describePool(packageCount(len(run.entries)), run.entries),
-		pool.DebsDirName, fetchDetails(run.summaryByPool[pool.DebsDirName]))
+		run.poolName, fetchDetails(run.summaryByPool[run.poolName]))
 	if len(run.wheelEntries) > 0 {
 		a.stdoutf("Vendored %s into %s: %s.\n", describePool(wheelCount(len(run.wheelEntries)), run.wheelEntries),
 			pool.WheelsDirName, fetchDetails(run.summaryByPool[pool.WheelsDirName]))
@@ -187,8 +205,8 @@ func (a *App) reportVendorSuccess(run *vendorRun) {
 	if len(run.pruned) > 0 {
 		a.stdoutf("Removed %d file(s) the lock does not name: %s\n", len(run.pruned), strings.Join(run.pruned, ", "))
 	} else {
-		if extra := run.summaryByPool[pool.DebsDirName].Extra; len(extra) > 0 {
-			a.stdoutf("%d file(s) in %s are not in the lock; remove them with: frostroot vendor --prune\n", len(extra), pool.DebsDirName)
+		if extra := run.summaryByPool[run.poolName].Extra; len(extra) > 0 {
+			a.stdoutf("%d file(s) in %s are not in the lock; remove them with: frostroot vendor --prune\n", len(extra), run.poolName)
 		}
 		if extra := run.summaryByPool[pool.WheelsDirName].Extra; len(extra) > 0 {
 			a.stdoutf("%d file(s) in %s are not in the lock; remove them with: frostroot vendor --prune\n", len(extra), pool.WheelsDirName)
@@ -268,8 +286,9 @@ func fetchDetails(summary pool.Summary) string {
 // vendorRun is one run of the vendor command: the fetch, the optional prune,
 // and the progress they report.
 type vendorRun struct {
-	poolDir string
-	entries []pool.Entry
+	poolName string // vendor/debs, or vendor/rpms for a Fedora lock
+	poolDir  string
+	entries  []pool.Entry
 	// wheelPoolDir and wheelEntries are the Python side, empty for a lock
 	// with no Python packages. Wheels come from PyPI, each by its own whole
 	// URL, so neither --mirror nor the Launchpad fallback touches them.
@@ -313,7 +332,7 @@ func (r *vendorRun) do(ctx context.Context) error {
 	report(builder.ProgressEvent{Phase: builder.PhaseVendorCheck, Kind: builder.EventPhaseStarted})
 	downloading := false
 	r.summaryByPool = map[string]pool.Summary{}
-	if err := r.fetchPool(ctx, report, &downloading, pool.DebsDirName, r.poolDir, r.entries, r.mirrorURL, r.fallback); err != nil {
+	if err := r.fetchPool(ctx, report, &downloading, r.poolName, r.poolDir, r.entries, r.mirrorURL, r.fallback); err != nil {
 		return err
 	}
 	if len(r.wheelEntries) > 0 {
@@ -335,7 +354,7 @@ func (r *vendorRun) do(ctx context.Context) error {
 		entries []pool.Entry
 		name    string
 	}{
-		{r.poolDir, r.entries, pool.DebsDirName},
+		{r.poolDir, r.entries, r.poolName},
 		{r.wheelPoolDir, r.wheelEntries, pool.WheelsDirName},
 	} {
 		// A pool the lock no longer names is exactly the one that needs
