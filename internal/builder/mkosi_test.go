@@ -202,11 +202,11 @@ func TestMkosiRunMakesToolsTreeThenImageThenCompresses(t *testing.T) {
 	if len(commands) != 4 {
 		t.Fatalf("ran %d commands, want mkosi twice, gzip, and mkosi's clean:\n%q", len(commands), commands)
 	}
-	wantClean := []string{"sh", "-c", `umask 022 && exec mkosi "$@"`, "mkosi", "--directory=" + spec.ToolsConfigDir, "--output-dir=" + spec.ToolsOutputDir, "-f", "clean"}
+	wantClean := []string{"sh", "-c", mkosiWrapper, "mkosi", "--directory=" + spec.ToolsConfigDir, "--output-dir=" + spec.ToolsOutputDir, "-f", "clean"}
 	if !slices.Equal(commands[3], wantClean) {
 		t.Errorf("last command =\n%q\nwant mkosi removing the tools tree\n%q", commands[3], wantClean)
 	}
-	wantTools := []string{"sh", "-c", `umask 022 && exec mkosi "$@"`, "mkosi",
+	wantTools := []string{"sh", "-c", mkosiWrapper, "mkosi",
 		"--directory=" + spec.ToolsConfigDir,
 		"--package-manager-tree=" + filepath.Join(spec.ToolsConfigDir, fedoraPackageManagerTree),
 		"--cache-dir=" + spec.CacheDir,
@@ -332,11 +332,30 @@ func TestMkosiRunOfflineIndexesTheLocalRepositoriesFirst(t *testing.T) {
 			t.Errorf("mkosi build = %q, want the local mirror bound and the build's own cache", build)
 		}
 	}
-	wantClean := []string{"sh", "-c", `umask 022 && exec mkosi "$@"`, "mkosi", "--directory=" + spec.ToolsConfigDir, "--output-dir=" + spec.ToolsOutputDir, "--cache-dir=" + spec.CacheDir, "-ff", "clean"}
+	wantClean := []string{"sh", "-c", mkosiWrapper, "mkosi", "--directory=" + spec.ToolsConfigDir, "--output-dir=" + spec.ToolsOutputDir, "--cache-dir=" + spec.CacheDir, "-ff", "clean"}
 	if !slices.Equal(commands[5], wantClean) {
 		t.Errorf("last command =\n%q\nwant mkosi removing the tools tree and the build's cache\n%q", commands[5], wantClean)
 	}
 	if want := []string{"Make the tools tree", "Install requested packages", "Provision user, locale and timezone", "Create tarball"}; !slices.Equal(phases, want) {
 		t.Errorf("phases started = %q, want %q", phases, want)
+	}
+}
+
+// TestMkosiWrapperKeepsTheHostsChoicesOut runs the wrapper through a real sh
+// with a stand-in mkosi, on a host that has set what mkosi would read.
+func TestMkosiWrapperKeepsTheHostsChoicesOut(t *testing.T) {
+	bin := t.TempDir()
+	standIn := "#!/bin/sh\necho \"umask=$(umask) dnf=${MKOSI_DNF-unset} interpreter=${MKOSI_INTERPRETER-unset} args=$*\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "mkosi"), []byte(standIn), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("sh", "-c", "umask 077 && exec sh -c \"$1\" mkosi --force build", "wrapper", mkosiWrapper)
+	command.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "MKOSI_DNF=dnf", "MKOSI_INTERPRETER=/opt/python/bin/python3"}
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, output)
+	}
+	if want := "umask=0022 dnf=unset interpreter=unset args=--force build\n"; string(output) != want {
+		t.Errorf("mkosi saw %q, want %q", output, want)
 	}
 }

@@ -306,15 +306,21 @@ func (m *Mkosi) Run(ctx context.Context, spec FedoraSpec) (runErr error) {
 	return nil
 }
 
-// mkosi runs mkosi with args and umask 022, whatever the caller's: the
-// modes dnf5 gives its state files follow the umask, and they are part of
-// the image.
+// mkosiWrapper runs mkosi with umask 022, whatever the caller's: the modes
+// dnf5 gives its state files follow the umask, and they are part of the
+// image. It also unsets the two variables of the host's that mkosi reads
+// and that would change what it builds with: MKOSI_DNF names the package
+// manager, and MKOSI_INTERPRETER the Python of its helpers. The rest of
+// what it hands its sandbox it sets itself.
+const mkosiWrapper = `umask 022 && unset MKOSI_DNF MKOSI_INTERPRETER && exec mkosi "$@"`
+
+// mkosi runs mkosi with args through mkosiWrapper.
 func (m *Mkosi) mkosi(ctx context.Context, output io.Writer, args []string) error {
 	runCommand := m.RunCommand
 	if runCommand == nil {
 		runCommand = runInterruptibly
 	}
-	return runCommand(ctx, "sh", append([]string{"-c", `umask 022 && exec mkosi "$@"`, "mkosi"}, args...), nil, output, output)
+	return runCommand(ctx, "sh", append([]string{"-c", mkosiWrapper, "mkosi"}, args...), nil, output, output)
 }
 
 // createrepo gives a local repository its index with the host's
