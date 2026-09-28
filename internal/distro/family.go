@@ -38,12 +38,16 @@ func FamilyOf(name string) (Family, error) {
 	return "", unknownFamilyError(name)
 }
 
-// Check reports whether family builds version for arch. For Ubuntu the
-// errors are Lookup's: ErrUnknownRelease and ErrUnsupportedArch, joined when
-// both are wrong.
+// Check reports whether family builds version for arch. The errors are
+// the family's lookup's: ErrUnknownRelease or ErrUnknownFedoraRelease, and
+// ErrUnsupportedArch, joined when both are wrong.
 func Check(family Family, version, arch string) error {
-	if family == Ubuntu {
+	switch family {
+	case Ubuntu:
 		_, err := Lookup(version, arch)
+		return err
+	case Fedora:
+		_, err := LookupFedora(version, arch)
 		return err
 	}
 	return unknownFamilyError(string(family))

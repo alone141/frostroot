@@ -1,6 +1,7 @@
 // Package distro knows the distribution families frostroot builds and their
 // releases: for Ubuntu, the LTS releases, their suites, where their archives
-// live, and which apt source lines to use.
+// live, and which apt source lines to use; for Fedora, the releases, their
+// repositories and the keys that sign them.
 package distro
 
 import (
@@ -97,8 +98,11 @@ func (r Release) SourceLines(mirrorURL string) []string {
 // SupportedVersions lists the versions of family that frostroot builds,
 // oldest first, and none for a family it does not know.
 func SupportedVersions(family Family) []string {
-	if family == Ubuntu {
+	switch family {
+	case Ubuntu:
 		return []string{"20.04", "22.04", "24.04", "26.04"}
+	case Fedora:
+		return []string{"44"}
 	}
 	return nil
 }
@@ -118,14 +122,19 @@ func NewestVersion(family Family) string {
 // their standard support, oldest first: the ones to prefer over a release
 // that is.
 func VersionsInStandardSupport(family Family) []string {
-	if family != Ubuntu {
-		return nil
-	}
-	var versions []string
-	for _, version := range SupportedVersions(Ubuntu) {
-		if !releasesByVersion[version].EndOfLife {
-			versions = append(versions, version)
+	switch family {
+	case Ubuntu:
+		var versions []string
+		for _, version := range SupportedVersions(Ubuntu) {
+			if !releasesByVersion[version].EndOfLife {
+				versions = append(versions, version)
+			}
 		}
+		return versions
+	case Fedora:
+		// A Fedora release leaves the table when its support ends: its
+		// packages move to another server, so every one in it is supported.
+		return SupportedVersions(Fedora)
 	}
-	return versions
+	return nil
 }
