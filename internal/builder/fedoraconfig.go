@@ -281,6 +281,9 @@ dnf --cacheonly repoquery --available --queryformat '%{full_nevra}|%{repoid}|%{l
 set +f
 {{- end}}
 
+# dnf5 logs into its install root whatever it is told: mkosi removes the log
+# after each of its own runs, and the queries above wrote a new one, dated
+# now and naming the build's paths.
 rm -f "$BUILDROOT/usr/lib/sysimage/libdnf5/transaction_history.sqlite" \
 	"$BUILDROOT/usr/lib/sysimage/libdnf5/transaction_history.sqlite-shm" \
 	"$BUILDROOT/usr/lib/sysimage/libdnf5/transaction_history.sqlite-wal" \
@@ -288,6 +291,7 @@ rm -f "$BUILDROOT/usr/lib/sysimage/libdnf5/transaction_history.sqlite" \
 	"$BUILDROOT/usr/lib/sysimage/rpm/rpmdb.sqlite-shm" \
 	"$BUILDROOT/usr/lib/sysimage/rpm/rpmdb.sqlite-wal" \
 	"$BUILDROOT/var/lib/libdnf5/system-repo.lock" \
+	"$BUILDROOT/var/log/dnf5.log" \
 	"$BUILDROOT/var/cache/ldconfig/aux-cache" \
 	"$BUILDROOT/etc/resolv.conf"
 `))

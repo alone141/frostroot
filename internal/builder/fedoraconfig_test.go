@@ -170,11 +170,16 @@ func TestFedoraImageFinalizeRecordsThenCleans(t *testing.T) {
 		}
 		// The stand-in dnf5 answers the installed query with one package and
 		// the available one with its location, after checking it got the
-		// image as its install root.
+		// image as its install root, and logs into the image as the real one
+		// does whatever its options.
+		if err := os.MkdirAll(filepath.Join(buildRoot, "var", "log"), 0o755); err != nil {
+			t.Fatal(err)
+		}
 		dnf5 := `case "$*" in
 	*"--installroot=$BUILDROOT "*) ;;
 	*) echo "dnf5 not pointed at the image: $*" >&2; exit 2 ;;
 esac
+echo "DNF5 launched with arguments: $*" >> "$BUILDROOT/var/log/dnf5.log"
 case "$*" in
 	*"--installed"*) echo 'git-0:2.55.0-1.fc44.x86_64|User|updates|git-2.55.0-1.fc44.src.rpm' ;;
 	*"--available"*"git-0:2.55.0-1.fc44.x86_64"*) echo 'git-0:2.55.0-1.fc44.x86_64|updates|https://m.example/Packages/g/git-2.55.0-1.fc44.x86_64.rpm' ;;
@@ -197,7 +202,7 @@ esac`
 		if offline && (err != nil || string(reasons) != "reasons from the lock") {
 			t.Errorf("offline: dnf5's reasons = %q, %v; want the lock's put back", reasons, err)
 		}
-		for _, leftover := range leftovers[:4] {
+		for _, leftover := range append(leftovers[:4:4], "var/log/dnf5.log") {
 			if _, err := os.Stat(filepath.Join(buildRoot, leftover)); !os.IsNotExist(err) {
 				t.Errorf("offline %v: %s is still in the image: %v", offline, leftover, err)
 			}
