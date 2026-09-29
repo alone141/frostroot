@@ -1,10 +1,11 @@
 # frostroot
 
-**Freeze an Ubuntu root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
+**Freeze an Ubuntu or Fedora root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
 
-> **Status: v0.14.0.** `init`, `edit`, `capture`, `validate`, `build`,
+> **Status: v0.15.0.** `init`, `edit`, `capture`, `validate`, `build`,
 > `vendor` and `build --offline` work for Ubuntu 20.04, 22.04, 24.04 and
-> 26.04, a recipe can add third-party apt
+> 26.04, and all but `capture` for Fedora 44, built with mkosi (see
+> [Fedora](#fedora)). An Ubuntu recipe can add third-party apt
 > sources (PPAs, Docker, Node.js, VS Code...), Python packages from PyPI and
 > certificate authorities for a network that inspects TLS, and two offline
 > rebuilds of one lock produce the same bytes. In a terminal,
@@ -20,15 +21,10 @@
 > and logged into; a lock was vendored and rebuilt offline twice, to one
 > `sha256sum`; a 24.04 image with `requests` and `numpy` imported both
 > from its own environment on the first login; and 26.04 images went through
-> every end-to-end scenario that runs without Windows, their first login
-> being the check still to make before the release. See
-> [Verification](#verification).
->
-> **On `master`, for v0.15:** a recipe that says `distro = "fedora"` builds
-> Fedora 44 with mkosi, and `vendor` and `build --offline` rebuild it byte
-> for byte; see [Fedora](#fedora). The form does not offer Fedora yet, so
-> such a recipe is written by hand, and its first login under WSL is still
-> to be checked.
+> every end-to-end scenario that runs without Windows, as Fedora 44 images
+> went through every one that applies to them, rebuilt offline byte for
+> byte; the first login of each is the check still to make before the
+> release. See [Verification](#verification).
 
 ---
 
@@ -202,8 +198,9 @@ mkdir cpp-lab && cd cpp-lab
 frostroot init
 ```
 
-`init` opens a form. Six pages, each a few questions: the image name and
-release; the user name and whether it gets passwordless sudo; the timezone
+`init` opens a form. Six pages, each a few questions: the image name, the
+distribution (Ubuntu or [Fedora](#fedora)) and its release; the user name
+and whether it gets passwordless sudo; the timezone
 (type `ist` to filter the list down to `Europe/Istanbul`), locale and whether
 the image boots with systemd; third-party apt sources, picked from a catalog
 (deadsnakes, git-core, Docker, NodeSource, GitHub CLI, Kitware, LLVM, VS
@@ -213,7 +210,10 @@ tools...), and any other package of **the archive and the sources just
 chosen**, found by typing into a search over both, and Python packages found
 the same way in PyPI (see [Finding packages](#finding-packages)); and last
 the certificate files the image should trust, for a network that inspects
-TLS, each checked to be there and to be a certificate as you type.
+TLS, each checked to be there and to be a certificate as you type. The
+pages after the first follow the distribution: Fedora's have a catalog and
+a search of Fedora's own packages, and no apt sources, Python packages or
+certificates, which a Fedora recipe cannot hold yet.
 
 The sources come before the packages because that is the order the answers
 depend on: the picker searches the repositories the recipe has, so it can
@@ -277,6 +277,10 @@ while the archive still has every file the lock names; see
 Without a terminal (a pipe, CI, a redirected log) or with `--plain`, `init`
 and `edit` ask the same questions one line at a time, and `build` and
 `vendor` print one line per phase and one at every tenth of a measured phase.
+The distribution is not one of those questions: `init --distro fedora`
+answers it, a plain `init` without it writes an Ubuntu recipe, and `edit`
+keeps the recipe's, so a script that pipes answers in answers the same
+questions it always did.
 
 **The order of those questions changed in v0.12**, because the sources are
 now asked before the packages. A script that answers them by position — a
@@ -299,8 +303,8 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 
 | Command | What it does |
 |---|---|
-| `frostroot init [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Opens the form and writes a commented `frostroot.toml`, then fetches the signing keys of the sources you picked into `keys/`. Refuses to overwrite a recipe without `--force`. Writes nothing unless the answers validate and you confirm. |
-| `frostroot edit [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back; fetches any missing source keys. The file is regenerated from the template, so your own comments in it do not survive. |
+| `frostroot init [--distro ubuntu\|fedora] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Opens the form and writes a commented `frostroot.toml`, then fetches the signing keys of the sources you picked into `keys/`. The form asks for the distribution first, unless `--distro` answers it. Refuses to overwrite a recipe without `--force`. Writes nothing unless the answers validate and you confirm. |
+| `frostroot edit [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back; fetches any missing source keys. The full-screen form can move the recipe to the other distribution. The file is regenerated from the template, so your own comments in it do not survive. |
 | `frostroot capture [--root DIR] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, starting with a page of what it found and what a recipe cannot carry, writes `frostroot.toml`, the signing keys of the third-party sources it could carry and the certificate authorities the machine added under `/usr/local/share/ca-certificates`, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys and certificates; needs no root. |
 | `frostroot validate` | Checks `frostroot.toml`, including that every source's key file is there and is a key, and prints every problem. No network, no root. |
 | `frostroot build [--mirror URL] [--ca-bundle FILE \| --insecure] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-<distro>-<release>-amd64.tar.gz`, such as `dist/lab-ubuntu-24.04-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. |
@@ -323,7 +327,8 @@ gives up, and marks a lock whose Python packages were resolved that way; see
 `edit` and `capture`, `--mirror`, `--ca-bundle` and `--insecure` say where
 the form's apt index comes from and whom to trust for it, `--python-index`
 points the PyPI search at another simple index, and `--refresh-index` fetches
-them again before their week is up.
+them again before their week is up. A Fedora recipe's search reads Fedora's
+own server, which `--mirror`, an Ubuntu archive, does not replace.
 
 | Exit code | Meaning |
 |---|---|
@@ -337,8 +342,8 @@ them again before their week is up.
 | Field | Rules | `init` default |
 |---|---|---|
 | `image.name` | letters, digits, `.` `_` `-`; names the tarball and the WSL distro | `lab` |
-| `image.distro` | `ubuntu` or `fedora` (see [Fedora](#fedora)); may be omitted, which means `ubuntu` | omitted |
-| `image.release` | `20.04`, `22.04`, `24.04` or `26.04`; for Fedora, `44` | `26.04`, the newest |
+| `image.distro` | `ubuntu` or `fedora` (see [Fedora](#fedora)); may be omitted, which means `ubuntu` | omitted for Ubuntu, `fedora` for Fedora |
+| `image.release` | `20.04`, `22.04`, `24.04` or `26.04`; for Fedora, `44` | the newest: `26.04`, or `44` |
 | `image.arch` | `amd64` | `amd64` |
 | `user.name` | lowercase, digits, `_` `-`, 1 to 32 characters, not `root` | `student` |
 | `user.sudo` | `true` gives passwordless sudo; `false` gives none | `true` |
@@ -438,6 +443,22 @@ download, but `InRelease` is read without verifying its signature. A hostile
 mirror could make the search lie about what exists. It could not make a build
 install anything: `build` never reads this index, and apt verifies every
 package against Ubuntu's signed archive exactly as before.
+
+**A Fedora recipe searches Fedora's repositories.** Its catalog is
+Fedora's (see [Fedora](#fedora)), and "Other packages" searches the
+release's own two repositories, `fedora` and `updates`, the only ones a
+Fedora recipe installs from: each one's `repomd.xml` from Fedora's server,
+then the primary metadata it names, 22 MB compressed and 274 MB of XML for
+Fedora 44, read as a stream and reduced to each name's newest x86_64 or
+noarch package, 69,653 of them, in about ten seconds the first time. It is
+cached and refreshed like the archive's. A row shows rpm's version, its
+epoch included, and there are no sections to narrow to: Fedora's packages
+no longer carry groups. `repomd.xml` is not signed either, so the metadata
+is checked against the size and SHA-256 it gives, bounded by that size
+before decompression and by its open size after, and `build` checks every
+package against the release's key, as it always does. A name the
+repositories lack is a warning on the last page: `build` would stop at
+dnf5's "No match for argument".
 
 ### Python packages, which are a different kind of index
 
@@ -909,11 +930,24 @@ timezone = "Europe/Istanbul"
 include = ["git", "gcc", "NetworkManager-tui"]
 ```
 
-The form does not offer Fedora yet, `edit` refuses such a recipe, and
-`capture` describes Ubuntu systems only, so write the recipe by hand;
-`frostroot validate` checks it, rpm names included. `[[sources]]`, `[python]` and `[certificates]` are Ubuntu's alone
-so far, and so is `--mirror`: Fedora's metalinks choose its mirrors, over
-HTTPS.
+`frostroot init` writes one: choose Fedora on the form's first page, where
+the release below follows it, or run `frostroot init --distro fedora`,
+which answers the question for the full-screen form and for `--plain`. The
+pages after it are Fedora's. Its catalog names what a lab asks for as
+Fedora does: `gcc`, `gcc-c++` and `make` where Ubuntu has
+`build-essential`, `nodejs24-bin` and `nodejs24-npm-bin`, which put `node`,
+`npm` and `npx` on the path, `java-25-openjdk-devel`, `golang`, `rust` and
+`cargo`; any other name is found by searching Fedora's own repositories
+(see [Finding packages](#finding-packages)) and checked by Fedora's rule,
+which allows `NetworkManager`. `frostroot edit` opens a Fedora recipe with
+Fedora's questions, and in the full-screen form can move a recipe from one
+distribution to the other: the release becomes the other's newest, and
+the catalog keeps what both catalogs offer. `capture` describes Ubuntu
+systems only. A recipe written by hand works as well, and `frostroot
+validate` checks it, rpm names included. `[[sources]]`, `[python]` and
+`[certificates]` are Ubuntu's alone so far, which is why the form does not
+ask for them, and so is `--mirror`: Fedora's metalinks choose its mirrors,
+over HTTPS.
 
 mkosi builds the image, with the host packages under [Install](#install).
 It first makes a small Fedora tools tree with the host's dnf, then installs
@@ -1113,7 +1147,9 @@ package picker that searches the whole Ubuntu archive from inside the form
 the third-party sources the recipe adds, which are now chosen before the
 packages that come from them (v0.12), `--insecure` for a network whose
 certificate authority nobody has, with the lock recording what it could not
-verify (v0.13), and Ubuntu 26.04, which new recipes now start on (v0.14).
+verify (v0.13), Ubuntu 26.04, which new recipes now start on (v0.14), and
+Fedora 44, built with mkosi, rebuilt offline byte for byte, and offered by
+the form beside Ubuntu (v0.15).
 
 **Deliberately not yet:** families other than Ubuntu and Fedora · flat or
 unsigned apt repositories · npm and cargo lockfiles · Python source
@@ -1490,6 +1526,30 @@ Each change is pinned by a test that fails with it broken, run with
 ran every step. A Fedora image's first login, `wsl-boot` with
 `E2E_DISTRO=fedora`, needs Windows and is still to run.
 
+The third pull request put Fedora in the form. Fedora 44's index, read from
+Fedora's own server here, was 22 MB of primary metadata over its two
+repositories, 274 MB of XML, reduced to 69,653 packages in 9 s and reopened
+from its cache in 0.2 s; a search took 6 ms, the nearest names to a typo 2.
+Each of the Fedora catalog's 33 names is in it, and a Fedora 44 recipe
+asking for all 33 at once built online to 720 packages and a 1119 MB
+tarball, with `node`, `npm`, `npx`, `gcc`, `g++`, `make`, `java`, `javac`,
+`go`, `rustc`, `cargo`, `wget`, `emacs`, `vim`, `clang-format`, `ipython3`
+and the rest on the path. The plan had named `java-latest-openjdk-devel`,
+which on Fedora 44 is OpenJDK 27's early-access build, and `nodejs24` alone
+installs only `node-24`, so the catalog names Java 25 and the `-bin`
+packages. `tui` drove `init` in a pseudo-terminal for each family: for
+Ubuntu it passed its 5 checks, and for Fedora, where the driver moves the
+distribution with the arrow key and picks from Fedora's real index, its 6,
+after its first run found the last page held up while it read PyPI's cache
+for a recipe with no Python packages, long enough for the next Enter to
+write the recipe unseen, which the pull request fixes. Every Ubuntu fixture,
+and the recipe `init` writes by default, renders to the same bytes as
+before. Each change is pinned by a test that fails with it broken, run with
+`scripts/mutate.sh` and recorded in the commits; `scripts/check.sh` ran
+every step, and CI ran all ten required tests,
+`TestIntegrationFedoraCatalogExistsInEveryRelease` among them, to a pass on
+d7ed8e5.
+
 
 ## Documentation
 
@@ -1514,8 +1574,8 @@ ran every step. A Fedora image's first login, `wsl-boot` with
 | [`--insecure` plan](docs/superpowers/plans/2026-09-24-frostroot-insecure.md) | v0.13: the flag that skips TLS verification, what it gives up and where people are told, and the six tasks it was built from. |
 | [Ubuntu 26.04 spec](docs/superpowers/specs/2026-09-28-frostroot-resolute.md) | v0.14: what 26.04 changes, and the spike that built it end to end, on a 24.04 host and a 26.04 one, before any code changed. |
 | [Ubuntu 26.04 plan](docs/superpowers/plans/2026-09-28-frostroot-resolute.md) | The seven tasks v0.14 was built from. |
-| [Fedora spec](docs/superpowers/specs/2026-09-28-frostroot-fedora.md) | v0.15, in progress: Fedora 44 through mkosi with a Fedora tools tree; the spike, what it found about byte identity and unprivileged builds, the seam, the form, and the owner's decisions. |
-| [Fedora plan](docs/superpowers/plans/2026-09-28-frostroot-fedora.md) | The eighteen tasks v0.15 is built from, in three pull requests: the seam, building Fedora, the form. |
+| [Fedora spec](docs/superpowers/specs/2026-09-28-frostroot-fedora.md) | v0.15: Fedora 44 through mkosi with a Fedora tools tree; the spike, what it found about byte identity and unprivileged builds, the seam, the form, and the owner's decisions. |
+| [Fedora plan](docs/superpowers/plans/2026-09-28-frostroot-fedora.md) | The eighteen tasks v0.15 was built from, in three pull requests: the seam, building Fedora, the form. |
 | [TUI plan, second round](docs/superpowers/plans/2026-09-18-frostroot-tui-2.md) | What a walk through the interface found, the six tasks v0.9 was built from, and the tasks of v0.10's package picker. |
 | [Implementation plan](docs/superpowers/plans/2026-09-15-frostroot-v1.md) | The 13 tasks v1 was built from, with the spike's amendments. |
 | [TUI plan](docs/superpowers/plans/2026-09-17-frostroot-tui.md) | The seven tasks v0.2 was built from. |
@@ -1529,8 +1589,8 @@ ran every step. A Fedora image's first login, `wsl-boot` with
 cmd/frostroot/      main
 internal/cli/       init, edit, capture, validate, build, vendor, version; flags, exit codes, the plain line interface
 internal/capture/   reading an installed system: packages asked for, user, locale, and the report of the gaps
-internal/form/      the questions as data: fields, package catalog, timezones, locales, recipe mapping, what a package search needs of an index
-internal/index/     what the form searches: the archive's Packages files and PyPI's simple index, fetched, checked, reduced, cached and searched, and PyPI summaries one at a time
+internal/form/      the questions as data: fields and the families that ask them, each family's package catalog, timezones, locales, recipe mapping, what a package search needs of an index
+internal/index/     what the form searches: the archive's Packages files, a Fedora release's primary metadata and PyPI's simple index, fetched, checked, reduced, cached and searched, and PyPI summaries one at a time
 internal/sources/   the catalog of third-party repositories, PPAs, and fetching and checking their keys
 internal/pgp/       OpenPGP public keys: armor, the fingerprint of every primary key; nothing else
 internal/tui/       the full-screen form with its package picker, and the progress screen (the only package using the Charm libraries)

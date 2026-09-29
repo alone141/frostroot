@@ -40,6 +40,7 @@ requiredTests=(
 	TestIntegrationHostThatCannotMountFailsFast
 	TestIntegrationFedoraTiny
 	TestIntegrationFedoraOfflineRebuild
+	TestIntegrationFedoraCatalogExistsInEveryRelease
 )
 
 # skipUnlessMmdebstrapAvailable and skipUnlessFedoraToolsAvailable skip when

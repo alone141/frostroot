@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 
+	"frostroot/internal/distro"
 	"frostroot/internal/form"
 )
 
@@ -28,6 +29,12 @@ const (
 	selectListHeight      = 8
 	multiSelectListHeight = 12
 )
+
+// inlineSelectOptions is the most options a select shows on one line,
+// switched between with the left and right keys: the family, and Fedora's
+// one release. A list of them would be two rows of choice under rows of
+// padding.
+const inlineSelectOptions = 2
 
 // Sizes of the summary page, in rows and cells.
 const (
@@ -388,66 +395,179 @@ var noteMarkup = strings.NewReplacer(`\`, `\\`, "_", `\_`, "*", `\*`, "`", "\\`"
 func noteText(text string) string { return noteMarkup.Replace(text) }
 
 // formBinding holds the variables huh writes answers into, one per field, and
-// the initial values everything else is copied from.
+// the initial values everything else is copied from. Fields of different
+// families may share a key, the release's or the packages', and each has a
+// variable of its own, so that switching the family and back finds every
+// answer where it was left.
 type formBinding struct {
 	fields  []form.Field
 	initial form.Values
-	texts   map[string]*string
-	flags   map[string]*bool
-	lists   map[string]*[]string
+	texts   map[bindingKey]*string
+	flags   map[bindingKey]*bool
+	lists   map[bindingKey]*[]string
 	ctx     context.Context // ends with the form
 	glyphs  glyphSet
 }
+
+// bindingKey names a field's variable: its key, and the families that ask
+// it, which are none for a field every family asks.
+type bindingKey struct{ key, families string }
+
+func bindingKeyOf(field form.Field) bindingKey {
+	families := make([]string, len(field.Families))
+	for position, family := range field.Families {
+		families[position] = string(family)
+	}
+	return bindingKey{key: field.Key, families: strings.Join(families, ",")}
+}
+
+// familyKey is the variable of the question that chooses the family.
+var familyKey = bindingKey{key: form.KeyDistro}
 
 func newFormBinding(ctx context.Context, fields []form.Field, initial form.Values, glyphs glyphSet) *formBinding {
 	binding := &formBinding{
 		fields:  fields,
 		initial: initial,
-		texts:   map[string]*string{},
-		flags:   map[string]*bool{},
-		lists:   map[string]*[]string{},
+		texts:   map[bindingKey]*string{},
+		flags:   map[bindingKey]*bool{},
+		lists:   map[bindingKey]*[]string{},
 		ctx:     ctx,
 		glyphs:  glyphs,
 	}
+	initialFamily := form.Family(initial)
 	for _, field := range fields {
+		// A field of another family starts where switching to it puts the
+		// answers: on its newest release, with the selections its catalog
+		// has.
+		start := initial
+		if !field.AskedFor(initialFamily) {
+			start = form.ForFamily(initial, field.Families[0])
+		}
+		key := bindingKeyOf(field)
 		switch field.Kind {
 		case form.KindInput, form.KindSelect, form.KindSearch:
-			text := initial.String(field.Key)
-			binding.texts[field.Key] = &text
+			text := start.String(field.Key)
+			binding.texts[key] = &text
 		case form.KindConfirm:
-			flag := initial.Bool(field.Key)
-			binding.flags[field.Key] = &flag
+			flag := start.Bool(field.Key)
+			binding.flags[key] = &flag
 		case form.KindMultiSelect:
-			list := slices.Clone(initial.Strings(field.Key))
-			binding.lists[field.Key] = &list
+			list := slices.Clone(start.Strings(field.Key))
+			binding.lists[key] = &list
 		}
 	}
 	return binding
 }
 
-// groups returns one huh group per form page, in page order.
+// families are the families the form can be answered for: every one when it
+// asks the family, and otherwise the one it started on.
+func (b *formBinding) families() []distro.Family {
+	if _, isAsked := b.texts[familyKey]; isAsked {
+		return distro.Families()
+	}
+	return []distro.Family{form.Family(b.initial)}
+}
+
+// answeredFamily is the family as answered so far.
+func (b *formBinding) answeredFamily() distro.Family {
+	if answer, isAsked := b.texts[familyKey]; isAsked {
+		return form.Family(form.Values{form.KeyDistro: *answer})
+	}
+	return form.Family(b.initial)
+}
+
+// groups returns the form's pages as huh groups, in page order. A page
+// every family asks alike is one group, where a question each family asks
+// its own way, the release, is one widget showing the answered family's. A
+// page that some family asks otherwise, or not at all, is a group per
+// family that has questions on it, hidden while another family is
+// answered: Ubuntu's Sources, Packages and Trust, and Fedora's Packages.
+// The family is asked on the first page, so by the time huh decides
+// whether to show a group the answer that decides it is given.
 func (b *formBinding) groups() []*huh.Group {
+	families := b.families()
 	var groups []*huh.Group
 	for _, page := range form.Pages() {
-		var huhFields []huh.Field
+		var onPage []form.Field
 		for _, field := range b.fields {
 			if field.Page == page {
-				huhFields = append(huhFields, b.huhField(field))
+				onPage = append(onPage, field)
 			}
 		}
-		if len(huhFields) > 0 {
-			groups = append(groups, huh.NewGroup(huhFields...).Title(page))
+		if len(onPage) == 0 {
+			continue
+		}
+		if widgets, shared := b.sharedPage(onPage, families); shared {
+			groups = append(groups, huh.NewGroup(widgets...).Title(page))
+			continue
+		}
+		for _, family := range families {
+			var widgets []huh.Field
+			for _, field := range onPage {
+				if field.AskedFor(family) {
+					widgets = append(widgets, b.huhField(field))
+				}
+			}
+			if len(widgets) > 0 {
+				groups = append(groups, huh.NewGroup(widgets...).Title(page).WithHideFunc(func() bool { return b.answeredFamily() != family }))
+			}
 		}
 	}
 	return groups
 }
 
+// sharedPage returns the widgets of a page when every family asks each of
+// its keys: a field that every family asks as one widget, and a key that
+// each family asks with a field of its own as a familyField. false when a
+// family asks nothing in the place of another family's field.
+func (b *formBinding) sharedPage(onPage []form.Field, families []distro.Family) ([]huh.Field, bool) {
+	var widgets []huh.Field
+	placed := map[string]bool{}
+	for _, field := range onPage {
+		if placed[field.Key] {
+			continue
+		}
+		placed[field.Key] = true
+		fieldOf := map[distro.Family]form.Field{}
+		var distinct []form.Field
+		for _, candidate := range onPage {
+			if candidate.Key != field.Key {
+				continue
+			}
+			for _, family := range families {
+				if candidate.AskedFor(family) {
+					fieldOf[family] = candidate
+				}
+			}
+			distinct = append(distinct, candidate)
+		}
+		if len(fieldOf) < len(families) {
+			return nil, false
+		}
+		if len(distinct) == 1 {
+			widgets = append(widgets, b.huhField(field))
+			continue
+		}
+		widgetOf := map[bindingKey]huh.Field{}
+		for _, candidate := range distinct {
+			widgetOf[bindingKeyOf(candidate)] = b.huhField(candidate)
+		}
+		variants := &familyField{key: field.Key, families: families, widgets: map[distro.Family]huh.Field{}, answered: b.answeredFamily}
+		for family, candidate := range fieldOf {
+			variants.widgets[family] = widgetOf[bindingKeyOf(candidate)]
+		}
+		widgets = append(widgets, variants)
+	}
+	return widgets, true
+}
+
 // huhField renders one form field as the matching huh widget.
 func (b *formBinding) huhField(field form.Field) huh.Field {
+	key := bindingKeyOf(field)
 	switch field.Kind {
 	case form.KindInput:
 		input := huh.NewInput().Key(field.Key).Title(field.Title).Description(field.Description).
-			Placeholder(field.Placeholder).Value(b.texts[field.Key])
+			Placeholder(field.Placeholder).Value(b.texts[key])
 		if field.Validate != nil {
 			input.Validate(field.Validate)
 		}
@@ -462,7 +582,13 @@ func (b *formBinding) huhField(field form.Field) huh.Field {
 			options = append(options, huh.NewOption(label, option.Value))
 		}
 		selectField := huh.NewSelect[string]().Key(field.Key).Title(field.Title).Description(field.Description).
-			Options(options...).Height(selectListHeight).Value(b.texts[field.Key])
+			Options(options...).Value(b.texts[key])
+		switch {
+		case len(options) <= inlineSelectOptions:
+			selectField.Inline(true)
+		case field.Filterable || len(options) > selectListHeight:
+			selectField.Height(selectListHeight)
+		}
 		if field.Filterable {
 			selectField.Filtering(true)
 		}
@@ -473,12 +599,12 @@ func (b *formBinding) huhField(field form.Field) huh.Field {
 			options = append(options, huh.NewOption(option.DisplayLabel(), option.Value))
 		}
 		return huh.NewMultiSelect[string]().Key(field.Key).Title(field.Title).Description(field.Description).
-			Options(options...).Filterable(field.Filterable).Height(multiSelectListHeight).Value(b.lists[field.Key])
+			Options(options...).Filterable(field.Filterable).Height(multiSelectListHeight).Value(b.lists[key])
 	case form.KindConfirm:
 		return huh.NewConfirm().Key(field.Key).Title(field.Title).Description(field.Description).
-			Affirmative("Yes").Negative("No").Value(b.flags[field.Key])
+			Affirmative("Yes").Negative("No").Value(b.flags[key])
 	case form.KindSearch:
-		return newPickerField(b.ctx, field, b.texts[field.Key], b.requestFor(field), b.chosenInCatalog, b.glyphs)
+		return newPickerField(b.ctx, field, b.texts[key], b.requestFor(field), b.chosenInCatalog(field), b.glyphs)
 	case form.KindNote:
 		// The text is escaped: a note renders its own markup, and what
 		// capture found is full of underscores. A button to move on makes
@@ -489,50 +615,72 @@ func (b *formBinding) huhField(field form.Field) huh.Field {
 	return huh.NewNote().Title(field.Title).Description("unsupported field kind")
 }
 
-// requestFor is what a search field opens its index of: the release and,
-// for a field whose index covers them, the sources as answered so far. Both
-// pages come before the picker's, so a source chosen a moment ago is a
-// source it searches. A field whose index is PyPI is not told about them,
-// or ticking a source would abandon a download of it and start again.
+// requestFor is what a search field opens its index of: the family and
+// release and, for a field whose index covers them, the sources as answered
+// so far. Those pages come before the picker's, so a source chosen a moment
+// ago is a source it searches. A field whose index is PyPI is not told
+// about them, or ticking a source would abandon a download of it and start
+// again, and Fedora's has none to be told of.
 func (b *formBinding) requestFor(field form.Field) func() form.IndexRequest {
 	if !field.Sourced {
 		return func() form.IndexRequest {
-			return form.IndexRequest{Release: b.answeredRelease()}
+			return form.IndexRequest{Family: b.answeredFamily(), Release: b.answeredRelease()}
 		}
 	}
 	return func() form.IndexRequest { return form.IndexRequestFor(b.values()) }
 }
 
-// answeredRelease is the Ubuntu release as answered so far.
+// answeredRelease is the answered family's release as answered so far.
 func (b *formBinding) answeredRelease() string {
-	if release, isAsked := b.texts[form.KeyRelease]; isAsked {
-		return *release
+	family := b.answeredFamily()
+	for _, field := range b.fields {
+		if field.Key == form.KeyRelease && field.AskedFor(family) {
+			return *b.texts[bindingKeyOf(field)]
+		}
 	}
 	return b.initial.String(form.KeyRelease)
 }
 
-// chosenInCatalog is the catalog's answer so far. huh writes it on every
-// toggle, so the picker can mark those names as chosen; it cannot change
-// them, because the catalog keeps its own state and would write it back.
-func (b *formBinding) chosenInCatalog() []string {
-	if chosen, isAsked := b.lists[form.KeyPackages]; isAsked {
-		return *chosen
+// chosenInCatalog returns the answer so far of the catalog a search field's
+// family offers beside it. huh writes it on every toggle, so the picker can
+// mark those names as chosen; it cannot change them, because the catalog
+// keeps its own state and would write it back.
+func (b *formBinding) chosenInCatalog(picker form.Field) func() []string {
+	return func() []string {
+		family := b.answeredFamily()
+		if len(picker.Families) > 0 {
+			family = picker.Families[0]
+		}
+		for _, field := range b.fields {
+			if field.Key == form.KeyPackages && field.AskedFor(family) {
+				return *b.lists[bindingKeyOf(field)]
+			}
+		}
+		return b.initial.Strings(form.KeyPackages)
 	}
-	return b.initial.Strings(form.KeyPackages)
 }
 
 // values returns the answers: everything in initial, overwritten by what
-// the widgets collected.
+// the widgets of the answered family's questions collected. An answer to a
+// question the family does not ask stays as it started, and ToRecipe leaves
+// it out.
 func (b *formBinding) values() form.Values {
 	values := b.initial.Clone()
-	for key, text := range b.texts {
-		values[key] = *text
-	}
-	for key, flag := range b.flags {
-		values[key] = *flag
-	}
-	for key, list := range b.lists {
-		values[key] = slices.Clone(*list)
+	family := b.answeredFamily()
+	for _, field := range b.fields {
+		if !field.AskedFor(family) {
+			continue
+		}
+		key := bindingKeyOf(field)
+		switch field.Kind {
+		case form.KindInput, form.KindSelect, form.KindSearch:
+			values[field.Key] = *b.texts[key]
+		case form.KindConfirm:
+			values[field.Key] = *b.flags[key]
+		case form.KindMultiSelect:
+			values[field.Key] = slices.Clone(*b.lists[key])
+		case form.KindNote:
+		}
 	}
 	return values
 }

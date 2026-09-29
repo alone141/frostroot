@@ -31,16 +31,19 @@ var noHost = fakeHost(nil)
 
 func TestFieldsAreWellFormed(t *testing.T) {
 	fields := Fields(noHost)
-	seenKeys := map[string]bool{}
 	pages := Pages()
 	lastPageIndex := 0
 	for _, field := range fields {
-		if field.Key == "" || strings.ToLower(field.Key) != field.Key || seenKeys[field.Key] {
-			t.Errorf("field key %q must be lowercase and unique", field.Key)
+		if field.Key == "" || strings.ToLower(field.Key) != field.Key {
+			t.Errorf("field key %q must be lowercase", field.Key)
 		}
-		seenKeys[field.Key] = true
 		if field.Title == "" {
 			t.Errorf("%s has no title", field.Key)
+		}
+		for _, family := range field.Families {
+			if !slices.Contains(distro.Families(), family) {
+				t.Errorf("%s is asked for %q, which is no family", field.Key, family)
+			}
 		}
 		pageIndex := slices.Index(pages, field.Page)
 		if pageIndex < 0 {
@@ -69,16 +72,25 @@ func TestFieldsAreWellFormed(t *testing.T) {
 		case KindConfirm:
 		}
 	}
-	// Every default answers a field, and every answer is one of the options.
-	defaults := Defaults(noHost)
-	for _, field := range fields {
-		answer, answered := defaults[field.Key]
-		if !answered {
-			t.Errorf("no default for %s", field.Key)
-			continue
-		}
-		if field.Kind == KindSelect && !slices.ContainsFunc(field.Options, func(option Option) bool { return option.Value == answer }) {
-			t.Errorf("default %v for %s is not an option", answer, field.Key)
+	// Each family asks each key once, and every answer it starts from is a
+	// field's, and one of the options of a select.
+	for _, family := range distro.Families() {
+		asked := FieldsFor(fields, family)
+		seenKeys := map[string]bool{}
+		defaults := ForFamily(Defaults(noHost), family)
+		for _, field := range asked {
+			if seenKeys[field.Key] {
+				t.Errorf("%s asks %s twice", family, field.Key)
+			}
+			seenKeys[field.Key] = true
+			answer, answered := defaults[field.Key]
+			if !answered {
+				t.Errorf("no default for %s of %s", field.Key, family)
+				continue
+			}
+			if field.Kind == KindSelect && !slices.ContainsFunc(field.Options, func(option Option) bool { return option.Value == answer }) {
+				t.Errorf("default %v for %s of %s is not an option", answer, field.Key, family)
+			}
 		}
 	}
 }
@@ -352,28 +364,53 @@ func TestToRecipeResolvesSourcesForTheRelease(t *testing.T) {
 }
 
 func TestCatalog(t *testing.T) {
-	seen := map[string]bool{}
-	categories := Categories()
-	for _, entry := range Catalog() {
-		if seen[entry.Name] {
-			t.Errorf("%s is listed twice", entry.Name)
-		}
-		seen[entry.Name] = true
-		if err := recipe.CheckPackageName(entry.Name); err != nil {
-			t.Error(err)
-		}
-		if entry.Description == "" || !slices.Contains(categories, entry.Category) {
-			t.Errorf("%+v needs a description and a known category", entry)
-		}
+	// Each family's names are checked by the rule its recipes are.
+	checkName := map[distro.Family]func(string) error{distro.Ubuntu: recipe.CheckPackageName, distro.Fedora: recipe.CheckRPMName}
+	for _, family := range distro.Families() {
+		t.Run(string(family), func(t *testing.T) {
+			seen := map[string]bool{}
+			categories := Categories(family)
+			entries := Catalog(family)
+			if len(entries) == 0 {
+				t.Fatal("no catalog")
+			}
+			for _, entry := range entries {
+				if seen[entry.Name] {
+					t.Errorf("%s is listed twice", entry.Name)
+				}
+				seen[entry.Name] = true
+				if err := checkName[family](entry.Name); err != nil {
+					t.Error(err)
+				}
+				if entry.Description == "" || !slices.Contains(categories, entry.Category) {
+					t.Errorf("%+v needs a description and a known category", entry)
+				}
+				if !InCatalog(family, entry.Name) {
+					t.Errorf("InCatalog(%s) = false", entry.Name)
+				}
+			}
+			// The same categories in the same order, so that the two lists
+			// read alike.
+			if !slices.Equal(categories, Categories(distro.Ubuntu)) {
+				t.Errorf("categories = %q, want Ubuntu's, %q", categories, Categories(distro.Ubuntu))
+			}
+		})
 	}
 	// The v0.1 presets are still expressible.
 	for _, presetPackage := range []string{"build-essential", "git", "cmake", "pkg-config", "python3", "python3-pip", "python3-venv"} {
-		if !InCatalog(presetPackage) {
+		if !InCatalog(distro.Ubuntu, presetPackage) {
 			t.Errorf("%s was in a v0.1 preset and must stay in the catalog", presetPackage)
 		}
 	}
-	if !slices.Equal(categories[:2], []string{"C/C++", "Python"}) {
+	if categories := Categories(distro.Ubuntu); !slices.Equal(categories[:2], []string{"C/C++", "Python"}) {
 		t.Errorf("categories = %q, want C/C++ first", categories)
+	}
+	// A family's catalog is its own: build-essential is Ubuntu's name.
+	if InCatalog(distro.Fedora, "build-essential") || !InCatalog(distro.Fedora, "gcc-c++") || InCatalog(distro.Ubuntu, "gcc-c++") {
+		t.Error("InCatalog does not keep to the family's catalog")
+	}
+	if Catalog("gentoo") != nil || InCatalog("gentoo", "git") {
+		t.Error("a family frostroot does not know has a catalog")
 	}
 }
 

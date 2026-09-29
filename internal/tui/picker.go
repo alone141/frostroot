@@ -55,9 +55,9 @@ var pickerSummaryDelay = 250 * time.Millisecond
 
 // pickerField is a question answered with a list of package names, found by
 // searching an index and added with Space, or typed. "Other packages"
-// searches the release's apt archive and "Python packages" searches PyPI. It is
-// a huh.Field, so both sit on the Packages page and move on with the form's
-// own keys.
+// searches the release's apt archive, or a Fedora release's repositories,
+// and "Python packages" searches PyPI. It is a huh.Field, so each sits on
+// its Packages page and moves on with the form's own keys.
 //
 // The index is help, not a requirement. While it loads, when it cannot be
 // had, and when the form was given none, the field is a list editor: type a

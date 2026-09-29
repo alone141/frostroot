@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"frostroot/internal/distro"
 )
 
 // Source is a third-party apt repository to index beside the release's own
@@ -32,13 +34,19 @@ type target struct {
 	components []string //
 	pockets    []string // the suites under dists/ to read, in order
 	maxAge     time.Duration
+	// rpmRepositories, when set, make this a Fedora release: repositories
+	// with repomd.xml rather than an apt archive with dists/, read in order.
+	rpmRepositories []distro.FedoraRepository
 }
 
 // missingName is what a line above the results calls this repository when it
 // could not be read: a source by its name, and the release's archive as the
 // archive, which is what a person calls it.
 func (t target) missingName() string {
-	if t.origin == "" {
+	switch {
+	case len(t.rpmRepositories) > 0:
+		return "repositories"
+	case t.origin == "":
 		return "archive"
 	}
 	return t.origin

@@ -33,7 +33,7 @@ func TestIntegrationCatalogExistsInEveryRelease(t *testing.T) {
 					available[name] = true
 				}
 			}
-			for _, entry := range Catalog() {
+			for _, entry := range Catalog(distro.Ubuntu) {
 				if !available[entry.Name] {
 					t.Errorf("%s is not in Ubuntu %s (%s)", entry.Name, version, release.Suite)
 				}

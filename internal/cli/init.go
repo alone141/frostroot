@@ -9,6 +9,7 @@ import (
 	"strings"
 	"text/template"
 
+	"frostroot/internal/distro"
 	"frostroot/internal/export"
 	"frostroot/internal/form"
 	"frostroot/internal/recipe"
@@ -28,9 +29,10 @@ var recipeTemplate = template.Must(template.New("recipe").Funcs(template.FuncMap
 [image]
 name = {{tomlQuote .Image.Name}}  # file name of the tarball and name of the WSL distro
 {{if .Image.Distro}}distro = {{tomlQuote .Image.Distro}}
-{{end}}# 20.04 | 22.04 | 24.04 | 26.04. 20.04 is past standard support: its
+{{end}}{{if eq .Image.Distro "fedora"}}# 44, the Fedora release frostroot builds.
+{{else}}# 20.04 | 22.04 | 24.04 | 26.04. 20.04 is past standard support: its
 # packages carry known security vulnerabilities that only Ubuntu Pro fixes.
-release = {{tomlQuote .Image.Release}}
+{{end}}release = {{tomlQuote .Image.Release}}
 arch = {{tomlQuote .Image.Arch}}  # the only architecture in v1
 
 [user]
@@ -46,9 +48,11 @@ lang = {{tomlQuote .Locale.Lang}}
 timezone = {{tomlQuote .Locale.Timezone}}  # kept under WSL instead of following Windows
 
 [packages]
-# apt package names, exactly as you would pass them to apt install.
+{{if eq .Image.Distro "fedora"}}# Fedora package names, exactly as you would pass them to dnf install.
+# Dependencies and weak dependencies come along automatically.
+{{else}}# apt package names, exactly as you would pass them to apt install.
 # Dependencies and Recommends come along automatically.
-include = {{tomlQuoteList .Packages.Include}}
+{{end}}include = {{tomlQuoteList .Packages.Include}}
 {{if .Python}}
 [python]
 # PyPI names, installed into the image's virtual environment, which every
@@ -76,9 +80,14 @@ url = {{tomlQuote .URL}}
 {{end}}key = {{tomlQuote .Key}}
 {{end}}{{end}}`))
 
-const initUsageText = `usage: frostroot init [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE | --insecure] [--refresh-index]
+const initUsageText = `usage: frostroot init [--distro ubuntu|fedora] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE | --insecure] [--refresh-index]
 
 Answer a few questions and write frostroot.toml in the current directory.
+
+The full-screen form asks for the distribution first, and the questions
+after it are that distribution's: Fedora's have no apt sources, Python
+packages or certificate authorities. --distro answers it, and --plain,
+which never asks it, writes an Ubuntu recipe unless --distro says Fedora.
 
 ` + indexUsageText
 
@@ -86,9 +95,20 @@ func (a *App) runInit(args []string) int {
 	flags := a.newFlagSet("init", initUsageText)
 	overwrite := flags.Bool("force", false, "overwrite an existing frostroot.toml")
 	plain := flags.Bool("plain", false, "ask line by line instead of showing the full-screen form")
+	distroName := flags.String("distro", "", "write a recipe of this `distribution`, ubuntu or fedora, without asking")
 	indexOptions := addIndexFlags(flags)
 	if exitCode, stop := a.parseFlags(flags, args); stop {
 		return exitCode
+	}
+	initial := form.Defaults(a.host())
+	askFamily := *distroName == ""
+	if !askFamily {
+		family, err := distro.FamilyOf(*distroName)
+		if err != nil {
+			a.stderrf("frostroot init: --distro: %v\n", err)
+			return exitUserError
+		}
+		initial = form.ForFamily(initial, family)
 	}
 	recipePath := filepath.Join(a.RecipeDir, recipeFileName)
 	if _, err := os.Stat(recipePath); err == nil && !*overwrite {
@@ -99,7 +119,7 @@ func (a *App) runInit(args []string) int {
 	if !ok {
 		return exitUserError
 	}
-	return a.runRecipeForm("init", form.Defaults(a.host()), recipePath, *overwrite, *plain, nil, nil, indexes)
+	return a.runRecipeForm("init", initial, recipePath, *overwrite, *plain, askFamily, nil, nil, indexes)
 }
 
 // renderRecipe returns imageRecipe as the file init and edit write, byte

@@ -147,20 +147,90 @@ same SHA-256.
 
 ## Pull request 3: the form
 
-15. **Distribution before release.** The form's first page chooses the
-    family, then its releases; a Fedora recipe gets no Sources, Python or
-    Certificates page; `init --plain --distro fedora`; the template; the
-    golden frames re-recorded and read.
+The owner's decision 4: `init` and `edit` offer Fedora from the first
+version. What the first two pull requests taught, and `huh` v1.0.0 allows,
+shape how: a group can hide itself when an earlier answer says so
+(`WithHideFunc`), and a select can recompute its options when another
+answer changes (`OptionsFunc`). So the full-screen form asks the family on
+the Image page, beside the name and above the release, and Ubuntu's pages
+stay as they are, one question longer.
+
+15. **The family in the form.**
+    - `form.KeyDistro` becomes a field: a select of the families on the
+      Image page, before the release. The release's options follow the
+      answer (Ubuntu's four, or Fedora 44), and a release the other family
+      does not have is replaced by that family's newest.
+    - A field says which families it is asked for. The Sources and Trust
+      pages are Ubuntu's; Fedora gets a Packages page of its own, with
+      Fedora's catalog and its index but no Python field, and Ubuntu's
+      Packages page is the one it is today. Each is a group the other
+      family hides.
+    - `ToRecipe` writes the family, and keeps only the chosen family's
+      catalog names, so a name picked before the family changed is not
+      written; typed names are checked by the family's rule, as `validate`
+      checks them. `FromRecipe` reads the family back, and `edit` stops
+      refusing a Fedora recipe.
+    - The plain interface asks what it asks today, in the same order,
+      because people pipe answers into it: the family is not a question
+      there. `init --distro fedora` answers it, full-screen or plain, and
+      the plain Fedora questions are the Ubuntu ones without Sources,
+      Python and Certificates. `capture` stays Ubuntu's.
+    - The summary and the recipe preview name the family. A recipe names
+      it only when it is Fedora, or when it already did, so an Ubuntu
+      recipe that `init` writes or `edit` rewrites is the bytes it is
+      today.
+    - Golden frames: Ubuntu's Image page is re-recorded with the new
+      question; new frames show Fedora's Image and Packages pages; each is
+      read before it is committed.
+    - (Built with the release as one widget holding a select per family,
+      not `OptionsFunc`: huh restores options it has cached without
+      moving the cursor, so a switch back to Ubuntu landed on 20.04. Each
+      family's fields keep variables of their own, so a switch and back
+      finds every answer where it was. A select of one or two options is
+      shown on one line, and the plain interface matches an option's
+      value before its number, or Fedora's 44 was the 44th option.)
 16. **The Fedora catalog.** The packages a lab asks for, as Fedora names
-    them, and an integration test that each exists in every Fedora release
-    the table knows.
-17. **Searching Fedora's index.** `internal/index` reads `repomd.xml` and
-    `primary.xml.zst`, bounded by the sizes `repomd.xml` declares before
-    and after decompression, reduces them to names and summaries, and
-    caches them per release and repository; the picker uses it for a
-    Fedora recipe. AGENTS.md's package boundaries say `index` imports
-    zstd.
-18. **Docs and the release.** The README (Fedora in Quick start, Scope and
-    the recipe; the Verification paragraph), `build`'s and `init`'s usage
-    text, AGENTS.md's rules (who writes the tarball; the boundaries), and
-    `builder.Version` 0.15.0.
+    them (`gcc`, `gcc-c++` and `make` where Ubuntu has `build-essential`,
+    `java-latest-openjdk-devel` for `default-jdk`, `golang` for
+    `golang-go`), in the categories Ubuntu's has, and
+    `TestIntegrationFedoraCatalogExistsInEveryRelease`, which opens
+    Fedora's index for every release the table knows and requires each
+    name in it; `scripts/integration.sh` requires it. (Built with
+    `java-25-openjdk-devel`: on Fedora 44 `java-latest-openjdk-devel` is
+    OpenJDK 27's early-access build. `nodejs24-bin` and
+    `nodejs24-npm-bin` stand for Node, because `nodejs24` puts only
+    `node-24` on PATH. A real build of all 33 names proved they install
+    together. The test lives beside `TestIntegrationOpenEveryRelease`, in
+    `internal/index`.)
+17. **Searching Fedora's index.** `internal/index` gains `OpenFedora`:
+    for each repository of the release, `repomd.xml` from its base URL,
+    then the `primary` file it names, bounded by the size `repomd.xml`
+    declares before decompression and by the `open-size` after, and
+    checked against its SHA-256; `primary.xml.zst` is zstd, which `index`
+    then imports (AGENTS.md's boundaries say so). The XML is read as a
+    stream and reduced to each name's newest x86_64 or noarch package and
+    its summary, then cached per release and repository with the apt
+    index's rules: a week, `--refresh-index`, and nothing fetched offline.
+    `IndexRequest` carries the family, the picker searches Fedora's index
+    for a Fedora recipe, and the warnings on the last page name what it
+    lacks. `repomd.xml` is not signed; the index only suggests names, as it
+    does for Ubuntu, and `internal/builder` still never imports it.
+    (Built before 15 and 16, which use it, and cached per release: the two
+    repositories are one index, the updates repository's packages in
+    place of the release's, as an Ubuntu release's pockets are. A name
+    listed twice in one repository keeps its newest version, compared as
+    rpm compares them: Fedora 44 lists two `rubygem-bundler`.)
+18. **Docs and the version.** The README (Fedora in Quick start and the
+    recipe's fields, `init --distro`, what the form offers each family,
+    the Verification paragraph), `init`'s and `edit`'s usage text,
+    AGENTS.md (the boundaries, the form's rule for a field of one family),
+    and `builder.Version` 0.15.0. Pushing the tag stays the owner's.
+    (The recipe template's comments, which named Ubuntu's releases and apt
+    above a Fedora recipe's, follow the family too.)
+
+**For and against, as the owner asked to be told before the work:** for,
+a Fedora image never needs its recipe written by hand, and Ubuntu's form
+loses nothing but gains one question. Against, a second index format to
+fetch, bound and cache (15.7 MB compressed and 185 MB open for Fedora 44's
+own repository), zstd in `internal/index`, a second catalog to keep, and a
+form whose pages depend on an answer, which is more to test.

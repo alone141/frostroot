@@ -42,7 +42,7 @@ func TestANoteOpensTheFormAndAsksNothing(t *testing.T) {
 		t.Errorf("Enter on the note did not move to the first question:\n%s", next)
 	}
 	// The note left nothing in the answers.
-	if _, bound := d.model.binding.texts["note:"+form.PageCaptured]; bound {
+	if _, bound := d.model.binding.texts[bindingKey{key: "note:" + form.PageCaptured}]; bound {
 		t.Error("a note was bound as if it were answered")
 	}
 	d.pressEnterUntil(stageDone)

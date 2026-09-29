@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Drive frostroot's full-screen form through a pseudo-terminal.
 
-usage: tui_drive.py FROSTROOT [ARG...]
+usage: tui_drive.py [--family fedora] FROSTROOT [ARG...]
 
 Runs "FROSTROOT init --force ARG..." in the current directory, in a 100x32
 pseudo-terminal, the way a person at a terminal would: it walks the pages
 with Enter, picks jq in the package picker and requests in the PyPI search,
-and writes the recipe. It prints the screen as that person would have seen
-it at each step, and exits 1 with the screen it gave up on when something
-does not appear in time.
+and writes the recipe. With --family fedora it first moves the distribution
+on the Image page to Fedora, with the right arrow, and picks jq from
+Fedora's repositories; a Fedora recipe has no PyPI field. It prints the
+screen as that person would have seen it at each step, and exits 1 with the
+screen it gave up on when something does not appear in time.
 
 A terminal answers two questions Bubble Tea and lipgloss ask when they
 start, the background colour (OSC 11) and the cursor position (DSR).
@@ -31,7 +33,7 @@ import time
 
 COLS, ROWS = 100, 32
 ANSI = re.compile(rb"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[=>]")
-ENTER, SPACE, ESC = b"\r", b" ", b"\x1b"
+ENTER, SPACE, ESC, RIGHT = b"\r", b" ", b"\x1b", b"\x1b[C"
 
 
 class Screen:
@@ -210,10 +212,14 @@ def pick(session, name, what):
 
 
 def main():
-    if len(sys.argv) < 2:
+    args = sys.argv[1:]
+    family = "ubuntu"
+    if args[:1] == ["--family"] and len(args) >= 2:
+        family, args = args[1], args[2:]
+    if not args or family not in ("ubuntu", "fedora"):
         print(__doc__.split("\n\n")[1], file=sys.stderr)
         sys.exit(2)
-    argv = [sys.argv[1], "init", "--force"] + sys.argv[2:]
+    argv = [args[0], "init", "--force"] + args[1:]
     env = dict(os.environ, TERM="xterm-256color", LANG="C.UTF-8", COLUMNS=str(COLS), LINES=str(ROWS))
     started = time.time()
     session = Session(argv, env)
@@ -221,6 +227,14 @@ def main():
     if not session.wait_for(r"Image name", 20):
         give_up(session, "the form never drew its first page")
     session.show("the first page")
+    if family == "fedora":
+        # Past the name to the distribution, and across to Fedora: the
+        # release below it follows.
+        session.send(ENTER, 0.5)
+        session.send(RIGHT, 0.5)
+        if not session.wait_for(r"(?s)Fedora release.*Fedora 44", 5):
+            give_up(session, "the release did not follow the distribution to Fedora")
+        session.show("Fedora chosen")
 
     # The picker's own key help, "add/remove", shows only while it has the
     # focus, and "Other packages" is the first picker on the page.
@@ -229,13 +243,16 @@ def main():
     if not session.wait_for(r"[0-9][0-9,]* packages", 300):
         give_up(session, "the release's package index never loaded")
     session.show(f"the package index, {time.time() - started:.0f} s after the start")
+    if family == "fedora" and not re.search(r"Fedora 44 · [0-9,]+ packages", session.screen.text()):
+        give_up(session, "the picker is not searching Fedora's repositories")
     pick(session, "jq", "the package picker")
 
-    session.send(ENTER, 0.5)
-    if not session.wait_for(r"[0-9][0-9,]* projects", 300):
-        give_up(session, "PyPI's index never loaded in the Python field")
-    session.show(f"PyPI's index, {time.time() - started:.0f} s after the start")
-    pick(session, "requests", "the Python field")
+    if family == "ubuntu":
+        session.send(ENTER, 0.5)
+        if not session.wait_for(r"[0-9][0-9,]* projects", 300):
+            give_up(session, "PyPI's index never loaded in the Python field")
+        session.show(f"PyPI's index, {time.time() - started:.0f} s after the start")
+        pick(session, "requests", "the Python field")
 
     enter_until(session, r"Write frostroot\.toml\?", 15, "the summary")
     session.show("the summary")

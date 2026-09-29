@@ -54,12 +54,14 @@ func (v Values) Clone() Values {
 	return cloned
 }
 
-// Defaults returns the answers init starts from: a lab image on the newest
-// release, a student user with sudo, the host's timezone, systemd on, no
-// packages, no extra sources.
+// Defaults returns the answers init starts from: a lab image on Ubuntu's
+// newest release, a student user with sudo, the host's timezone, systemd
+// on, no packages, no extra sources. ForFamily turns them into another
+// family's.
 func Defaults(host Host) Values {
 	return Values{
 		KeyImageName:      "lab",
+		KeyDistro:         string(distro.Ubuntu),
 		KeyRelease:        distro.NewestVersion(distro.Ubuntu),
 		KeyUserName:       "student",
 		KeySudo:           true,
@@ -75,13 +77,57 @@ func Defaults(host Host) Values {
 	}
 }
 
+// Family returns the family the answers are for: Ubuntu when they name
+// none, as a recipe that names none is Ubuntu's. A name frostroot does not
+// know is returned as it is, for Validate to refuse.
+func Family(values Values) distro.Family {
+	family, err := distro.FamilyOf(values.String(KeyDistro))
+	if err != nil {
+		return distro.Family(values.String(KeyDistro))
+	}
+	return family
+}
+
+// ForFamily returns the answers as they stand for family, for a form that
+// starts on it or switches to it: the release becomes the family's newest
+// unless it is already one of the family's, and the catalog selections keep
+// the names the family's catalog has. The rest stands; what one family asks
+// and another does not, ToRecipe leaves out.
+func ForFamily(values Values, family distro.Family) Values {
+	switched := values.Clone()
+	switched[KeyDistro] = string(family)
+	if !slices.Contains(distro.SupportedVersions(family), values.String(KeyRelease)) {
+		switched[KeyRelease] = distro.NewestVersion(family)
+	}
+	switched[KeyPackages] = catalogSelections(family, values)
+	return switched
+}
+
+// catalogSelections returns the names chosen in family's catalog: those
+// the answers select that the catalog has, in their order. A name chosen in
+// another family's catalog is not one of them, even when it is a package of
+// this family too; the catalog shows what it offers.
+func catalogSelections(family distro.Family, values Values) []string {
+	selected := []string{}
+	for _, name := range values.Strings(KeyPackages) {
+		if InCatalog(family, name) {
+			selected = append(selected, name)
+		}
+	}
+	return selected
+}
+
 // FromRecipe returns the answers that describe imageRecipe, for edit.
-// Packages in the catalog become selections; the rest go to the free-text
-// field. Sources likewise: catalog entries become selections, PPAs go to
-// the PPA field, and anything else is kept as it is. The recipe's own order
-// is remembered so ToRecipe can keep it.
+// Packages in the family's catalog become selections; the rest go to the
+// free-text field. Sources likewise: catalog entries become selections, PPAs
+// go to the PPA field, and anything else is kept as it is. The recipe's own
+// order is remembered so ToRecipe can keep it.
 func FromRecipe(imageRecipe recipe.Recipe) Values {
-	catalogNames, otherNames := SplitPackages(imageRecipe.Packages.Include)
+	family, err := distro.FamilyOf(imageRecipe.Image.Distro)
+	if err != nil {
+		family = distro.Family(imageRecipe.Image.Distro) // Validate refuses it
+	}
+	catalogNames, otherNames := SplitPackages(family, imageRecipe.Packages.Include)
 	catalogSources, ppas := SplitSources(imageRecipe.Sources)
 	simpleCertificates, exoticCertificates := splitCertificatePaths(imageRecipe.CertificatePaths())
 	timezone := imageRecipe.Locale.Timezone
@@ -94,6 +140,7 @@ func FromRecipe(imageRecipe recipe.Recipe) Values {
 	}
 	return Values{
 		KeyImageName:            imageRecipe.Image.Name,
+		KeyDistro:               string(family),
 		KeyRelease:              imageRecipe.Image.Release,
 		KeyUserName:             imageRecipe.User.Name,
 		KeySudo:                 imageRecipe.User.Sudo,
@@ -111,17 +158,21 @@ func FromRecipe(imageRecipe recipe.Recipe) Values {
 		keyOriginalRelease:      imageRecipe.Image.Release,
 		keyOriginalCertificates: exoticCertificates,
 		keyPythonIndexURL:       imageRecipe.PythonIndexURL(),
-		keyDistro:               imageRecipe.Image.Distro,
+		keyOriginalDistro:       imageRecipe.Image.Distro,
 	}
 }
 
-// ToRecipe turns answers into a recipe. The caller still runs
+// ToRecipe turns answers into a recipe of their family. Fedora's has no
+// apt sources, Python packages or certificate authorities, whatever answers
+// to them an edit of an Ubuntu recipe carried into the switch, and keeps
+// only the selections its own catalog offers. The caller still runs
 // recipe.Validate on it before writing: the form checks each answer, this
 // checks their combination.
 func ToRecipe(values Values) recipe.Recipe {
+	family := Family(values)
 	userName := values.String(KeyUserName)
-	return recipe.Recipe{
-		Image: recipe.Image{Name: values.String(KeyImageName), Distro: values.String(keyDistro), Release: values.String(KeyRelease), Arch: distro.SupportedArch},
+	imageRecipe := recipe.Recipe{
+		Image: recipe.Image{Name: values.String(KeyImageName), Distro: recipeDistro(values), Release: values.String(KeyRelease), Arch: distro.SupportedArch},
 		User:  recipe.User{Name: userName, Sudo: values.Bool(KeySudo)},
 		WSL:   recipe.WSL{Systemd: values.Bool(KeySystemd), DefaultUser: userName},
 		Locale: recipe.Locale{
@@ -129,12 +180,27 @@ func ToRecipe(values Values) recipe.Recipe {
 			Timezone: values.String(KeyTimezone),
 		},
 		Packages: recipe.Packages{
-			Include: MergePackages(values.Strings(KeyPackages), values.String(KeyOtherPackages), values.Strings(keyOriginalInclude)),
+			Include: MergePackages(catalogSelections(family, values), values.String(KeyOtherPackages), values.Strings(keyOriginalInclude)),
 		},
-		Sources:      mergeAnswerSources(values),
-		Python:       pythonTable(values.String(KeyPythonPackages), values.String(keyPythonIndexURL)),
-		Certificates: certificatesTable(certificatePaths(values)),
 	}
+	if family == distro.Fedora {
+		return imageRecipe
+	}
+	imageRecipe.Sources = mergeAnswerSources(values)
+	imageRecipe.Python = pythonTable(values.String(KeyPythonPackages), values.String(keyPythonIndexURL))
+	imageRecipe.Certificates = certificatesTable(certificatePaths(values))
+	return imageRecipe
+}
+
+// recipeDistro is what [image] distro says: nothing for Ubuntu, so that an
+// Ubuntu recipe init writes or edit rewrites is the bytes it always was,
+// unless the recipe already named its family, which it then keeps doing.
+func recipeDistro(values Values) string {
+	name := values.String(KeyDistro)
+	if name == string(distro.Ubuntu) && values.String(keyOriginalDistro) == "" {
+		return ""
+	}
+	return name
 }
 
 // certificatePaths returns every certificate the answers name: those the
@@ -189,42 +255,47 @@ func releaseSuite(release string) string {
 }
 
 // Summary describes the answers in a few lines, for the page before the
-// recipe is written.
+// recipe is written. It is read from the recipe the answers make, so that
+// it says what will be written: a Fedora image has no sources line, and no
+// Python or certificates either, as its questions had none.
 func Summary(values Values) string {
+	imageRecipe := ToRecipe(values)
+	family := Family(values)
 	sudo := "no sudo"
-	if values.Bool(KeySudo) {
+	if imageRecipe.User.Sudo {
 		sudo = "passwordless sudo"
 	}
 	systemd := "systemd off"
-	if values.Bool(KeySystemd) {
+	if imageRecipe.WSL.Systemd {
 		systemd = "systemd on"
 	}
-	packages := MergePackages(values.Strings(KeyPackages), values.String(KeyOtherPackages), values.Strings(keyOriginalInclude))
 	packagesText := "none"
-	if len(packages) > 0 {
-		packagesText = strings.Join(packages, " ")
-	}
-	sourcesText := "Ubuntu's archive only"
-	if extra := mergeAnswerSources(values); len(extra) > 0 {
-		var names []string
-		for _, source := range extra {
-			names = append(names, sources.Describe(source))
-		}
-		sourcesText = strings.Join(names, ", ")
+	if len(imageRecipe.Packages.Include) > 0 {
+		packagesText = strings.Join(imageRecipe.Packages.Include, " ")
 	}
 	lines := []string{
-		fmt.Sprintf("Image     %s, Ubuntu %s %s", values.String(KeyImageName), values.String(KeyRelease), distro.SupportedArch),
-		fmt.Sprintf("User      %s, %s", values.String(KeyUserName), sudo),
-		fmt.Sprintf("System    %s, %s, %s", values.String(KeyTimezone), values.String(KeyLocale), systemd),
-		// In the order the questions were asked, so the recap can be read
-		// against the answers just given.
-		fmt.Sprintf("Sources   %s", sourcesText),
-		fmt.Sprintf("Packages  %s", packagesText),
+		fmt.Sprintf("Image     %s, %s %s %s", imageRecipe.Image.Name, family.Name(), imageRecipe.Image.Release, distro.SupportedArch),
+		fmt.Sprintf("User      %s, %s", imageRecipe.User.Name, sudo),
+		fmt.Sprintf("System    %s, %s, %s", imageRecipe.Locale.Timezone, imageRecipe.Locale.Lang, systemd),
 	}
-	if pythonPackages := splitPackageList(values.String(KeyPythonPackages)); len(pythonPackages) > 0 {
+	// In the order the questions were asked, so the recap can be read
+	// against the answers just given.
+	if family != distro.Fedora {
+		sourcesText := "Ubuntu's archive only"
+		if len(imageRecipe.Sources) > 0 {
+			var names []string
+			for _, source := range imageRecipe.Sources {
+				names = append(names, sources.Describe(source))
+			}
+			sourcesText = strings.Join(names, ", ")
+		}
+		lines = append(lines, fmt.Sprintf("Sources   %s", sourcesText))
+	}
+	lines = append(lines, fmt.Sprintf("Packages  %s", packagesText))
+	if pythonPackages := imageRecipe.PythonPackages(); len(pythonPackages) > 0 {
 		lines = append(lines, fmt.Sprintf("Python    %s", strings.Join(pythonPackages, " ")))
 	}
-	if paths := certificatePaths(values); len(paths) > 0 {
+	if paths := imageRecipe.CertificatePaths(); len(paths) > 0 {
 		lines = append(lines, fmt.Sprintf("Certs     %s", strings.Join(paths, " ")))
 	}
 	return strings.Join(lines, "\n")

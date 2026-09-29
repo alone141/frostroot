@@ -324,18 +324,23 @@ version, so a Fedora image never needs its recipe written by hand.
 
 - **The distribution comes first**, then its releases: Ubuntu's four, and
   Fedora's that the table knows (44 at first). A new recipe still starts on
-  Ubuntu's newest release.
+  Ubuntu's newest release. Built on the Image page, between the name and
+  the release, whose list follows the answer.
 - **A Fedora package catalog**, as the Ubuntu one: the names a lab asks
   for, as Fedora spells them (`gcc` and `make` rather than
   `build-essential`, `python3` without `python3-venv`), each checked to
   exist in every Fedora release the table knows, as
-  `TestIntegrationCatalogExistsInEveryRelease` does for Ubuntu.
+  `TestIntegrationCatalogExistsInEveryRelease` does for Ubuntu; built as
+  `TestIntegrationFedoraCatalogExistsInEveryRelease`.
 - **The picker searches Fedora's index.** Fedora 44 publishes its package
   list as `repodata/…-primary.xml.zst`, 15.7 MB compressed and 185 MB
   open, and `repomd.xml` declares both sizes, so the read is bounded before
   and after decompression as the apt index is. It is reduced to names and
   summaries and cached, per release and repository. `internal/index` then
-  imports zstd, which AGENTS.md's package boundaries have to say.
+  imports zstd, which AGENTS.md's package boundaries have to say. Built
+  with the updates repository beside it, 22 MB and 274 MB together,
+  reduced to 69,653 packages in 9 s here and cached per release, the two
+  repositories as one index.
   `repomd.xml` is not signed; the index only suggests names, as it does
   today, and `internal/builder` still never imports it.
 - **The pages a Fedora recipe cannot use are left out**: third-party
@@ -417,6 +422,37 @@ does not promise.
   `unshare --net` and one as uid 1001 wrote one SHA-256 in 54 to 57 s, and
   an online build at the lock's instant wrote the same lock and the same
   tarball.
+
+The form, in the third pull request, found these:
+
+- **huh restores cached options without moving the cursor.** A select
+  whose options followed the family through `OptionsFunc` came back to
+  Ubuntu from Fedora on 20.04, the first option, whatever release had
+  been chosen. The release is one widget holding a select per family, each
+  with its own cursor and variable, and huh hides whole groups for the
+  pages a family does not ask.
+- **Fedora's release is a number.** The plain interface matched an
+  answer as an option's number before its value, so `44` was the 44th
+  option of a list of one. Values are matched first; no option any list
+  offered before is a number.
+- **The last page read PyPI's cache for a recipe with no Python
+  packages**, a Fedora one, and was held up long enough for the next
+  Enter to write the recipe unseen; the `tui` scenario with
+  `E2E_DISTRO=fedora` found it. An index is read only for names it has to
+  judge.
+- **Fedora's names are not Ubuntu's in more places than the plan said.**
+  `java-latest-openjdk-devel` is OpenJDK 27's early-access build on
+  Fedora 44, so the catalog names `java-25-openjdk-devel`; `nodejs24`
+  installs `node-24` alone, and `nodejs24-bin` is what puts `node` on
+  PATH; `emacs-nox` is `emacs-nw`, `wget` is `wget2-wget`, and
+  `clang-format` is part of `clang-tools-extra`. A real build of all 33
+  catalog names made a 720-package image with every command on PATH.
+- **Fedora 44's own repository lists two `rubygem-bundler`**, 2.6.9 and
+  4.0.3, so the index keeps the newest of a name by rpm's own version
+  comparison, tested against rpm's table.
+- **The recipe template's comments were Ubuntu's**, the releases and
+  apt, above a Fedora recipe's release and packages; they follow the
+  family.
 
 ## Risks
 

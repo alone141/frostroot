@@ -51,13 +51,19 @@ func isCharacterDevice(stream any) bool {
 // providedKeys are armored signing keys by source name that the caller
 // already has (capture read them from the machine); other missing keys are
 // fetched. intro is shown before the questions: what capture has to say,
-// or nothing.
-func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath string, replace, plainRequested bool, providedKeys map[string][]byte, intro []form.Field, indexes *packageIndexes) int {
+// or nothing. askFamily says whether the full-screen form asks the family,
+// which then decides the questions after it; the plain interface never
+// does, because people pipe answers into it, and asks initial's family's.
+func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath string, replace, plainRequested, askFamily bool, providedKeys map[string][]byte, intro []form.Field, indexes *packageIndexes) int {
 	host := a.host()
 	host.OpenIndex = indexes.Open
 	host.OpenPythonIndex = indexes.OpenPython
-	fields := slices.Concat(intro, form.Fields(host))
 	fullScreen := a.useFullScreen(plainRequested)
+	questions := form.Fields(host)
+	if !fullScreen || !askFamily {
+		questions = form.FieldsFor(questions, form.Family(initial))
+	}
+	fields := slices.Concat(intro, questions)
 	preview := recipePreview(recipePath, indexes)
 	var values form.Values
 	var problems []string
@@ -171,11 +177,22 @@ func recipePreview(recipePath string, indexes *packageIndexes) tui.PreviewFunc {
 		}
 		return tui.Preview{Heading: heading, Text: difference.String()}
 	}
-	// Whatever the file will say, names no index has are
-	// worth a word before it is written.
+	// Whatever the file will say, names no index has are worth a word
+	// before it is written. An index is read only when the recipe has names
+	// for it to judge: this runs as the last page opens, and reading PyPI's
+	// cache for a Fedora recipe, which has no Python packages, held that
+	// page up for seconds.
 	return func(values form.Values) tui.Preview {
 		preview := describe(values)
-		preview.Warning = form.Warnings(values, indexes.Known(form.IndexRequestFor(values)), indexes.KnownPython())
+		imageRecipe := form.ToRecipe(values)
+		var apt, python form.PackageIndex
+		if len(imageRecipe.Packages.Include) > 0 {
+			apt = indexes.Known(form.IndexRequestFor(values))
+		}
+		if len(imageRecipe.PythonPackages()) > 0 {
+			python = indexes.KnownPython()
+		}
+		preview.Warning = form.Warnings(values, apt, python)
 		return preview
 	}
 }

@@ -1,13 +1,15 @@
-// Package index is the list of packages an Ubuntu release offers: fetched
-// from the archive's own Packages files, reduced to what someone choosing
-// packages reads, cached in the user's cache directory, and searched.
+// Package index is the list of packages a release offers: an Ubuntu
+// release's, fetched from the archive's own Packages files, or a Fedora
+// release's, from its repositories' primary metadata; reduced to what
+// someone choosing packages reads, cached in the user's cache directory, and
+// searched.
 //
 // It is advisory. The files are checked against the sizes and digests in the
-// archive's Release file, which guards against a truncated or half-published
-// download, but Release itself is read unsigned: a hostile mirror can make
-// the index lie about what exists. It cannot make a build install anything,
-// because build verifies every package against the signed archive and never
-// reads this index.
+// archive's Release file or the repository's repomd.xml, which guards
+// against a truncated or half-published download, but neither is read with
+// its signature: a hostile mirror can make the index lie about what exists.
+// It cannot make a build install anything, because build verifies every
+// package against the release's signing key and never reads this index.
 package index
 
 import (

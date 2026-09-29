@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"frostroot/internal/distro"
 	"frostroot/internal/recipe"
 )
 
@@ -71,12 +72,14 @@ type PackageSummaries interface {
 }
 
 // IndexRequest says which packages an opener should offer: those of one
-// Ubuntu release, and those of the apt sources the answers so far add to it.
-// Sources come from the Sources page, which is asked before the packages are,
-// so that a name only Docker's repository has is a name the picker can find.
+// release of a family, and, for Ubuntu, those of the apt sources the answers
+// so far add to it. Sources come from the Sources page, which is asked
+// before the packages are, so that a name only Docker's repository has is a
+// name the picker can find.
 type IndexRequest struct {
-	Release string          // such as "24.04"
-	Sources []recipe.Source // resolved against Release; empty for PyPI
+	Family  distro.Family   // "" is Ubuntu, as in a recipe
+	Release string          // such as "24.04", or Fedora's "44"
+	Sources []recipe.Source // resolved against Release; empty for PyPI and Fedora
 }
 
 // Key identifies a request, so that a field that has already opened this
@@ -84,6 +87,9 @@ type IndexRequest struct {
 // same packages.
 func (r IndexRequest) Key() string {
 	var key strings.Builder
+	if r.Family != "" && r.Family != distro.Ubuntu {
+		key.WriteString(string(r.Family) + " ")
+	}
 	key.WriteString(r.Release)
 	for _, source := range r.Sources {
 		fmt.Fprintf(&key, "\n%s\t%s\t%s\t%s", source.Name, source.URL, source.Suite, strings.Join(source.Components, ","))
@@ -97,16 +103,17 @@ func (r IndexRequest) Key() string {
 // the caller keeps one answer to "which repository is this": the key below,
 // the fetch and the cache all read the same suite and components.
 func IndexRequestFor(values Values) IndexRequest {
+	family := Family(values)
 	release := values.String(KeyRelease)
 	suite := releaseSuite(release)
-	sources := mergeAnswerSources(values)
+	sources := ToRecipe(values).Sources
 	resolved := make([]recipe.Source, 0, len(sources))
 	for _, source := range sources {
 		source.Suite, source.Components = source.SuiteFor(suite), source.ComponentsOrDefault()
 		source.URL = strings.TrimRight(source.URL, "/")
 		resolved = append(resolved, source)
 	}
-	return IndexRequest{Release: release, Sources: resolved}
+	return IndexRequest{Family: family, Release: release, Sources: resolved}
 }
 
 // IndexOpener opens an index for a request the form has been told about.
@@ -143,18 +150,25 @@ func unknownIn(names []string, index PackageIndex, check func(string) error) []U
 	return unknown
 }
 
-// UnknownPackages returns the apt names of the "Other packages" answer that
-// index lacks. Catalog names are not checked: the catalog's own integration
-// test proves them.
+// UnknownPackages returns the names of the "Other packages" answer that
+// index lacks. Catalog names are not checked: each catalog's own
+// integration test proves them. A name is checked by its family's rule
+// first, as validation checks it: NetworkManager is a Fedora name that apt
+// could not install.
 func UnknownPackages(values Values, index PackageIndex) []UnknownPackage {
-	return unknownIn(splitPackageList(values.String(KeyOtherPackages)), index, recipe.CheckPackageName)
+	check := recipe.CheckPackageName
+	if Family(values) == distro.Fedora {
+		check = recipe.CheckRPMName
+	}
+	return unknownIn(splitPackageList(values.String(KeyOtherPackages)), index, check)
 }
 
 // UnknownPythonPackages returns the PyPI names of the "Python packages"
-// answer that index lacks. Names are compared as PEP 503 compares them, by
-// the index, so Flask_SQLAlchemy is not reported missing.
+// answer that index lacks: those the recipe will ask for, so none for
+// Fedora, which has no such field. Names are compared as PEP 503 compares
+// them, by the index, so Flask_SQLAlchemy is not reported missing.
 func UnknownPythonPackages(values Values, index PackageIndex) []UnknownPackage {
-	return unknownIn(splitPackageList(values.String(KeyPythonPackages)), index, recipe.CheckPythonPackageName)
+	return unknownIn(ToRecipe(values).PythonPackages(), index, recipe.CheckPythonPackageName)
 }
 
 // Warnings is what the last page says above the recipe, or "": the names
@@ -180,6 +194,9 @@ func Warnings(values Values, apt, python PackageIndex) string {
 func UnknownPackagesWarning(unknown []UnknownPackage, values Values, index PackageIndex) string {
 	if len(unknown) == 0 {
 		return ""
+	}
+	if Family(values) == distro.Fedora {
+		return unknownFedoraWarning(unknown, values, index)
 	}
 	suite := releaseSuite(values.String(KeyRelease))
 	searched, missing := repositoriesOf(index)
@@ -215,6 +232,23 @@ func UnknownPackagesWarning(unknown []UnknownPackage, values Values, index Packa
 	default:
 		warning.WriteString("The recipe has no other source that could provide them, so build will\nstop at \"Unable to locate package\" unless one is added.")
 	}
+	return warning.String()
+}
+
+// unknownFedoraWarning is the same for a Fedora recipe, which installs from
+// the release's own repositories and nothing else, so a name they lack is
+// missing for good, unless they could not be read and the index is an older
+// copy of them.
+func unknownFedoraWarning(unknown []UnknownPackage, values Values, index PackageIndex) string {
+	release := "Fedora " + values.String(KeyRelease)
+	var warning strings.Builder
+	fmt.Fprintf(&warning, "Not in %s's repositories:\n", release)
+	writeUnknownNames(&warning, unknown)
+	if _, missing := repositoriesOf(index); len(missing) > 0 {
+		fmt.Fprintf(&warning, "%s's repositories could not be read, and this index is an older copy\nof them, so they may have them now; otherwise build will stop at\n\"No match for argument\".", release)
+		return warning.String()
+	}
+	warning.WriteString("build will stop at \"No match for argument\".")
 	return warning.String()
 }
 
