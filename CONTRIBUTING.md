@@ -22,7 +22,7 @@ That runs, in order:
 - `go test -race ./...`
 - `GOOS=windows go build ./...`, because the module must still compile off
   Linux
-- `golangci-lint run ./...`, at the version CI pins (v2.13.2, configured by
+- `golangci-lint run ./...`, at the version CI pins (v2.14.0, configured by
   `.golangci.yml`)
 
 Every step runs even when one fails, and the summary names the failures.
