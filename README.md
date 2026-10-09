@@ -170,7 +170,7 @@ kernel.apparmor_restrict_unprivileged_userns=0`; frostroot says so before
 it starts.
 
 The binary is static and runs on any distribution, including Ubuntu 20.04.
-Or from source, with Go 1.27.1 or newer, the version `go.mod` names:
+Or from source, with Go 1.27.2 or newer, the version `go.mod` names:
 
 ```sh
 go build -o frostroot ./cmd/frostroot
