@@ -303,11 +303,11 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 
 | Command | What it does |
 |---|---|
-| `frostroot init [--distro ubuntu\|fedora] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Opens the form and writes a commented `frostroot.toml`, then fetches the signing keys of the sources you picked into `keys/`. The form asks for the distribution first, unless `--distro` answers it. Refuses to overwrite a recipe without `--force`. Writes nothing unless the answers validate and you confirm. |
+| `frostroot init [--distro ubuntu\|fedora] [--target wsl\|disk] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Opens the form and writes a commented `frostroot.toml`, then fetches the signing keys of the sources you picked into `keys/`. The form asks for the distribution first, unless `--distro` answers it, and for the target after the release, unless `--target` answers it: a tarball for WSL, or a disk image (see [Disk images](#disk-images)). Refuses to overwrite a recipe without `--force`. Writes nothing unless the answers validate and you confirm. |
 | `frostroot edit [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back; fetches any missing source keys. The full-screen form can move the recipe to the other distribution. The file is regenerated from the template, so your own comments in it do not survive. |
 | `frostroot capture [--root DIR] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, starting with a page of what it found and what a recipe cannot carry, writes `frostroot.toml`, the signing keys of the third-party sources it could carry and the certificate authorities the machine added under `/usr/local/share/ca-certificates`, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys and certificates; needs no root. |
 | `frostroot validate` | Checks `frostroot.toml`, including that every source's key file is there and is a key, and prints every problem. No network, no root. |
-| `frostroot build [--mirror URL] [--ca-bundle FILE \| --insecure] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-<distro>-<release>-amd64.tar.gz`, such as `dist/lab-ubuntu-24.04-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. |
+| `frostroot build [--mirror URL] [--ca-bundle FILE \| --insecure] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-<distro>-<release>-amd64.tar.gz`, such as `dist/lab-ubuntu-24.04-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. Refuses a disk recipe for now (exit 1). |
 | `frostroot vendor [--mirror URL] [--ca-bundle FILE \| --insecure] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, or `vendor/rpms/` for Fedora, and every wheel it names into `vendor/wheels/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name, including the partial download an abandoned run leaves behind. |
 | `frostroot build --offline [--keep-work] [--plain]` | Rebuilds the image from `frostroot.lock` and `vendor/debs/` or `vendor/rpms/`, without the network. Fails unless the result has exactly the lock's packages. The lock is read, not written. |
 | `frostroot version` | Prints the version and the commit it was built from. |
@@ -341,14 +341,17 @@ own server, which `--mirror`, an Ubuntu archive, does not replace.
 
 | Field | Rules | `init` default |
 |---|---|---|
-| `image.name` | letters, digits, `.` `_` `-`; names the tarball and the WSL distro | `lab` |
+| `image.name` | letters, digits, `.` `_` `-`; names the tarball and the WSL distro, or the disk image | `lab` |
 | `image.distro` | `ubuntu` or `fedora` (see [Fedora](#fedora)); may be omitted, which means `ubuntu` | omitted for Ubuntu, `fedora` for Fedora |
 | `image.release` | `20.04`, `22.04`, `24.04` or `26.04`; for Fedora, `44` | the newest: `26.04`, or `44` |
 | `image.arch` | `amd64` | `amd64` |
+| `image.target` | `wsl` or `disk` (see [Disk images](#disk-images)); may be omitted, which means `wsl` | omitted for WSL, `disk` for a disk image |
 | `user.name` | lowercase, digits, `_` `-`, 1 to 32 characters, not `root` | `student` |
 | `user.sudo` | `true` gives passwordless sudo; `false` gives none | `true` |
-| `wsl.systemd` | boot with systemd | `true` |
-| `wsl.default_user` | must equal `user.name`; may be omitted | the user name |
+| `wsl.systemd` | boot with systemd; WSL only | `true` |
+| `wsl.default_user` | must equal `user.name`; may be omitted; WSL only | the user name |
+| `disk.size` | the image file's size, a whole number with `G` or `M` (GiB or MiB), `1G` to `64T`; may be omitted, which sizes it to fit; disk only | omitted |
+| `disk.formats` | `["qcow2"]` writes a qcow2 beside the raw image, which is always written; disk only | none |
 | `locale.lang` | e.g. `en_US.UTF-8`, `tr_TR.UTF-8`, `C.UTF-8` | `en_US.UTF-8` |
 | `locale.timezone` | e.g. `UTC`, `Europe/Istanbul`, `America/Argentina/Buenos_Aires` | `UTC` |
 | `packages.include` | apt package names only, or Fedora's rpm names; no versions, no suites | preset plus extras |
@@ -362,6 +365,20 @@ strictly because they reach shell scripts. Whether the timezone and locale
 actually exist can only be checked inside the image, so `build` fails if they
 do not. Files saved by Windows editors are fine: CRLF line endings and a UTF-8
 byte order mark are both accepted.
+
+### Disk images
+
+`target = "disk"` in `[image]` asks for a disk image that boots a PC or a VM
+with Secure Boot on, instead of a tarball for WSL. **This version writes and
+checks disk recipes, and `build` refuses them (exit 1): building a disk image
+comes in a later version.** What is settled so far is the recipe: a disk
+recipe has no `[wsl]`, which is `wsl.conf`'s, and may have a `[disk]` table
+with the image file's size and the formats written beside the raw image. Its
+user's password is set at the first boot, so none is in the recipe. `init
+--target disk` writes one, the full-screen form asks the target after the
+release, and `edit` moves a recipe between the two targets, carrying every
+answer. The design is in the
+[bare-metal spec](docs/superpowers/specs/2026-10-09-frostroot-bare-metal.md).
 
 ## Finding packages
 
@@ -1560,6 +1577,19 @@ whose export data its `golang.org/x/tools` cannot read, and v2.14.0, which
 CI now pins, found 0 issues on either toolchain; `scripts/check.sh` ran
 every other step clean on go1.27.2. The first logins of a 26.04 and of a
 Fedora 44 image are still to check.
+
+Toward v0.16, the first pull request of disk images settled the recipe, the
+lock and the form without building a disk: a disk recipe validates, and
+`build` refuses it. Run here: `scripts/check.sh` clean on each commit; every
+WSL fixture and `init`'s defaults for both families rendered by the old and
+the new recipe template to the same bytes, 22 recipes; the golden frames
+changed only on the Image page, by the target question; the `tui` scenario
+passed its 6 checks for Ubuntu and its 7 with `E2E_DISTRO=fedora`, among
+them that the recipe the form writes names no target. And a lock of
+`testdata/valid.toml` (Ubuntu 22.04), made online and vendored by the
+binary this pull request starts from, rebuilt offline by that binary and by
+this pull request's to the same SHA-256, `79fb9edb`, with the lock untouched
+by both.
 
 
 ## Documentation

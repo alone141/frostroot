@@ -20,6 +20,7 @@ e2e_run tui "$LAB/lab" python3 "$e2eRepo/scripts/e2e/tui_drive.py" --family "$E2
 e2e_expect_status 0 tui
 recipe=$LAB/lab/frostroot.toml
 e2e_check "the recipe has the package picked in the picker" e2e_matches "$recipe" '^include = \[.*"jq"'
+e2e_check "and names no target, as before there was a choice of one" e2e_lacks_match "$recipe" '^target ='
 if [ "$E2E_DISTRO" = fedora ]; then
 	e2e_check "the recipe is Fedora's" e2e_matches "$recipe" '^distro = "fedora"$'
 	e2e_check "on the release the form offered" e2e_matches "$recipe" '^release = "44"$'

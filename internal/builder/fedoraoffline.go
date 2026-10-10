@@ -57,6 +57,9 @@ func planFedoraOffline(recipeDir string, imageRecipe recipe.Recipe, release dist
 	if lockFamily, err := distro.FamilyOf(lock.Distro); err != nil || lockFamily != distro.Fedora {
 		return nil, fmt.Errorf("%w: distro %q in the lock, %q in the recipe; run frostroot build online, then frostroot vendor", ErrLockMismatch, lock.Distro, distro.Fedora)
 	}
+	if err := checkLockTarget(lock, imageRecipe); err != nil {
+		return nil, err
+	}
 	entries, err := pool.Manifest(lock)
 	if errors.Is(err, pool.ErrNoChecksums) {
 		return nil, fmt.Errorf("%w; run frostroot build online, then frostroot vendor", err)

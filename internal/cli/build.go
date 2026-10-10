@@ -41,6 +41,8 @@ it. A host where it cannot is refused (exit 1) rather than given an incomplete
 image.
 The image is frozen at the instant the build starts, or at SOURCE_DATE_EPOCH
 when that is set: no file in it is dated later, and the lock records the instant.
+A disk recipe (target = "disk") is refused for now (exit 1): this version
+writes and checks disk recipes, and building a disk image comes later.
 
 On a network that inspects TLS, --ca-bundle names a PEM file of certificate
 authorities to trust while fetching. It is not installed in the image and not
@@ -109,6 +111,10 @@ func (a *App) runBuild(args []string) int {
 	}
 	imageRecipe, ok := a.loadRecipe()
 	if !ok {
+		return exitUserError
+	}
+	if imageRecipe.Target() == recipe.TargetDisk {
+		a.stderrf("frostroot: %s asks for a disk image (target = %q): %s\n", recipeFileName, recipe.TargetDisk, diskNotBuiltYet)
 		return exitUserError
 	}
 	family, err := distro.FamilyOf(imageRecipe.Image.Distro)

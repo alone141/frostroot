@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"text/template"
 
@@ -27,26 +28,39 @@ var recipeTemplate = template.Must(template.New("recipe").Funcs(template.FuncMap
 # every installed package to frostroot.lock; commit both files.
 
 [image]
-name = {{tomlQuote .Image.Name}}  # file name of the tarball and name of the WSL distro
-{{if .Image.Distro}}distro = {{tomlQuote .Image.Distro}}
+{{if eq .Image.Target "disk"}}name = {{tomlQuote .Image.Name}}  # file name of the disk image
+{{else}}name = {{tomlQuote .Image.Name}}  # file name of the tarball and name of the WSL distro
+{{end}}{{if .Image.Distro}}distro = {{tomlQuote .Image.Distro}}
 {{end}}{{if eq .Image.Distro "fedora"}}# 44, the Fedora release frostroot builds.
 {{else}}# 20.04 | 22.04 | 24.04 | 26.04. 20.04 is past standard support: its
 # packages carry known security vulnerabilities that only Ubuntu Pro fixes.
 {{end}}release = {{tomlQuote .Image.Release}}
 arch = {{tomlQuote .Image.Arch}}  # the only architecture in v1
-
+{{if eq .Image.Target "disk"}}target = "disk"  # a disk image that boots a PC or a VM, with Secure Boot
+{{else if .Image.Target}}target = {{tomlQuote .Image.Target}}  # a tarball for wsl --import
+{{end}}
 [user]
-name = {{tomlQuote .User.Name}}
-sudo = {{.User.Sudo}}  # passwordless sudo: this is a lab image, not a hardened server
-
+{{if eq .Image.Target "disk"}}name = {{tomlQuote .User.Name}}  # its password is set at the first boot
+{{else}}name = {{tomlQuote .User.Name}}
+{{end}}sudo = {{.User.Sudo}}  # passwordless sudo: this is a lab image, not a hardened server
+{{if eq .Image.Target "disk"}}
+[disk]
+# The image file's size, such as "16G"; without it the image is sized to fit
+# what it holds. Either way the root grows to fill the disk it is written to,
+# at its first boot.
+{{with .Disk}}{{if .Size}}size = {{tomlQuote .Size}}
+{{end}}{{end}}# Written beside the raw .img when named here: "qcow2".
+{{with .Disk}}{{if .Formats}}formats = {{tomlQuoteList .Formats}}
+{{end}}{{end}}{{else}}
 [wsl]
 systemd = {{.WSL.Systemd}}
 default_user = {{tomlQuote .WSL.DefaultUser}}
-
+{{end}}
 [locale]
 lang = {{tomlQuote .Locale.Lang}}
-timezone = {{tomlQuote .Locale.Timezone}}  # kept under WSL instead of following Windows
-
+{{if eq .Image.Target "disk"}}timezone = {{tomlQuote .Locale.Timezone}}
+{{else}}timezone = {{tomlQuote .Locale.Timezone}}  # kept under WSL instead of following Windows
+{{end}}
 [packages]
 {{if eq .Image.Distro "fedora"}}# Fedora package names, exactly as you would pass them to dnf install.
 # Dependencies and weak dependencies come along automatically.
@@ -80,7 +94,7 @@ url = {{tomlQuote .URL}}
 {{end}}key = {{tomlQuote .Key}}
 {{end}}{{end}}`))
 
-const initUsageText = `usage: frostroot init [--distro ubuntu|fedora] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE | --insecure] [--refresh-index]
+const initUsageText = `usage: frostroot init [--distro ubuntu|fedora] [--target wsl|disk] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE | --insecure] [--refresh-index]
 
 Answer a few questions and write frostroot.toml in the current directory.
 
@@ -89,6 +103,12 @@ after it are that distribution's: Fedora's have no apt sources, Python
 packages or certificate authorities. --distro answers it, and --plain,
 which never asks it, writes an Ubuntu recipe unless --distro says Fedora.
 
+It asks the target after the release: a tarball for WSL, or a disk image
+that boots a PC or a VM, whose questions have no systemd and a Disk page
+instead. --target answers it, and --plain writes a WSL recipe unless
+--target says disk. This version writes and checks a disk recipe; building
+one comes in a later version.
+
 ` + indexUsageText
 
 func (a *App) runInit(args []string) int {
@@ -96,19 +116,27 @@ func (a *App) runInit(args []string) int {
 	overwrite := flags.Bool("force", false, "overwrite an existing frostroot.toml")
 	plain := flags.Bool("plain", false, "ask line by line instead of showing the full-screen form")
 	distroName := flags.String("distro", "", "write a recipe of this `distribution`, ubuntu or fedora, without asking")
+	targetName := flags.String("target", "", "write a recipe of this `target`, wsl or disk, without asking")
 	indexOptions := addIndexFlags(flags)
 	if exitCode, stop := a.parseFlags(flags, args); stop {
 		return exitCode
 	}
 	initial := form.Defaults(a.host())
-	askFamily := *distroName == ""
-	if !askFamily {
+	fixed := form.Fixed{Family: *distroName != "", Target: *targetName != ""}
+	if fixed.Family {
 		family, err := distro.FamilyOf(*distroName)
 		if err != nil {
 			a.stderrf("frostroot init: --distro: %v\n", err)
 			return exitUserError
 		}
 		initial = form.ForFamily(initial, family)
+	}
+	if fixed.Target {
+		if !slices.Contains(form.Targets(), *targetName) {
+			a.stderrf("frostroot init: --target: unknown target %q (%s)\n", *targetName, strings.Join(form.Targets(), ", "))
+			return exitUserError
+		}
+		initial[form.KeyTarget] = *targetName
 	}
 	recipePath := filepath.Join(a.RecipeDir, recipeFileName)
 	if _, err := os.Stat(recipePath); err == nil && !*overwrite {
@@ -119,7 +147,7 @@ func (a *App) runInit(args []string) int {
 	if !ok {
 		return exitUserError
 	}
-	return a.runRecipeForm("init", initial, recipePath, *overwrite, *plain, askFamily, nil, nil, indexes)
+	return a.runRecipeForm("init", initial, recipePath, *overwrite, *plain, fixed, nil, nil, indexes)
 }
 
 // renderRecipe returns imageRecipe as the file init and edit write, byte

@@ -90,14 +90,17 @@ func TestFormBindingCoversEveryField(t *testing.T) {
 			t.Errorf("widget for %s has key %q", field.Key, huhField.GetKey())
 		}
 	}
-	// One group per page every family asks alike, and one per family for
-	// the pages only Ubuntu asks or each family asks its own way. The
-	// Captured page has none unless capture puts its note there.
+	// One group per page every variant asks alike, and one per distinct
+	// list of questions on the pages that differ: a System page per
+	// target, as only WSL asks systemd; the Disk page once, for both
+	// families; and Ubuntu's Sources, Packages and Trust and Fedora's
+	// Packages once each, for both targets. The Captured page has none
+	// unless capture puts its note there.
 	var titles []string
 	for _, group := range binding.groups() {
 		titles = append(titles, strings.TrimSpace(frameOf(group.Header())))
 	}
-	if want := []string{"Image", "User", "System", "Sources", "Packages", "Packages", "Trust"}; !slices.Equal(titles, want) {
+	if want := []string{"Image", "User", "System", "System", "Disk", "Sources", "Packages", "Packages", "Trust"}; !slices.Equal(titles, want) {
 		t.Errorf("groups %q, want %q", titles, want)
 	}
 	// Untouched, the binding gives back what it started from.

@@ -30,5 +30,5 @@ func (a *App) runEdit(args []string) int {
 	if !ok {
 		return exitUserError
 	}
-	return a.runRecipeForm("edit", form.FromRecipe(imageRecipe), filepath.Join(a.RecipeDir, recipeFileName), true, *plain, true, nil, nil, indexes)
+	return a.runRecipeForm("edit", form.FromRecipe(imageRecipe), filepath.Join(a.RecipeDir, recipeFileName), true, *plain, form.Fixed{}, nil, nil, indexes)
 }

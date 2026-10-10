@@ -51,6 +51,9 @@ var (
 	// /usr/local/share/ca-certificates. It reaches the provisioning script,
 	// so it is an injection boundary like the locale.
 	certificateNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	// diskSizePattern is a whole number of GiB or MiB, as mke2fs and
+	// qemu-img read "16G" and "512M".
+	diskSizePattern = regexp.MustCompile(`^[1-9][0-9]{0,6}[GM]$`)
 )
 
 // maxUserNameLength is the longest name useradd accepts.
@@ -89,9 +92,10 @@ func Validate(imageRecipe Recipe) []string {
 	if family == distro.Fedora {
 		problems = append(problems, fedoraUnsupported(imageRecipe)...)
 	}
+	problems = append(problems, targetProblems(imageRecipe)...)
 	userName := imageRecipe.User.Name
 	addProblem(CheckUserName(userName))
-	if defaultUser := imageRecipe.WSL.DefaultUser; defaultUser != "" && defaultUser != userName {
+	if defaultUser := imageRecipe.WSL.DefaultUser; defaultUser != "" && defaultUser != userName && imageRecipe.Target() == TargetWSL {
 		problems = append(problems, fmt.Sprintf("wsl.default_user %q must equal user.name %q", defaultUser, userName))
 	}
 	if lang := imageRecipe.Locale.Lang; lang != "" {
@@ -446,6 +450,89 @@ func fedoraUnsupported(imageRecipe Recipe) []string {
 		problems = append(problems, "[certificates] is for Ubuntu recipes so far")
 	}
 	return problems
+}
+
+// targetProblems names what is wrong with the target and with what the
+// recipe says that its target cannot use: [disk] in a WSL recipe, and a
+// [wsl] that says anything in a disk recipe, which has no wsl.conf to write
+// it to. A WSL recipe with no [wsl] table reads as one whose settings are
+// all off, so an empty table and an absent one are the same here.
+func targetProblems(imageRecipe Recipe) []string {
+	switch imageRecipe.Target() {
+	case TargetWSL:
+		if imageRecipe.Disk != nil {
+			return []string{fmt.Sprintf("[disk] is for disk recipes; set target = %q in [image] to build a disk image", TargetDisk)}
+		}
+		return nil
+	case TargetDisk:
+	default:
+		return []string{fmt.Sprintf("invalid image.target %q (%q or %q)", imageRecipe.Image.Target, TargetWSL, TargetDisk)}
+	}
+	var problems []string
+	if imageRecipe.WSL != (WSL{}) {
+		problems = append(problems, "[wsl] is for WSL recipes: a disk image has no wsl.conf, so remove the table")
+	}
+	if size := imageRecipe.DiskSize(); size != "" {
+		if err := CheckDiskSize(size); err != nil {
+			problems = append(problems, err.Error())
+		}
+	}
+	seenFormats := map[string]bool{}
+	for _, format := range imageRecipe.DiskFormats() {
+		if err := CheckDiskFormat(format); err != nil {
+			problems = append(problems, err.Error())
+			continue
+		}
+		if seenFormats[format] {
+			problems = append(problems, fmt.Sprintf("disk.formats names %s twice", format))
+		}
+		seenFormats[format] = true
+	}
+	return problems
+}
+
+// The sizes [disk] size may name, in MiB: the EFI system partition alone
+// is 512 MiB, and GPT and ext4 are comfortable far beyond the largest.
+const (
+	minDiskSizeMiB = 1024
+	maxDiskSizeMiB = 64 * 1024 * 1024
+)
+
+// DiskSizeBytes returns [disk] size in bytes: a whole number of GiB or MiB,
+// "16G" or "4096M", binary as mke2fs and qemu-img read them.
+func DiskSizeBytes(size string) (int64, error) {
+	if !diskSizePattern.MatchString(size) {
+		return 0, fmt.Errorf("invalid disk.size %q (a whole number of GiB or MiB, such as \"16G\" or \"4096M\")", size)
+	}
+	// The pattern allows seven digits at most, so this cannot overflow.
+	mebibytes, err := strconv.ParseInt(size[:len(size)-1], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid disk.size %q: %w", size, err)
+	}
+	if strings.HasSuffix(size, "G") {
+		mebibytes *= 1024
+	}
+	if mebibytes < minDiskSizeMiB || mebibytes > maxDiskSizeMiB {
+		return 0, fmt.Errorf("disk.size %q is out of range: 1G to 64T, as the EFI system partition alone takes 512M", size)
+	}
+	return mebibytes * 1024 * 1024, nil
+}
+
+// CheckDiskSize reports why size cannot be [disk] size, or nil.
+func CheckDiskSize(size string) error {
+	_, err := DiskSizeBytes(size)
+	return err
+}
+
+// CheckDiskFormat reports why format cannot be in [disk] formats, or nil.
+func CheckDiskFormat(format string) error {
+	switch format {
+	case DiskFormatQcow2:
+		return nil
+	case "vhdx":
+		return fmt.Errorf("disk.formats: vhdx comes in a later version of frostroot; %s is the format besides the raw image so far", DiskFormatQcow2)
+	}
+	return fmt.Errorf("invalid disk.formats entry %q (%q; the raw image is always written)", format, DiskFormatQcow2)
 }
 
 // CheckPythonPackageName reports why name is not a PyPI distribution name, or

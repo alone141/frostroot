@@ -11,11 +11,15 @@ import (
 // Lockfile is the content of frostroot.lock: what a build actually produced.
 // It is written by build and committed next to the recipe.
 type Lockfile struct {
-	Version          int      `toml:"version"` // lock format version
-	Distro           string   `toml:"distro"`  // the recipe's family: "ubuntu" or "fedora"
-	Release          string   `toml:"release"`
-	Suite            string   `toml:"suite,omitempty"` // Ubuntu's code name; Fedora has none
-	Arch             string   `toml:"arch"`
+	Version int    `toml:"version"` // lock format version
+	Distro  string `toml:"distro"`  // the recipe's family: "ubuntu" or "fedora"
+	Release string `toml:"release"`
+	Suite   string `toml:"suite,omitempty"` // Ubuntu's code name; Fedora has none
+	Arch    string `toml:"arch"`
+	// Target is what the build made: "disk" for a disk image. A lock of a
+	// tarball for WSL names none, as every lock written before there was a
+	// second target does.
+	Target           string   `toml:"target,omitempty"`
 	Mirror           string   `toml:"mirror,omitempty"`  // Ubuntu's archive URL actually used
 	Sources          []string `toml:"sources,omitempty"` // Ubuntu's three deb lines actually used
 	FrostrootVersion string   `toml:"frostroot_version"`
@@ -45,6 +49,27 @@ type Lockfile struct {
 	// mmdebstrap's do, so an offline build makes the tools tree from them
 	// too. Absent for Ubuntu.
 	Tools []LockPackage `toml:"tools,omitempty"`
+	// Disk is how a disk image was laid out, which an offline build repeats
+	// to make the same bytes. Absent for WSL.
+	Disk *LockDisk `toml:"disk,omitempty"`
+	// DiskTools is every package of the tools tree a disk image was made
+	// with, sorted: their versions change the disk's bytes as mmdebstrap's
+	// change the tarball's. Absent for WSL.
+	DiskTools []LockPackage `toml:"disk_tools,omitempty"`
+}
+
+// LockDisk is a disk image's [disk] table: the seed every identifier on the
+// disk is derived from, the sizes, and the shim its EFI system partition
+// boots. An online build chooses the seed; an offline build repeats it.
+type LockDisk struct {
+	Seed      string `toml:"seed"` // a UUID
+	DiskBytes int64  `toml:"disk_bytes"`
+	ESPBytes  int64  `toml:"esp_bytes"`
+	RootBytes int64  `toml:"root_bytes"`
+	// Shim is the file of /usr/lib/shim the partition's BOOTX64.EFI is,
+	// such as "shimx64.efi.signed.latest": which certificate authority
+	// signed it decides which firmware boots it.
+	Shim string `toml:"shim"`
 }
 
 // LockPython is the Python side of a build: what the recipe asked for, where

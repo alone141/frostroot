@@ -62,17 +62,21 @@ says the disk target comes in a later version (exit 1).
    with `size` (optional, a size with a unit, at least the content's) and
    `formats` (a subset of `["qcow2"]`; `"vhdx"` refused with a message
    naming the later version). `validate` refuses `[disk]` in a WSL recipe,
-   and `[wsl]` in a disk recipe, which makes `[wsl]` a pointer; a WSL
-   recipe without the table means exactly what it means today, the zero
-   values. Tests: every value, both refusals, every existing recipe
-   fixture unchanged by a load and a write.
+   and a `[wsl]` that says anything in a disk recipe. (As built: `[wsl]`
+   stays a plain table rather than becoming a pointer, which ten readers
+   would have had to learn; an absent table and one whose settings are all
+   off are the same to a WSL recipe today, so a disk recipe is refused only
+   one that says something.) Tests: every value, both refusals, every
+   existing recipe fixture unchanged by a load and a write.
 3. **The lock's new fields.** `target`, a `[disk]` table (`seed`, the
    disk's and each partition's size in bytes, `shim`) and `disk_tools`, all
    optional and `omitempty`; `version = 1` stays; an unknown field is still
-   an error; a lock is hostile input, so the seed is a UUID, the sizes are
-   bounded, and `shim` is one of the names frostroot knows. A lock whose
-   target is not the recipe's is refused with `ErrLockMismatch`. Tests:
-   every older lock fixture loads and writes back byte for byte.
+   an error. A lock whose target is not the recipe's is refused with
+   `ErrLockMismatch`, before anything else in it is read. (As built: a lock
+   is hostile input, so its `[disk]` is checked where it is first read,
+   in pull request 3: the seed a UUID, the sizes bounded, `shim` a name
+   frostroot knows. Until then nothing reads it.) Tests: every older lock
+   fixture loads and writes back byte for byte.
 4. **The target in the form.** `KeyTarget` on the Image page after the
    release; a Disk page (`size`, `formats`) shown only for the disk target
    and the WSL page only for the WSL target, with `Field.Targets` beside
@@ -133,8 +137,10 @@ says the disk target comes in a later version (exit 1).
 12. **The identifiers.** From the lock's seed by HMAC-SHA256, as
     systemd-repart derives them: the disk GUID, each partition's UUID, the
     root filesystem's UUID and hash seed, the ESP's serial. An online build
-    draws the seed and the lock freezes it. Tests: known vectors; every
-    value a valid UUID; offline takes the lock's.
+    draws the seed and the lock freezes it; an offline build checks the
+    lock's `[disk]` as hostile input first (the seed a UUID, the sizes
+    bounded, `shim` a name frostroot knows). Tests: known vectors; every
+    value a valid UUID; offline takes the lock's; each bad `[disk]` refused.
 13. **The assembly.** Through the tools runner: the three ESP binaries out
     of the tarball by their member names (the shim's from the lock),
     `mke2fs -d` with `-U`, `-E nodiscard,lazy_itable_init=1,hash_seed=` and
