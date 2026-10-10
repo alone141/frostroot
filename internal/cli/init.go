@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"text/template"
 
@@ -93,7 +94,7 @@ url = {{tomlQuote .URL}}
 {{end}}key = {{tomlQuote .Key}}
 {{end}}{{end}}`))
 
-const initUsageText = `usage: frostroot init [--distro ubuntu|fedora] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE | --insecure] [--refresh-index]
+const initUsageText = `usage: frostroot init [--distro ubuntu|fedora] [--target wsl|disk] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE | --insecure] [--refresh-index]
 
 Answer a few questions and write frostroot.toml in the current directory.
 
@@ -102,6 +103,12 @@ after it are that distribution's: Fedora's have no apt sources, Python
 packages or certificate authorities. --distro answers it, and --plain,
 which never asks it, writes an Ubuntu recipe unless --distro says Fedora.
 
+It asks the target after the release: a tarball for WSL, or a disk image
+that boots a PC or a VM, whose questions have no systemd and a Disk page
+instead. --target answers it, and --plain writes a WSL recipe unless
+--target says disk. This version writes and checks a disk recipe; building
+one comes in a later version.
+
 ` + indexUsageText
 
 func (a *App) runInit(args []string) int {
@@ -109,19 +116,27 @@ func (a *App) runInit(args []string) int {
 	overwrite := flags.Bool("force", false, "overwrite an existing frostroot.toml")
 	plain := flags.Bool("plain", false, "ask line by line instead of showing the full-screen form")
 	distroName := flags.String("distro", "", "write a recipe of this `distribution`, ubuntu or fedora, without asking")
+	targetName := flags.String("target", "", "write a recipe of this `target`, wsl or disk, without asking")
 	indexOptions := addIndexFlags(flags)
 	if exitCode, stop := a.parseFlags(flags, args); stop {
 		return exitCode
 	}
 	initial := form.Defaults(a.host())
-	askFamily := *distroName == ""
-	if !askFamily {
+	fixed := form.Fixed{Family: *distroName != "", Target: *targetName != ""}
+	if fixed.Family {
 		family, err := distro.FamilyOf(*distroName)
 		if err != nil {
 			a.stderrf("frostroot init: --distro: %v\n", err)
 			return exitUserError
 		}
 		initial = form.ForFamily(initial, family)
+	}
+	if fixed.Target {
+		if !slices.Contains(form.Targets(), *targetName) {
+			a.stderrf("frostroot init: --target: unknown target %q (%s)\n", *targetName, strings.Join(form.Targets(), ", "))
+			return exitUserError
+		}
+		initial[form.KeyTarget] = *targetName
 	}
 	recipePath := filepath.Join(a.RecipeDir, recipeFileName)
 	if _, err := os.Stat(recipePath); err == nil && !*overwrite {
@@ -132,7 +147,7 @@ func (a *App) runInit(args []string) int {
 	if !ok {
 		return exitUserError
 	}
-	return a.runRecipeForm("init", initial, recipePath, *overwrite, *plain, form.Fixed{Family: !askFamily}, nil, nil, indexes)
+	return a.runRecipeForm("init", initial, recipePath, *overwrite, *plain, fixed, nil, nil, indexes)
 }
 
 // renderRecipe returns imageRecipe as the file init and edit write, byte

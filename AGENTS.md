@@ -91,9 +91,11 @@ Hand-typed alternatives break in ways that are easy to miss:
   `ToRecipe`, and a line in the recipe template in `internal/cli/init.go`.
   Otherwise `edit` silently drops it. `TestRecipeRoundTrip` and
   `TestFormBindingCoversEveryField` catch most of this. A field only one
-  family asks names it in `Field.Families`, and `ToRecipe` leaves its
-  answer out of the other family's recipe: an edit that switches the
-  family carries every answer into the switch.
+  family asks names it in `Field.Families`, and one only one target asks
+  (WSL's systemd, a disk's size) in `Field.Targets`; `ToRecipe` leaves its
+  answer out of the other's recipe: an edit that switches the family or
+  the target carries every answer into the switch. A WSL recipe names no
+  target unless it already did, so that it stays the bytes it was.
 - A user-visible change updates the README and the command's usage text in
   `internal/cli` together.
 
@@ -190,8 +192,9 @@ Hand-typed alternatives break in ways that are easy to miss:
   stderr.
 - mmdebstrap's process group gets SIGINT, never SIGKILL.
 - The plain interface asks the same questions in the same order, because
-  people pipe answers into it. It never asks the family: `init --distro`
-  answers it, and `form.FieldsFor` gives that family's questions.
+  people pipe answers into it. It never asks the family or the target:
+  `init --distro` and `init --target` answer them, and `form.FieldsFor`
+  gives that family's and target's questions.
 
 **Package boundaries**
 

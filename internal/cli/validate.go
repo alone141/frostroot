@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"frostroot/internal/distro"
+	"frostroot/internal/recipe"
 )
 
 func (a *App) runValidate(args []string) int {
@@ -30,10 +31,20 @@ func (a *App) runValidate(args []string) int {
 		a.stderrf("frostroot: %v\n", err)
 		return exitUserError
 	}
-	a.stdoutf("%s: ok (%s, %s %s %s, %s requested%s%s)\n", recipeFileName,
-		imageRecipe.Image.Name, family.Name(), imageRecipe.Image.Release, imageRecipe.Image.Arch, packageCount(len(imageRecipe.Packages.Include)), pythonNote, sourcesNote)
+	targetNote := ""
+	if imageRecipe.Target() == recipe.TargetDisk {
+		targetNote = ", disk image"
+	}
+	a.stdoutf("%s: ok (%s, %s %s %s%s, %s requested%s%s)\n", recipeFileName,
+		imageRecipe.Image.Name, family.Name(), imageRecipe.Image.Release, imageRecipe.Image.Arch, targetNote, packageCount(len(imageRecipe.Packages.Include)), pythonNote, sourcesNote)
+	if imageRecipe.Target() == recipe.TargetDisk {
+		a.stderrf("note: %s\n", diskNotBuiltYet)
+	}
 	return exitSuccess
 }
+
+// diskNotBuiltYet says what this version does with a disk recipe.
+const diskNotBuiltYet = "this version of frostroot writes and checks disk recipes, and builds WSL tarballs only; building a disk image comes in a later version"
 
 // packageCount returns "1 package" or "N packages".
 func packageCount(count int) string {
