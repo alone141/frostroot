@@ -1578,6 +1578,19 @@ CI now pins, found 0 issues on either toolchain; `scripts/check.sh` ran
 every other step clean on go1.27.2. The first logins of a 26.04 and of a
 Fedora 44 image are still to check.
 
+Toward v0.16, the first pull request of disk images settled the recipe, the
+lock and the form without building a disk: a disk recipe validates, and
+`build` refuses it. Run here: `scripts/check.sh` clean on each commit; every
+WSL fixture and `init`'s defaults for both families rendered by the old and
+the new recipe template to the same bytes, 22 recipes; the golden frames
+changed only on the Image page, by the target question; the `tui` scenario
+passed its 6 checks for Ubuntu and its 7 with `E2E_DISTRO=fedora`, among
+them that the recipe the form writes names no target. And a lock of
+`testdata/valid.toml` (Ubuntu 22.04), made online and vendored by the
+binary this pull request starts from, rebuilt offline by that binary and by
+this pull request's to the same SHA-256, `79fb9edb`, with the lock untouched
+by both.
+
 
 ## Documentation
 
