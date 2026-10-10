@@ -8,8 +8,9 @@ The work goes in five pull requests, one after the other, each opened once
 the one before has merged. Every task ends with `scripts/check.sh` clean
 and its own commit as `alone141` following `CONTRIBUTING.md`; a fix inside
 a task comes with a test that fails without it, proven with
-`scripts/mutate.sh`. CI is switched off while this is written, so each pull
-request lists what ran by hand, and says once that CI could not run.
+`scripts/mutate.sh`. The owner asked for CI to be switched off for now;
+while it is off, each pull request lists what ran by hand, and says once
+that CI could not run.
 
 **Goal:** `[image] target = "disk"` builds a raw GPT image, and a qcow2 when
 the recipe asks, that boots with Secure Boot on and Microsoft's keys, asks

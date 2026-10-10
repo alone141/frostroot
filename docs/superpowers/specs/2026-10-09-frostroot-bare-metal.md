@@ -578,8 +578,9 @@ does not do today.
   them for both families.
 - A real PC with Secure Boot on is the owner's check, as `wsl-boot` is on
   Windows, recorded in the README's Verification section once run.
-- CI is switched off at the moment. Until it is back on, every check above
-  runs by hand, and each pull request lists what ran.
+- The owner asked on 2026-10-09 for CI to be switched off for now. While
+  it is off, every check above runs by hand, and each pull request lists
+  what ran.
 
 ## Risks
 
