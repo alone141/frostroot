@@ -2,7 +2,7 @@
 
 **Freeze an Ubuntu or Fedora root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
 
-> **Status: v0.15.0.** `init`, `edit`, `capture`, `validate`, `build`,
+> **Status: v0.15.1.** `init`, `edit`, `capture`, `validate`, `build`,
 > `vendor` and `build --offline` work for Ubuntu 20.04, 22.04, 24.04 and
 > 26.04, and all but `capture` for Fedora 44, built with mkosi (see
 > [Fedora](#fedora)). An Ubuntu recipe can add third-party apt
@@ -170,7 +170,7 @@ kernel.apparmor_restrict_unprivileged_userns=0`; frostroot says so before
 it starts.
 
 The binary is static and runs on any distribution, including Ubuntu 20.04.
-Or from source, with Go 1.27.1 or newer, the version `go.mod` names:
+Or from source, with Go 1.27.2 or newer, the version `go.mod` names:
 
 ```sh
 go build -o frostroot ./cmd/frostroot
@@ -1549,6 +1549,17 @@ before. Each change is pinned by a test that fails with it broken, run with
 every step, and CI ran all ten required tests,
 `TestIntegrationFedoraCatalogExistsInEveryRelease` among them, to a pass on
 d7ed8e5.
+
+v0.15.1 is v0.15.0 built with go1.27.2. The v0.15.0 tag's release run
+stopped at govulncheck and published nothing: go1.27.1 had nine
+vulnerabilities in `net/http`, `net/textproto` and `crypto/tls`, disclosed
+after master last passed CI, that frostroot's fetches reach. Run here,
+`scripts/check.sh --only vuln` reported the same nine on go1.27.1 and none
+on go1.27.2. golangci-lint v2.13.2 could not type-check a go1.27.2 build,
+whose export data its `golang.org/x/tools` cannot read, and v2.14.0, which
+CI now pins, found 0 issues on either toolchain; `scripts/check.sh` ran
+every other step clean on go1.27.2. The first logins of a 26.04 and of a
+Fedora 44 image are still to check.
 
 
 ## Documentation
