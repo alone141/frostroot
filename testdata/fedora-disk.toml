@@ -1,0 +1,17 @@
+[image]
+name = "pc-lab"
+distro = "fedora"
+release = "44"
+arch = "amd64"
+target = "disk"
+
+[user]
+name = "student"
+sudo = true
+
+[locale]
+lang = "en_US.UTF-8"
+timezone = "UTC"
+
+[packages]
+include = ["gcc", "git"]

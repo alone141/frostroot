@@ -13,8 +13,8 @@ Image
     Ubuntu 24.04 LTS (noble)
   > Ubuntu 26.04 LTS (resolute)
 
-
-
+  Target
+  WSL  (a tarball for wsl --import)
 
 
 

@@ -74,7 +74,25 @@ func Defaults(host Host) Values {
 		KeyCertificates:   "",
 		KeySources:        []string{},
 		KeyPPAs:           "",
+		KeyTarget:         recipe.TargetWSL,
+		KeyDiskSize:       "",
+		KeyDiskQcow2:      false,
 	}
+}
+
+// Target returns the target the answers are for: WSL when they name none,
+// as a recipe that names none is WSL's. A name frostroot does not know is
+// returned as it is, for Validate to refuse.
+func Target(values Values) string {
+	if target := values.String(KeyTarget); target != "" {
+		return target
+	}
+	return recipe.TargetWSL
+}
+
+// VariantOf returns the family and the target the answers are for.
+func VariantOf(values Values) Variant {
+	return Variant{Family: Family(values), Target: Target(values)}
 }
 
 // Family returns the family the answers are for: Ubuntu when they name
@@ -159,22 +177,27 @@ func FromRecipe(imageRecipe recipe.Recipe) Values {
 		keyOriginalCertificates: exoticCertificates,
 		keyPythonIndexURL:       imageRecipe.PythonIndexURL(),
 		keyOriginalDistro:       imageRecipe.Image.Distro,
+		KeyTarget:               imageRecipe.Target(),
+		keyOriginalTarget:       imageRecipe.Image.Target,
+		KeyDiskSize:             imageRecipe.DiskSize(),
+		KeyDiskQcow2:            slices.Contains(imageRecipe.DiskFormats(), recipe.DiskFormatQcow2),
 	}
 }
 
-// ToRecipe turns answers into a recipe of their family. Fedora's has no
-// apt sources, Python packages or certificate authorities, whatever answers
-// to them an edit of an Ubuntu recipe carried into the switch, and keeps
-// only the selections its own catalog offers. The caller still runs
-// recipe.Validate on it before writing: the form checks each answer, this
-// checks their combination.
+// ToRecipe turns answers into a recipe of their family and target. Fedora's
+// has no apt sources, Python packages or certificate authorities, whatever
+// answers to them an edit of an Ubuntu recipe carried into the switch, and
+// keeps only the selections its own catalog offers. A WSL recipe has [wsl]
+// and no [disk], and a disk recipe the other way round, whatever the
+// switch between them carried. The caller still runs recipe.Validate on it
+// before writing: the form checks each answer, this checks their
+// combination.
 func ToRecipe(values Values) recipe.Recipe {
 	family := Family(values)
 	userName := values.String(KeyUserName)
 	imageRecipe := recipe.Recipe{
-		Image: recipe.Image{Name: values.String(KeyImageName), Distro: recipeDistro(values), Release: values.String(KeyRelease), Arch: distro.SupportedArch},
+		Image: recipe.Image{Name: values.String(KeyImageName), Distro: recipeDistro(values), Release: values.String(KeyRelease), Arch: distro.SupportedArch, Target: recipeTarget(values)},
 		User:  recipe.User{Name: userName, Sudo: values.Bool(KeySudo)},
-		WSL:   recipe.WSL{Systemd: values.Bool(KeySystemd), DefaultUser: userName},
 		Locale: recipe.Locale{
 			Lang:     values.String(KeyLocale),
 			Timezone: values.String(KeyTimezone),
@@ -182,6 +205,11 @@ func ToRecipe(values Values) recipe.Recipe {
 		Packages: recipe.Packages{
 			Include: MergePackages(catalogSelections(family, values), values.String(KeyOtherPackages), values.Strings(keyOriginalInclude)),
 		},
+	}
+	if Target(values) == recipe.TargetDisk {
+		imageRecipe.Disk = diskTable(values)
+	} else {
+		imageRecipe.WSL = recipe.WSL{Systemd: values.Bool(KeySystemd), DefaultUser: userName}
 	}
 	if family == distro.Fedora {
 		return imageRecipe
@@ -201,6 +229,28 @@ func recipeDistro(values Values) string {
 		return ""
 	}
 	return name
+}
+
+// recipeTarget is what [image] target says: nothing for WSL, so that a WSL
+// recipe init writes or edit rewrites is the bytes it always was, unless
+// the recipe already named its target, which it then keeps doing.
+func recipeTarget(values Values) string {
+	name := values.String(KeyTarget)
+	if name == recipe.TargetWSL && values.String(keyOriginalTarget) == "" {
+		return ""
+	}
+	return name
+}
+
+// diskTable returns a disk recipe's [disk] table. It is always written, so
+// that the recipe shows where the disk's settings go even when it takes
+// every default.
+func diskTable(values Values) *recipe.Disk {
+	disk := &recipe.Disk{Size: values.String(KeyDiskSize)}
+	if values.Bool(KeyDiskQcow2) {
+		disk.Formats = []string{recipe.DiskFormatQcow2}
+	}
+	return disk
 }
 
 // certificatePaths returns every certificate the answers name: those the
@@ -277,6 +327,20 @@ func Summary(values Values) string {
 		fmt.Sprintf("Image     %s, %s %s %s", imageRecipe.Image.Name, family.Name(), imageRecipe.Image.Release, distro.SupportedArch),
 		fmt.Sprintf("User      %s, %s", imageRecipe.User.Name, sudo),
 		fmt.Sprintf("System    %s, %s, %s", imageRecipe.Locale.Timezone, imageRecipe.Locale.Lang, systemd),
+	}
+	// A WSL recipe's lines are what they were before there were disks.
+	if imageRecipe.Target() == recipe.TargetDisk {
+		lines[0] += ", disk image"
+		lines[2] = fmt.Sprintf("System    %s, %s", imageRecipe.Locale.Timezone, imageRecipe.Locale.Lang)
+		size := imageRecipe.DiskSize()
+		if size == "" {
+			size = "sized to fit"
+		}
+		formats := "raw"
+		if slices.Contains(imageRecipe.DiskFormats(), recipe.DiskFormatQcow2) {
+			formats = "raw and qcow2"
+		}
+		lines = append(lines, fmt.Sprintf("Disk      %s, %s; the root grows to fill its disk", size, formats))
 	}
 	// In the order the questions were asked, so the recap can be read
 	// against the answers just given.

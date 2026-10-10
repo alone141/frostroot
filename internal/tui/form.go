@@ -409,20 +409,24 @@ type formBinding struct {
 	glyphs  glyphSet
 }
 
-// bindingKey names a field's variable: its key, and the families that ask
-// it, which are none for a field every family asks.
-type bindingKey struct{ key, families string }
+// bindingKey names a field's variable: its key, and the families and
+// targets that ask it, which are none for a field every one asks.
+type bindingKey struct{ key, families, targets string }
 
 func bindingKeyOf(field form.Field) bindingKey {
 	families := make([]string, len(field.Families))
 	for position, family := range field.Families {
 		families[position] = string(family)
 	}
-	return bindingKey{key: field.Key, families: strings.Join(families, ",")}
+	return bindingKey{key: field.Key, families: strings.Join(families, ","), targets: strings.Join(field.Targets, ",")}
 }
 
-// familyKey is the variable of the question that chooses the family.
-var familyKey = bindingKey{key: form.KeyDistro}
+// familyKey and targetKey are the variables of the questions that choose
+// the family and the target.
+var (
+	familyKey = bindingKey{key: form.KeyDistro}
+	targetKey = bindingKey{key: form.KeyTarget}
+)
 
 func newFormBinding(ctx context.Context, fields []form.Field, initial form.Values, glyphs glyphSet) *formBinding {
 	binding := &formBinding{
@@ -438,9 +442,9 @@ func newFormBinding(ctx context.Context, fields []form.Field, initial form.Value
 	for _, field := range fields {
 		// A field of another family starts where switching to it puts the
 		// answers: on its newest release, with the selections its catalog
-		// has.
+		// has. One of another target starts where the answers are.
 		start := initial
-		if !field.AskedFor(initialFamily) {
+		if len(field.Families) > 0 && !slices.Contains(field.Families, initialFamily) {
 			start = form.ForFamily(initial, field.Families[0])
 		}
 		key := bindingKeyOf(field)
@@ -459,13 +463,38 @@ func newFormBinding(ctx context.Context, fields []form.Field, initial form.Value
 	return binding
 }
 
-// families are the families the form can be answered for: every one when it
-// asks the family, and otherwise the one it started on.
-func (b *formBinding) families() []distro.Family {
+// variants are the families and targets the form can be answered for, by
+// family and then by target: every family when it asks the family, and
+// otherwise the one it started on, and likewise for the target.
+func (b *formBinding) variants() []form.Variant {
+	families := []distro.Family{form.Family(b.initial)}
 	if _, isAsked := b.texts[familyKey]; isAsked {
-		return distro.Families()
+		families = distro.Families()
 	}
-	return []distro.Family{form.Family(b.initial)}
+	targets := []string{form.Target(b.initial)}
+	if _, isAsked := b.texts[targetKey]; isAsked {
+		targets = form.Targets()
+	}
+	variants := make([]form.Variant, 0, len(families)*len(targets))
+	for _, family := range families {
+		for _, target := range targets {
+			variants = append(variants, form.Variant{Family: family, Target: target})
+		}
+	}
+	return variants
+}
+
+// answeredTarget is the target as answered so far.
+func (b *formBinding) answeredTarget() string {
+	if answer, isAsked := b.texts[targetKey]; isAsked {
+		return form.Target(form.Values{form.KeyTarget: *answer})
+	}
+	return form.Target(b.initial)
+}
+
+// answeredVariant is the family and the target as answered so far.
+func (b *formBinding) answeredVariant() form.Variant {
+	return form.Variant{Family: b.answeredFamily(), Target: b.answeredTarget()}
 }
 
 // answeredFamily is the family as answered so far.
@@ -477,15 +506,17 @@ func (b *formBinding) answeredFamily() distro.Family {
 }
 
 // groups returns the form's pages as huh groups, in page order. A page
-// every family asks alike is one group, where a question each family asks
-// its own way, the release, is one widget showing the answered family's. A
-// page that some family asks otherwise, or not at all, is a group per
-// family that has questions on it, hidden while another family is
-// answered: Ubuntu's Sources, Packages and Trust, and Fedora's Packages.
-// The family is asked on the first page, so by the time huh decides
-// whether to show a group the answer that decides it is given.
+// every variant asks alike is one group, where a question each family or
+// target asks its own way, such as the release, is one widget showing the
+// answered variant's. A page that some variant asks otherwise, or not at
+// all, is a group per distinct list of questions on it, shown while a
+// variant that asks that list is answered: a group per family for Ubuntu's
+// Sources, Packages and Trust and Fedora's Packages, and a group per target
+// for the System page, where only WSL asks systemd, and the Disk page. The
+// family and the target are asked on the first page, so by the time huh
+// decides whether to show a group the answers that decide it are given.
 func (b *formBinding) groups() []*huh.Group {
-	families := b.families()
+	variants := b.variants()
 	var groups []*huh.Group
 	for _, page := range form.Pages() {
 		var onPage []form.Field
@@ -497,30 +528,66 @@ func (b *formBinding) groups() []*huh.Group {
 		if len(onPage) == 0 {
 			continue
 		}
-		if widgets, shared := b.sharedPage(onPage, families); shared {
+		if widgets, shared := b.sharedPage(onPage, variants); shared {
 			groups = append(groups, huh.NewGroup(widgets...).Title(page))
 			continue
 		}
-		for _, family := range families {
-			var widgets []huh.Field
-			for _, field := range onPage {
-				if field.AskedFor(family) {
-					widgets = append(widgets, b.huhField(field))
-				}
+		for _, group := range groupByQuestions(onPage, variants) {
+			widgets := make([]huh.Field, 0, len(group.fields))
+			for _, field := range group.fields {
+				widgets = append(widgets, b.huhField(field))
 			}
-			if len(widgets) > 0 {
-				groups = append(groups, huh.NewGroup(widgets...).Title(page).WithHideFunc(func() bool { return b.answeredFamily() != family }))
-			}
+			members := group.variants
+			groups = append(groups, huh.NewGroup(widgets...).Title(page).WithHideFunc(func() bool {
+				return !slices.Contains(members, b.answeredVariant())
+			}))
 		}
 	}
 	return groups
 }
 
-// sharedPage returns the widgets of a page when every family asks each of
-// its keys: a field that every family asks as one widget, and a key that
-// each family asks with a field of its own as a familyField. false when a
-// family asks nothing in the place of another family's field.
-func (b *formBinding) sharedPage(onPage []form.Field, families []distro.Family) ([]huh.Field, bool) {
+// pageGroup is the questions of a page as some variants ask them.
+type pageGroup struct {
+	fields   []form.Field
+	variants []form.Variant
+}
+
+// groupByQuestions returns the lists of questions the variants ask on a
+// page, each once, with the variants that ask it, in the order the variants
+// come; a variant that asks nothing there is in none. Variants that ask the
+// same questions share a group, so that a picker, which opens an index,
+// has one widget per way it is asked and not one per variant.
+func groupByQuestions(onPage []form.Field, variants []form.Variant) []*pageGroup {
+	var groups []*pageGroup
+	for _, variant := range variants {
+		var asked []form.Field
+		var keys []bindingKey
+		for _, field := range onPage {
+			if field.AskedFor(variant) {
+				asked = append(asked, field)
+				keys = append(keys, bindingKeyOf(field))
+			}
+		}
+		if len(asked) == 0 {
+			continue
+		}
+		index := slices.IndexFunc(groups, func(group *pageGroup) bool {
+			return slices.EqualFunc(group.fields, keys, func(field form.Field, key bindingKey) bool { return bindingKeyOf(field) == key })
+		})
+		if index < 0 {
+			groups = append(groups, &pageGroup{fields: asked})
+			index = len(groups) - 1
+		}
+		groups[index].variants = append(groups[index].variants, variant)
+	}
+	return groups
+}
+
+// sharedPage returns the widgets of a page when every variant asks each of
+// its keys: a field that every variant asks as one widget, and a key that
+// families or targets ask with fields of their own as a variantField. false
+// when a variant asks nothing in the place of another's field.
+func (b *formBinding) sharedPage(onPage []form.Field, variants []form.Variant) ([]huh.Field, bool) {
 	var widgets []huh.Field
 	placed := map[string]bool{}
 	for _, field := range onPage {
@@ -528,35 +595,31 @@ func (b *formBinding) sharedPage(onPage []form.Field, families []distro.Family) 
 			continue
 		}
 		placed[field.Key] = true
-		fieldOf := map[distro.Family]form.Field{}
 		var distinct []form.Field
+		of := map[form.Variant]int{}
 		for _, candidate := range onPage {
 			if candidate.Key != field.Key {
 				continue
 			}
-			for _, family := range families {
-				if candidate.AskedFor(family) {
-					fieldOf[family] = candidate
+			distinct = append(distinct, candidate)
+			for _, variant := range variants {
+				if candidate.AskedFor(variant) {
+					of[variant] = len(distinct) - 1
 				}
 			}
-			distinct = append(distinct, candidate)
 		}
-		if len(fieldOf) < len(families) {
+		if len(of) < len(variants) {
 			return nil, false
 		}
 		if len(distinct) == 1 {
 			widgets = append(widgets, b.huhField(field))
 			continue
 		}
-		widgetOf := map[bindingKey]huh.Field{}
+		shared := &variantField{key: field.Key, of: of, answered: b.answeredVariant}
 		for _, candidate := range distinct {
-			widgetOf[bindingKeyOf(candidate)] = b.huhField(candidate)
+			shared.widgets = append(shared.widgets, b.huhField(candidate))
 		}
-		variants := &familyField{key: field.Key, families: families, widgets: map[distro.Family]huh.Field{}, answered: b.answeredFamily}
-		for family, candidate := range fieldOf {
-			variants.widgets[family] = widgetOf[bindingKeyOf(candidate)]
-		}
-		widgets = append(widgets, variants)
+		widgets = append(widgets, shared)
 	}
 	return widgets, true
 }
@@ -632,9 +695,9 @@ func (b *formBinding) requestFor(field form.Field) func() form.IndexRequest {
 
 // answeredRelease is the answered family's release as answered so far.
 func (b *formBinding) answeredRelease() string {
-	family := b.answeredFamily()
+	variant := b.answeredVariant()
 	for _, field := range b.fields {
-		if field.Key == form.KeyRelease && field.AskedFor(family) {
+		if field.Key == form.KeyRelease && field.AskedFor(variant) {
 			return *b.texts[bindingKeyOf(field)]
 		}
 	}
@@ -647,12 +710,12 @@ func (b *formBinding) answeredRelease() string {
 // keeps its own state and would write it back.
 func (b *formBinding) chosenInCatalog(picker form.Field) func() []string {
 	return func() []string {
-		family := b.answeredFamily()
+		variant := b.answeredVariant()
 		if len(picker.Families) > 0 {
-			family = picker.Families[0]
+			variant.Family = picker.Families[0]
 		}
 		for _, field := range b.fields {
-			if field.Key == form.KeyPackages && field.AskedFor(family) {
+			if field.Key == form.KeyPackages && field.AskedFor(variant) {
 				return *b.lists[bindingKeyOf(field)]
 			}
 		}
@@ -661,14 +724,14 @@ func (b *formBinding) chosenInCatalog(picker form.Field) func() []string {
 }
 
 // values returns the answers: everything in initial, overwritten by what
-// the widgets of the answered family's questions collected. An answer to a
-// question the family does not ask stays as it started, and ToRecipe leaves
-// it out.
+// the widgets of the answered variant's questions collected. An answer to a
+// question the variant does not ask stays as it started, and ToRecipe
+// leaves it out.
 func (b *formBinding) values() form.Values {
 	values := b.initial.Clone()
-	family := b.answeredFamily()
+	variant := b.answeredVariant()
 	for _, field := range b.fields {
-		if !field.AskedFor(family) {
+		if !field.AskedFor(variant) {
 			continue
 		}
 		key := bindingKeyOf(field)

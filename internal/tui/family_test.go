@@ -38,7 +38,7 @@ func TestFormAsksFedorasQuestions(t *testing.T) {
 	d.press(pressEnter) // past the name
 	d.press(pressRight) // Ubuntu to Fedora
 	asked := d.focusedKeys()
-	want := []string{form.KeyDistro, form.KeyRelease, form.KeyUserName, form.KeySudo, form.KeyTimezone, form.KeyLocale, form.KeySystemd, form.KeyPackages, form.KeyOtherPackages}
+	want := []string{form.KeyDistro, form.KeyRelease, form.KeyTarget, form.KeyUserName, form.KeySudo, form.KeyTimezone, form.KeyLocale, form.KeySystemd, form.KeyPackages, form.KeyOtherPackages}
 	if !slices.Equal(asked, want) {
 		t.Errorf("asked %q, want %q", asked, want)
 	}

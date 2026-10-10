@@ -52,7 +52,11 @@ type Field struct {
 	// Families are the families the field is asked for; none means every
 	// one. Two fields may share a key when their families differ: each
 	// family asks its release, and chooses its packages, its own way.
-	Families    []distro.Family
+	Families []distro.Family
+	// Targets are the targets the field is asked for, recipe.TargetWSL or
+	// recipe.TargetDisk; none means both. Two fields may share a key when
+	// their targets differ, as the image's name is described for each.
+	Targets     []string
 	Title       string
 	Description string // one line under the title, or empty
 	Kind        Kind
@@ -73,19 +77,52 @@ type Field struct {
 	Sourced bool
 }
 
-// AskedFor reports whether the field is a question of family.
-func (f Field) AskedFor(family distro.Family) bool {
+// Variant is what decides which questions are asked: the family and the
+// target a recipe is for.
+type Variant struct {
+	Family distro.Family
+	Target string // recipe.TargetWSL or recipe.TargetDisk
+}
+
+// Targets returns the targets a recipe can name, in the order the form
+// offers them.
+func Targets() []string {
+	return []string{recipe.TargetWSL, recipe.TargetDisk}
+}
+
+// AskedFor reports whether the field is a question of variant: of its
+// family and of its target.
+func (f Field) AskedFor(variant Variant) bool {
+	return f.askedForFamily(variant.Family) && f.askedForTarget(variant.Target)
+}
+
+func (f Field) askedForFamily(family distro.Family) bool {
 	return len(f.Families) == 0 || slices.Contains(f.Families, family)
 }
 
-// FieldsFor returns the questions of a family already chosen: the fields
-// asked for it, without the question that chooses it. It is what the plain
-// interface asks, and the full-screen one when the family is not a
-// question: capture's, and init's with --distro.
-func FieldsFor(fields []Field, family distro.Family) []Field {
+func (f Field) askedForTarget(target string) bool {
+	return len(f.Targets) == 0 || slices.Contains(f.Targets, target)
+}
+
+// Fixed says which of the two choices that decide the other questions are
+// made before the form opens. A fixed choice is not asked, and only the
+// questions of what it chose remain.
+type Fixed struct{ Family, Target bool }
+
+// FieldsFor returns the questions left when the fixed choices are chosen's:
+// without the question that makes a fixed choice, and without the fields of
+// another family or target than the one it made. With both fixed, it is
+// what the plain interface asks, which never asks either, because people
+// pipe answers into it; capture's form fixes both too, and init's fixes the
+// family with --distro and the target with --target.
+func FieldsFor(fields []Field, chosen Variant, fixed Fixed) []Field {
 	var asked []Field
 	for _, field := range fields {
-		if field.Key != KeyDistro && field.AskedFor(family) {
+		switch {
+		case field.Key == KeyDistro && fixed.Family, field.Key == KeyTarget && fixed.Target:
+		case fixed.Family && !field.askedForFamily(chosen.Family):
+		case fixed.Target && !field.askedForTarget(chosen.Target):
+		default:
 			asked = append(asked, field)
 		}
 	}
@@ -140,6 +177,17 @@ const (
 	// it, so that a recipe which names its family keeps naming it, and one
 	// that names none is written back without the line.
 	keyOriginalDistro = "original_distro"
+	// KeyTarget is the target, recipe.TargetWSL or recipe.TargetDisk: the
+	// full-screen form asks it on the Image page, and the questions after
+	// it are that target's.
+	KeyTarget = "target"
+	// keyOriginalTarget is not a field: [image] target as the recipe wrote
+	// it, which keyOriginalDistro is to the family.
+	keyOriginalTarget = "original_target"
+	// KeyDiskSize is [disk] size, "" for the content and room to spare.
+	KeyDiskSize = "disk_size"
+	// KeyDiskQcow2 says whether [disk] formats names qcow2.
+	KeyDiskQcow2 = "disk_qcow2"
 )
 
 // The pages fields are grouped on, in order.
@@ -150,6 +198,8 @@ const (
 	PageImage    = "Image"
 	PageUser     = "User"
 	PageSystem   = "System"
+	// PageDisk is a disk recipe's: its size and its formats.
+	PageDisk = "Disk"
 	// PageSources comes before PagePackages so that the packages of the
 	// sources it adds are packages the picker can find: the index is opened
 	// when the picker is reached, and it can only cover repositories the
@@ -162,7 +212,7 @@ const (
 
 // Pages returns the page titles in order.
 func Pages() []string {
-	return []string{PageCaptured, PageImage, PageUser, PageSystem, PageSources, PagePackages, PageTrust}
+	return []string{PageCaptured, PageImage, PageUser, PageSystem, PageDisk, PageSources, PagePackages, PageTrust}
 }
 
 // Host is what the form reads from the machine it runs on.
@@ -182,10 +232,12 @@ type Host struct {
 	OpenPythonIndex IndexOpener
 }
 
-// The families of the fields only one family asks.
+// The families and targets of the fields only one asks.
 var (
 	ubuntuOnly = []distro.Family{distro.Ubuntu}
 	fedoraOnly = []distro.Family{distro.Fedora}
+	wslOnly    = []string{recipe.TargetWSL}
+	diskOnly   = []string{recipe.TargetDisk}
 )
 
 // Fields returns every question of every family, in the order they are
@@ -194,9 +246,16 @@ var (
 func Fields(host Host) []Field {
 	return []Field{
 		{
-			Key: KeyImageName, Page: PageImage, Kind: KindInput,
+			Key: KeyImageName, Page: PageImage, Kind: KindInput, Targets: wslOnly,
 			Title:       "Image name",
 			Description: "Names the tarball and the WSL distribution",
+			Placeholder: "lab",
+			Validate:    recipe.CheckImageName,
+		},
+		{
+			Key: KeyImageName, Page: PageImage, Kind: KindInput, Targets: diskOnly,
+			Title:       "Image name",
+			Description: "Names the disk image's files",
 			Placeholder: "lab",
 			Validate:    recipe.CheckImageName,
 		},
@@ -216,9 +275,21 @@ func Fields(host Host) []Field {
 			Options: releaseOptions(distro.Fedora),
 		},
 		{
-			Key: KeyUserName, Page: PageUser, Kind: KindInput,
+			Key: KeyTarget, Page: PageImage, Kind: KindSelect,
+			Title:   "Target",
+			Options: targetOptions(),
+		},
+		{
+			Key: KeyUserName, Page: PageUser, Kind: KindInput, Targets: wslOnly,
 			Title:       "User name",
 			Description: "The account WSL logs in as; it owns /home/<name>",
+			Placeholder: "student",
+			Validate:    recipe.CheckUserName,
+		},
+		{
+			Key: KeyUserName, Page: PageUser, Kind: KindInput, Targets: diskOnly,
+			Title:       "User name",
+			Description: "The account you log in as; its password is set at the first boot",
 			Placeholder: "student",
 			Validate:    recipe.CheckUserName,
 		},
@@ -242,9 +313,21 @@ func Fields(host Host) []Field {
 			Options: localeOptions(),
 		},
 		{
-			Key: KeySystemd, Page: PageSystem, Kind: KindConfirm,
+			Key: KeySystemd, Page: PageSystem, Kind: KindConfirm, Targets: wslOnly,
 			Title:       "Boot with systemd",
 			Description: "Needed for services, snapd and most tutorials",
+		},
+		{
+			Key: KeyDiskSize, Page: PageDisk, Kind: KindInput, Targets: diskOnly,
+			Title:       "Disk size",
+			Description: "The image file's size, such as 16G; empty sizes it to fit. Either way the root grows to fill the disk at the first boot",
+			Placeholder: "to fit",
+			Validate:    checkDiskSizeAnswer,
+		},
+		{
+			Key: KeyDiskQcow2, Page: PageDisk, Kind: KindConfirm, Targets: diskOnly,
+			Title:       "Also write a qcow2",
+			Description: "For QEMU, libvirt and Proxmox; the raw .img is always written",
 		},
 		{
 			Key: KeySources, Page: PageSources, Kind: KindMultiSelect, Families: ubuntuOnly,
@@ -367,6 +450,23 @@ func checkPPAList(text string) error {
 
 // familyOptions lists the families frostroot builds, in the order the
 // table gives them.
+// targetOptions are the targets, each with what it makes.
+func targetOptions() []Option {
+	return []Option{
+		{Value: recipe.TargetWSL, Label: "WSL", Description: "a tarball for wsl --import"},
+		{Value: recipe.TargetDisk, Label: "Disk image", Description: "boots a PC or a VM, with Secure Boot"},
+	}
+}
+
+// checkDiskSizeAnswer accepts an empty answer, which sizes the disk to fit,
+// and otherwise what [disk] size accepts.
+func checkDiskSizeAnswer(text string) error {
+	if text == "" {
+		return nil
+	}
+	return recipe.CheckDiskSize(text)
+}
+
 func familyOptions() []Option {
 	var options []Option
 	for _, family := range distro.Families() {

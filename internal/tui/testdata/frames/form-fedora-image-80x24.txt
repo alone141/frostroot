@@ -9,8 +9,8 @@ Image
   Fedora release
   Fedora 44
 
-
-
+  Target
+  WSL  (a tarball for wsl --import)
 
 
 

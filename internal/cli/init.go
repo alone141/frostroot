@@ -27,26 +27,39 @@ var recipeTemplate = template.Must(template.New("recipe").Funcs(template.FuncMap
 # every installed package to frostroot.lock; commit both files.
 
 [image]
-name = {{tomlQuote .Image.Name}}  # file name of the tarball and name of the WSL distro
-{{if .Image.Distro}}distro = {{tomlQuote .Image.Distro}}
+{{if eq .Image.Target "disk"}}name = {{tomlQuote .Image.Name}}  # file name of the disk image
+{{else}}name = {{tomlQuote .Image.Name}}  # file name of the tarball and name of the WSL distro
+{{end}}{{if .Image.Distro}}distro = {{tomlQuote .Image.Distro}}
 {{end}}{{if eq .Image.Distro "fedora"}}# 44, the Fedora release frostroot builds.
 {{else}}# 20.04 | 22.04 | 24.04 | 26.04. 20.04 is past standard support: its
 # packages carry known security vulnerabilities that only Ubuntu Pro fixes.
 {{end}}release = {{tomlQuote .Image.Release}}
 arch = {{tomlQuote .Image.Arch}}  # the only architecture in v1
-
+{{if eq .Image.Target "disk"}}target = "disk"  # a disk image that boots a PC or a VM, with Secure Boot
+{{else if .Image.Target}}target = {{tomlQuote .Image.Target}}  # a tarball for wsl --import
+{{end}}
 [user]
-name = {{tomlQuote .User.Name}}
-sudo = {{.User.Sudo}}  # passwordless sudo: this is a lab image, not a hardened server
-
+{{if eq .Image.Target "disk"}}name = {{tomlQuote .User.Name}}  # its password is set at the first boot
+{{else}}name = {{tomlQuote .User.Name}}
+{{end}}sudo = {{.User.Sudo}}  # passwordless sudo: this is a lab image, not a hardened server
+{{if eq .Image.Target "disk"}}
+[disk]
+# The image file's size, such as "16G"; without it the image is sized to fit
+# what it holds. Either way the root grows to fill the disk it is written to,
+# at its first boot.
+{{with .Disk}}{{if .Size}}size = {{tomlQuote .Size}}
+{{end}}{{end}}# Written beside the raw .img when named here: "qcow2".
+{{with .Disk}}{{if .Formats}}formats = {{tomlQuoteList .Formats}}
+{{end}}{{end}}{{else}}
 [wsl]
 systemd = {{.WSL.Systemd}}
 default_user = {{tomlQuote .WSL.DefaultUser}}
-
+{{end}}
 [locale]
 lang = {{tomlQuote .Locale.Lang}}
-timezone = {{tomlQuote .Locale.Timezone}}  # kept under WSL instead of following Windows
-
+{{if eq .Image.Target "disk"}}timezone = {{tomlQuote .Locale.Timezone}}
+{{else}}timezone = {{tomlQuote .Locale.Timezone}}  # kept under WSL instead of following Windows
+{{end}}
 [packages]
 {{if eq .Image.Distro "fedora"}}# Fedora package names, exactly as you would pass them to dnf install.
 # Dependencies and weak dependencies come along automatically.
@@ -119,7 +132,7 @@ func (a *App) runInit(args []string) int {
 	if !ok {
 		return exitUserError
 	}
-	return a.runRecipeForm("init", initial, recipePath, *overwrite, *plain, askFamily, nil, nil, indexes)
+	return a.runRecipeForm("init", initial, recipePath, *overwrite, *plain, form.Fixed{Family: !askFamily}, nil, nil, indexes)
 }
 
 // renderRecipe returns imageRecipe as the file init and edit write, byte

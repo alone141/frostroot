@@ -21,10 +21,10 @@ func keysOf(fields []Field) []string {
 	return keys
 }
 
-// fieldOf returns the field of key that family asks.
+// fieldOf returns the field of key that family asks for WSL.
 func fieldOf(t *testing.T, family distro.Family, key string) Field {
 	t.Helper()
-	for _, field := range FieldsFor(Fields(noHost), family) {
+	for _, field := range FieldsFor(Fields(noHost), Variant{Family: family, Target: recipe.TargetWSL}, Fixed{Family: true, Target: true}) {
 		if field.Key == key {
 			return field
 		}
@@ -34,7 +34,8 @@ func fieldOf(t *testing.T, family distro.Family, key string) Field {
 }
 
 // TestTheFamilyIsAskedOnTheImagePage: after the name and before the
-// release, whose options follow it.
+// release, whose options follow it; the target follows the release. The
+// name is asked once, described for each target.
 func TestTheFamilyIsAskedOnTheImagePage(t *testing.T) {
 	var onImagePage []Field
 	for _, field := range Fields(noHost) {
@@ -42,10 +43,10 @@ func TestTheFamilyIsAskedOnTheImagePage(t *testing.T) {
 			onImagePage = append(onImagePage, field)
 		}
 	}
-	if got, want := keysOf(onImagePage), []string{KeyImageName, KeyDistro, KeyRelease, KeyRelease}; !slices.Equal(got, want) {
+	if got, want := keysOf(onImagePage), []string{KeyImageName, KeyImageName, KeyDistro, KeyRelease, KeyRelease, KeyTarget}; !slices.Equal(got, want) {
 		t.Fatalf("the Image page asks %q, want %q", got, want)
 	}
-	family := onImagePage[1]
+	family := onImagePage[2]
 	if family.Kind != KindSelect || len(family.Families) != 0 {
 		t.Errorf("the family question = %+v, want a select every family asks", family)
 	}
@@ -56,7 +57,7 @@ func TestTheFamilyIsAskedOnTheImagePage(t *testing.T) {
 	if want := []string{"ubuntu=Ubuntu", "fedora=Fedora"}; !slices.Equal(labels, want) {
 		t.Errorf("the families offered are %q, want %q", labels, want)
 	}
-	for _, release := range onImagePage[2:] {
+	for _, release := range onImagePage[3:5] {
 		if len(release.Families) != 1 {
 			t.Errorf("%q is asked for %q, want one family", release.Title, release.Families)
 		}
@@ -68,7 +69,8 @@ func TestTheFamilyIsAskedOnTheImagePage(t *testing.T) {
 // pipe answers into it. Fedora's questions are Ubuntu's without the sources,
 // Python and certificates, which a Fedora recipe cannot hold yet.
 func TestFieldsForKeepsThePlainQuestions(t *testing.T) {
-	ubuntu := FieldsFor(Fields(noHost), distro.Ubuntu)
+	plain := Fixed{Family: true, Target: true}
+	ubuntu := FieldsFor(Fields(noHost), Variant{Family: distro.Ubuntu, Target: recipe.TargetWSL}, plain)
 	want := []string{KeyImageName, KeyRelease, KeyUserName, KeySudo, KeyTimezone, KeyLocale, KeySystemd, KeySources, KeyPPAs, KeyPackages, KeyOtherPackages, KeyPythonPackages, KeyCertificates}
 	if got := keysOf(ubuntu); !slices.Equal(got, want) {
 		t.Errorf("Ubuntu asks %q, want %q", got, want)
@@ -77,7 +79,7 @@ func TestFieldsForKeepsThePlainQuestions(t *testing.T) {
 		t.Errorf("Ubuntu's release = %q with %d options", release.Title, len(release.Options))
 	}
 
-	fedora := FieldsFor(Fields(noHost), distro.Fedora)
+	fedora := FieldsFor(Fields(noHost), Variant{Family: distro.Fedora, Target: recipe.TargetWSL}, plain)
 	want = []string{KeyImageName, KeyRelease, KeyUserName, KeySudo, KeyTimezone, KeyLocale, KeySystemd, KeyPackages, KeyOtherPackages}
 	if got := keysOf(fedora); !slices.Equal(got, want) {
 		t.Errorf("Fedora asks %q, want %q", got, want)
@@ -112,7 +114,7 @@ func TestFedorasOtherPackagesAreFedoraNames(t *testing.T) {
 		if field.Key != KeyOtherPackages {
 			continue
 		}
-		if field.AskedFor(distro.Fedora) {
+		if field.AskedFor(Variant{Family: distro.Fedora, Target: recipe.TargetWSL}) {
 			fedora = field
 		} else {
 			ubuntu = field
