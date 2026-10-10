@@ -72,6 +72,21 @@ func (p *offlinePlan) packageNames() []string {
 	return slices.Compact(names)
 }
 
+// checkLockTarget refuses a lock made for the other target. A disk image's
+// lock names a kernel, a bootloader and the disk's layout, which a tarball
+// for WSL has none of, and the other way round, so nothing else in it is
+// read. A lock that names no target is WSL's, as a recipe that names none is.
+func checkLockTarget(lock recipe.Lockfile, imageRecipe recipe.Recipe) error {
+	lockTarget := lock.Target
+	if lockTarget == "" {
+		lockTarget = recipe.TargetWSL
+	}
+	if lockTarget != imageRecipe.Target() {
+		return fmt.Errorf("%w: target %q in the lock, %q in the recipe; run frostroot build online, then frostroot vendor", ErrLockMismatch, lockTarget, imageRecipe.Target())
+	}
+	return nil
+}
+
 // planOffline loads the lock in recipeDir and checks that it still describes
 // imageRecipe, an Ubuntu recipe: same family, same release, same
 // architecture, same requested packages. The user, sudo, locale, timezone
@@ -92,6 +107,9 @@ func planOffline(recipeDir string, imageRecipe recipe.Recipe, release distro.Rel
 	// is; one that names a family frostroot does not know is no family's.
 	if lockFamily, err := distro.FamilyOf(lock.Distro); err != nil || lockFamily != distro.Ubuntu {
 		return nil, fmt.Errorf("%w: distro %q in the lock, %q in the recipe; run frostroot build online, then frostroot vendor", ErrLockMismatch, lock.Distro, distro.Ubuntu)
+	}
+	if err := checkLockTarget(lock, imageRecipe); err != nil {
+		return nil, err
 	}
 	entries, err := pool.Manifest(lock)
 	if errors.Is(err, pool.ErrNoChecksums) {

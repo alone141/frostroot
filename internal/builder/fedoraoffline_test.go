@@ -190,6 +190,14 @@ func TestBuildFedoraOfflineRefusals(t *testing.T) {
 			wantError: ErrLockMismatch,
 			wantText:  `distro "ubuntu" in the lock, "fedora" in the recipe`,
 		},
+		"a disk image's lock": {
+			prepare: func(t *testing.T, options Options, _ *recipe.Recipe) {
+				t.Helper()
+				editLock(t, options.RecipeDir, func(lock *recipe.Lockfile) { lock.Target = recipe.TargetDisk })
+			},
+			wantError: ErrLockMismatch,
+			wantText:  `target "disk" in the lock, "wsl" in the recipe`,
+		},
 		"another release": {
 			prepare: func(t *testing.T, options Options, _ *recipe.Recipe) {
 				t.Helper()

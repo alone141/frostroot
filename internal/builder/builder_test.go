@@ -1093,6 +1093,22 @@ func TestBuildOfflineRefusesBeforeAnyWork(t *testing.T) {
 			wantText:  `distro "fedora" in the lock, "ubuntu" in the recipe`,
 		},
 		{
+			// A disk image's lock names a kernel, a bootloader and a disk
+			// layout that a tarball for WSL has none of.
+			name: "lock of the other target",
+			prepare: func(t *testing.T, options Options) recipe.Recipe {
+				t.Helper()
+				lock := writeVendoredLock(t, options)
+				lock.Target = recipe.TargetDisk
+				if err := recipe.SaveLock(filepath.Join(options.RecipeDir, LockFileName), lock); err != nil {
+					t.Fatal(err)
+				}
+				return sampleRecipe()
+			},
+			wantError: ErrLockMismatch,
+			wantText:  `target "disk" in the lock, "wsl" in the recipe`,
+		},
+		{
 			name: "recipe packages changed",
 			prepare: func(t *testing.T, options Options) recipe.Recipe {
 				t.Helper()

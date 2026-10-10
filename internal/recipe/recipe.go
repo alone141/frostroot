@@ -19,6 +19,7 @@ type Recipe struct {
 	Image        Image         `toml:"image"`
 	User         User          `toml:"user"`
 	WSL          WSL           `toml:"wsl"`
+	Disk         *Disk         `toml:"disk,omitempty"`
 	Locale       Locale        `toml:"locale"`
 	Packages     Packages      `toml:"packages"`
 	Sources      []Source      `toml:"sources,omitempty"`
@@ -73,6 +74,26 @@ type Image struct {
 	Distro  string `toml:"distro,omitempty"`
 	Release string `toml:"release"` // the family's version, such as Ubuntu's "24.04"
 	Arch    string `toml:"arch"`    // CPU architecture; only "amd64" in v1
+	// Target is what the build makes: TargetWSL, a tarball for wsl --import,
+	// or TargetDisk, a disk image that boots a PC or a VM. Every recipe
+	// written before there was a second target names none, and is WSL's.
+	Target string `toml:"target,omitempty"`
+}
+
+// The targets a recipe can name.
+const (
+	TargetWSL  = "wsl"
+	TargetDisk = "disk"
+)
+
+// Target returns what the recipe builds: TargetWSL when it names nothing.
+// Like PythonPackages, it is how the rest of frostroot reads the field, so a
+// recipe without the line and one that says "wsl" behave the same.
+func (r Recipe) Target() string {
+	if r.Image.Target == "" {
+		return TargetWSL
+	}
+	return r.Image.Target
 }
 
 // User is the [user] table: the account created in the image.
@@ -85,6 +106,40 @@ type User struct {
 type WSL struct {
 	Systemd     bool   `toml:"systemd"`
 	DefaultUser string `toml:"default_user,omitempty"` // defaults to User.Name
+}
+
+// Disk is the [disk] table: how a disk recipe's image is laid out and what
+// it is written as. It is a pointer for the same reason [python] is: a WSL
+// recipe has none, and is written without one.
+type Disk struct {
+	// Size is the image file's size, such as "16G" or "512M", in GiB or MiB.
+	// Empty means the content and room to spare; either way the root grows
+	// to fill the disk the image is written to, at its first boot.
+	Size string `toml:"size,omitempty"`
+	// Formats are what the image is written as besides the raw disk, which
+	// is always written: "qcow2".
+	Formats []string `toml:"formats,omitempty"`
+}
+
+// DiskFormatQcow2 is the one format [disk] formats may name so far, besides
+// the raw image, which is always written.
+const DiskFormatQcow2 = "qcow2"
+
+// DiskFormats returns the formats the recipe asks for besides the raw
+// image, or nil when it asks for none or has no [disk].
+func (r Recipe) DiskFormats() []string {
+	if r.Disk == nil {
+		return nil
+	}
+	return r.Disk.Formats
+}
+
+// DiskSize returns the [disk] size as written, or "" when there is none.
+func (r Recipe) DiskSize() string {
+	if r.Disk == nil {
+		return ""
+	}
+	return r.Disk.Size
 }
 
 // Locale is the [locale] table.
