@@ -37,9 +37,31 @@ fedora) E2E_RELEASE=${E2E_RELEASE:-44} ;;
 	exit 2
 	;;
 esac
+# The target the scenarios build: a tarball for WSL, or with
+# E2E_TARGET=disk a raw disk image, which only an Ubuntu recipe makes so far.
+E2E_TARGET=${E2E_TARGET:-wsl}
+case "$E2E_TARGET" in
+wsl | disk) ;;
+*)
+	echo "E2E_TARGET=$E2E_TARGET is not a target frostroot builds: wsl or disk" >&2
+	exit 2
+	;;
+esac
+if [ "$E2E_TARGET" = disk ] && [ "$E2E_DISTRO" != ubuntu ]; then
+	echo "E2E_TARGET=disk builds Ubuntu alone so far, and E2E_DISTRO is $E2E_DISTRO" >&2
+	exit 2
+fi
 e2eChecks=0
 e2eFailures=0
 e2eStatus=0
+# E2E_CA_BUNDLE names a PEM file the builds that fetch over TLS trust, for
+# a host behind a network that inspects it: the scenarios that fetch
+# Python packages pass it as --ca-bundle, which reaches neither the image
+# nor the lock, so their verdicts mean what they mean without it.
+e2eTrustFlags=()
+if [ -n "${E2E_CA_BUNDLE:-}" ]; then
+	e2eTrustFlags=(--ca-bundle "$E2E_CA_BUNDLE")
+fi
 
 # e2e_begin NAME starts a scenario in a fresh, empty lab: $LAB.
 e2e_begin() {
@@ -96,6 +118,22 @@ e2e_require_bootstrap() {
 		echo "SKIP $e2eName: needs ubuntu-keyring (sudo apt install ubuntu-keyring)"
 		exit 4
 	fi
+	if [ "$E2E_TARGET" = disk ]; then
+		# The disk tools tree runs through bubblewrap, and goes with unshare.
+		e2e_require bwrap
+		if [ "$(id -u)" -ne 0 ]; then
+			e2e_require unshare newuidmap newgidmap
+		fi
+	fi
+}
+
+# e2e_require_wsl_target ends the scenario as SKIP when E2E_TARGET names a
+# disk: what it checks is a tarball's.
+e2e_require_wsl_target() {
+	if [ "$E2E_TARGET" != wsl ]; then
+		echo "SKIP $e2eName: a tarball's alone, and E2E_TARGET is $E2E_TARGET"
+		exit 4
+	fi
 }
 
 # e2e_require_ubuntu ends the scenario as SKIP when E2E_DISTRO names
@@ -112,6 +150,16 @@ e2e_require_ubuntu() {
 # tarball, relative to the recipe's directory.
 e2e_tarball() {
 	printf 'dist/%s-%s-%s-amd64.tar.gz' "$1" "$E2E_DISTRO" "$E2E_RELEASE"
+}
+
+# e2e_output NAME prints where a build of the recipe named NAME places what
+# it makes for $E2E_TARGET: the tarball, or the raw disk image.
+e2e_output() {
+	if [ "$E2E_TARGET" = disk ]; then
+		printf 'dist/%s-%s-%s-amd64.img' "$1" "$E2E_DISTRO" "$E2E_RELEASE"
+	else
+		e2e_tarball "$1"
+	fi
 }
 
 # e2e_build_frostroot builds the checkout's binary into the lab: $FROSTROOT.
@@ -145,9 +193,14 @@ e2e_recipe() {
 		if [ "$E2E_DISTRO" != ubuntu ]; then
 			printf 'distro = "%s"\n' "$E2E_DISTRO"
 		fi
-		printf 'release = "%s"\narch = "amd64"\n\n' "$release"
-		printf '[user]\nname = "student"\nsudo = true\n\n'
-		printf '[wsl]\nsystemd = true\ndefault_user = "student"\n\n'
+		printf 'release = "%s"\narch = "amd64"\n' "$release"
+		if [ "$E2E_TARGET" = disk ]; then
+			printf 'target = "disk"\n'
+		fi
+		printf '\n[user]\nname = "student"\nsudo = true\n\n'
+		if [ "$E2E_TARGET" != disk ]; then
+			printf '[wsl]\nsystemd = true\ndefault_user = "student"\n\n'
+		fi
 		printf '[locale]\nlang = "en_US.UTF-8"\ntimezone = "UTC"\n\n'
 		# The lists are split on spaces on purpose: one name per word.
 		# shellcheck disable=SC2086
@@ -256,19 +309,63 @@ e2e_not() { ! "$@"; }                                             # COMMAND...
 e2e_same_file() { cmp -s "$1" "$2"; }                             # FILE FILE
 e2e_sha() { sha256sum "$1" 2> /dev/null | cut -d' ' -f1; }        # FILE: prints its SHA-256
 
-# e2e_entries TARBALL lists the tarball's entries into a file in the lab,
-# once per tarball, and prints the file's path. The names start with ./
-# When the tarball cannot be read there is no file, so every check against
+# e2e_entries IMAGE lists the image's entries into a file in the lab, once
+# per image, and prints the file's path: a tarball's as tar lists them, a
+# disk image's root as e2e_disk_dump lays it out. The names start with ./
+# When the image cannot be read there is no file, so every check against
 # the list fails rather than passing on an empty one.
 e2e_entries() {
-	local list=$LAB/entries-$(basename "$1").txt
+	local list=$LAB/entries-$(basename "$1").txt dump
 	if [ ! -s "$list" ] || [ "$1" -nt "$list" ]; then
-		if ! tar -tzf "$1" > "$list" 2> /dev/null; then
-			rm -f "$list"
-			echo "  cannot list $1" >&2
-		fi
+		case "$1" in
+		*.img)
+			if dump=$(e2e_disk_dump "$1") && [ -d "$dump" ]; then
+				(cd "$dump" && find . -mindepth 1 | sort) > "$list"
+			else
+				rm -f "$list"
+				echo "  cannot list $1" >&2
+			fi
+			;;
+		*)
+			if ! tar -tzf "$1" > "$list" 2> /dev/null; then
+				rm -f "$list"
+				echo "  cannot list $1" >&2
+			fi
+			;;
+		esac
 	fi
 	echo "$list"
+}
+
+# e2e_disk_root IMAGE copies the root partition out of a raw disk image into
+# the lab, once per image, by what sfdisk says of its table, and prints the
+# file's path. e2fsprogs' tools read it as the file system it is.
+e2e_disk_root() {
+	local image=$1 root=$LAB/root-of-$(basename "$1" .img).ext4 table start size
+	if [ ! -s "$root" ] || [ "$image" -nt "$root" ]; then
+		table=$(sfdisk --dump "$image" 2> /dev/null | grep 'name="root-x86-64"') || return 1
+		start=$(printf '%s' "$table" | sed -n 's/.*start= *\([0-9]*\),.*/\1/p')
+		size=$(printf '%s' "$table" | sed -n 's/.*size= *\([0-9]*\),.*/\1/p')
+		[ -n "$start" ] && [ -n "$size" ] || return 1
+		dd if="$image" of="$root" bs=512 skip="$start" count="$size" status=none || return 1
+	fi
+	echo "$root"
+}
+
+# e2e_disk_dump IMAGE dumps the root file system of a raw disk image into a
+# directory in the lab, once per image, as this user, with debugfs, and
+# prints the directory: enough to read any file, as e2e_unpack is for a
+# tarball. Ownership and device nodes are not kept.
+e2e_disk_dump() {
+	local image=$1 dir=$LAB/dump-of-$(basename "$1" .img) root
+	if [ ! -d "$dir" ] || [ "$image" -nt "$dir" ]; then
+		root=$(e2e_disk_root "$image") || return 1
+		rm -rf "$dir"
+		mkdir -p "$dir"
+		debugfs -R "rdump / $dir" "$root" > /dev/null 2>&1 || return 1
+		touch "$dir"
+	fi
+	echo "$dir"
 }
 
 # e2e_unpack TARBALL DIR [MEMBER...] unpacks as this user, without device
@@ -297,7 +394,10 @@ e2e_check_no_build_trust() {
 	local tarball=$1 entries apt
 	entries=$(e2e_entries "$tarball")
 	apt=$LAB/apt-of-$(basename "$tarball")
-	e2e_unpack "$tarball" "$apt" ./etc/apt
+	case "$tarball" in
+	*.img) apt=$(e2e_disk_dump "$tarball") ;;
+	*) e2e_unpack "$tarball" "$apt" ./etc/apt ;;
+	esac
 	e2e_check "the image has an /etc/apt/apt.conf.d to look in" test -d "$apt/etc/apt/apt.conf.d"
 	e2e_check "the image has no 99frostroot-build-ca" e2e_lacks "$entries" "99frostroot-build-ca"
 	e2e_check "no file of the build's is left at the image's root" e2e_lacks_match "$entries" '^\./frostroot-'

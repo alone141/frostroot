@@ -22,15 +22,16 @@ On a Windows checkout, run these through `scripts/wsl.sh` or
 
 | Scenario | Proves | Takes |
 |---|---|---|
-| `offline-identical` | Two offline rebuilds of one lock are byte-identical, the Python environment included, whatever `PYTHON` variables the build host has set (and for Fedora `MKOSI_DNF`), and leave the lock as it was. | ~30 min, ~5 for Fedora |
+| `offline-identical` | Two offline rebuilds of one lock are byte-identical, the Python environment included, whatever `PYTHON` variables the build host has set (and for Fedora `MKOSI_DNF`), and leave the lock as it was; with `E2E_TARGET=disk`, two offline disk images are. | ~30 min, ~5 for Fedora, ~45 for a disk |
 | `certificates` | `[certificates]` reaches the image and the lock. `--ca-bundle` reaches neither. Offline rebuilds are the same bytes with and without it. An offline build refuses a certificate changed under the lock. | ~30 min |
-| `no-build-leaks` | Two online builds frozen at one instant over HTTPS, one plain and one with `--ca-bundle` and `--insecure`, come out the same bytes. No file in the image names the build's work directory. | ~15 min, ~3 for Fedora |
+| `no-build-leaks` | Two online builds frozen at one instant over HTTPS, one plain and one with `--ca-bundle` and `--insecure`, come out the same bytes. No file in the image names the build's work directory. With `E2E_TARGET=disk`, the two disks' roots differ only in what carries the seed each build drew. | ~15 min, ~3 for Fedora, ~25 for a disk |
 | `insecure` | `build --insecure` warns and marks the Python resolve unverified in the lock. `vendor` and `build --offline` repeat the warning, and a verified `vendor` reports what it checked. | ~25 min |
 | `apt-trust` | The apt that mmdebstrap runs obeys the settings frostroot's setup hook writes, and the cleanup hook removes them. Shown by running mmdebstrap directly with a CA bundle that cannot verify the mirror. | ~10 min |
 | `pip-trust` | The pinned pip refuses a private authority, and accepts it with `--cert` or `--trusted-host`, against a local HTTPS server. | ~1 min |
-| `failed-build` | A misspelled package fails the build with exit 2. apt's own explanation, or dnf5's, is printed first, and neither a lock nor a tarball is written. | ~2 min |
+| `failed-build` | A misspelled package fails the build with exit 2. apt's own explanation, or dnf5's, is printed first, and neither a lock nor a tarball is written, nor a disk image with `E2E_TARGET=disk`. | ~2 min |
 | `capture-roundtrip` | `capture` of an image frostroot built writes a recipe that validates and asks for the same packages. | ~10 min |
 | `tui` | The full-screen form draws in a pseudo-terminal, searches the real archive and PyPI, and writes what was picked; for Fedora, moves the distribution to Fedora with the arrow key, searches Fedora's repositories, and writes a Fedora recipe. | ~3 min |
+| `disk-boot` | A disk image boots in QEMU with OVMF and Microsoft's keys, Secure Boot on: the password set from a hashed credential, a login on the serial line, systemd running with nothing failed, the root grown to fill the disk, DHCP and DNS, the host name, a machine id of its own, the SSH host keys made at the first boot; and with OVMF's snakeoil variables the firmware refuses it. Needs `qemu-system-x86_64`, `qemu-img`, `ovmf` and `python3`; `E2E_OVMF_DIR` names where the firmware files are. A real PC with Secure Boot on is the owner's check. | ~15 min without KVM |
 | `wsl-boot` | An image imports into WSL and boots: the user, sudo, systemd, DNS, locale, timezone, the Python environment, the recipe's certificate authority, and apt still verifying TLS; a Fedora image, its machine id, rpm and dnf5 instead of the last three. Needs `wsl.exe`, so it skips anywhere but WSL. `E2E_FROSTROOT=/path/to/binary` puts a release's binary through it. | ~15 min |
 | `harness` | The harness reports a failure when it should, and never removes anything outside its root. | seconds |
 
@@ -48,6 +49,17 @@ whatever the image's release.
 chooses Fedora in the form. The scenarios that check what only Ubuntu
 images have so far, `certificates`, `insecure` and `capture-roundtrip`,
 skip.
+
+On a host behind a network that inspects TLS, `E2E_CA_BUNDLE` names a PEM
+file of its authority: `offline-identical`, whose builds fetch Python
+packages, passes it as `--ca-bundle`, which reaches neither the image nor
+the lock.
+
+`E2E_TARGET=disk` builds a raw disk image instead of a tarball, of Ubuntu
+alone so far, in `offline-identical`, `no-build-leaks` and `failed-build`:
+`E2E_TARGET=disk scripts/e2e/run.sh offline-identical`. `disk-boot` always
+builds a disk. A disk scenario needs bubblewrap for the build, and reads
+the image back with the host's `sfdisk` and `debugfs`.
 
 ## Verdicts
 
