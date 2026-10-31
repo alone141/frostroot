@@ -170,7 +170,7 @@ kernel.apparmor_restrict_unprivileged_userns=0`; frostroot says so before
 it starts.
 
 The binary is static and runs on any distribution, including Ubuntu 20.04.
-Or from source, with Go 1.27.2 or newer, the version `go.mod` names:
+Or from source, with Go 1.27.3 or newer, the version `go.mod` names:
 
 ```sh
 go build -o frostroot ./cmd/frostroot
@@ -1621,7 +1621,13 @@ comparison was broken instead, and `TestBubblewrapRunKeepsOneBufferOneWriter`
 failed). The unprivileged path, where mmdebstrap's tree belongs to the
 subordinate ids and `unshare --map-auto` removes it, was not run here, where
 only root is available: it is `scripts/integration.sh`'s to run on a machine
-with user namespaces. CI did not run, at the owner's request.
+with user namespaces. CI ran on the pull request after all, and its
+govulncheck found GO-2026-6809, compromised intermediate certificates
+distrusted in `crypto/x509`, in go1.27.2, which go.mod pinned, disclosed
+since master last passed and reachable from the index's fetches; go1.27.3
+fixes it and go.mod now pins that. `scripts/check.sh --only vuln` reported
+the one on go1.27.2 and none on go1.27.3; `go mod tidy -diff` reported no
+change.
 
 
 ## Documentation
