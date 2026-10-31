@@ -1619,15 +1619,17 @@ defect: a tool's output collected in one buffer lost all that mke2fs wrote
 to stderr, which is fixed and pinned (its revert cannot compile, so the
 comparison was broken instead, and `TestBubblewrapRunKeepsOneBufferOneWriter`
 failed). The unprivileged path, where mmdebstrap's tree belongs to the
-subordinate ids and `unshare --map-auto` removes it, was not run here, where
-only root is available: it is `scripts/integration.sh`'s to run on a machine
-with user namespaces. CI ran on the pull request after all, and its
+subordinate ids and `unshare --map-auto` removes it, could not run here,
+where only root is available. CI ran on the pull request after all. Its
 govulncheck found GO-2026-6809, compromised intermediate certificates
 distrusted in `crypto/x509`, in go1.27.2, which go.mod pinned, disclosed
 since master last passed and reachable from the index's fetches; go1.27.3
-fixes it and go.mod now pins that. `scripts/check.sh --only vuln` reported
-the one on go1.27.2 and none on go1.27.3; `go mod tidy -diff` reported no
-change.
+fixes it and go.mod now pins that, `scripts/check.sh --only vuln` reported
+the one on go1.27.2 and none on go1.27.3, and `go mod tidy -diff` reported
+no change. And its integration job ran the unprivileged path as the
+runner's own user, on go1.27.3: `scripts/integration.sh` saw all eleven
+required tests pass, `TestIntegrationDiskToolsTree` among them, in 13
+minutes.
 
 
 ## Documentation
