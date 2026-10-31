@@ -11,6 +11,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"frostroot/internal/distro"
+	"frostroot/internal/recipe"
 )
 
 // ErrNoDiskTool means a program a disk build runs on the host is missing.
@@ -201,4 +204,189 @@ func (b *Bubblewrap) runCommand() CommandRunner {
 		return b.RunCommand
 	}
 	return runInterruptibly
+}
+
+// DiskToolsPackages are the disk tools tree's: what a disk build runs from
+// it to make the disk out of the image tarball. Every name is Ubuntu
+// 26.04's.
+var DiskToolsPackages = []string{
+	"e2fsprogs",       // mke2fs -d reads a tar since 1.47.1, and dates what it writes by SOURCE_DATE_EPOCH
+	"libarchive13t64", // which mke2fs loads at run time to read the tar, and which nothing pulls in
+	"dosfstools",      // mkfs.fat, for the EFI system partition
+	"mtools",          // mmd and mcopy, into it
+	"fdisk",           // sfdisk, for the partition table
+	"qemu-utils",      // qemu-img, for the qcow2
+	"tar",             // takes the boot files out of the tarball
+	"coreutils",       // dd places each partition
+}
+
+// diskToolsRelease is the Ubuntu release the tree is made from, whatever
+// the recipe's family or release: its e2fsprogs reads a tar and honors
+// SOURCE_DATE_EPOCH, and 24.04's does neither, so no two builds on a 24.04
+// host could match.
+const diskToolsRelease = "26.04"
+
+// diskToolsVariant is the package set the tree starts from: the essential
+// packages, and what DiskToolsPackages pull in.
+const diskToolsVariant = "essential"
+
+// What the tree's own work directory, under the build's, holds besides
+// mmdebstrap's log and TMPDIR.
+const (
+	diskToolsDirName   = "disk-tools"
+	diskToolsTreeName  = "tree"
+	diskToolsStageName = "stage" // what the lock is written from
+)
+
+// diskToolsTree is the tree a disk build runs its tools in: made by
+// mmdebstrap in the build's work directory, recorded in the lock, and
+// removed when the build is done with it.
+type diskToolsTree struct {
+	bootstrapper Bootstrapper
+	runner       ToolRunner
+	progress     Progress
+	release      distro.Release
+	mirrorURL    string // replaces the archive's URL, from --mirror; "" for the archive
+	trustPEM     []byte // what the tree's apt trusts beyond the host's store
+	insecure     bool
+	epoch        int64
+
+	// Set by make.
+	workDir  string // the tree's own work directory
+	dir      string // the tree, until remove
+	packages []recipe.LockPackage
+}
+
+// newDiskToolsTree resolves the release the tree is made from.
+func newDiskToolsTree(bootstrapper Bootstrapper, runner ToolRunner, options Options, trustPEM []byte, epoch int64, progress Progress) (*diskToolsTree, error) {
+	release, err := distro.Lookup(diskToolsRelease, distro.SupportedArch)
+	if err != nil {
+		return nil, err
+	}
+	return &diskToolsTree{
+		bootstrapper: bootstrapper,
+		runner:       runner,
+		progress:     progress,
+		release:      release,
+		mirrorURL:    options.MirrorURL,
+		trustPEM:     trustPEM,
+		insecure:     options.Insecure,
+		epoch:        epoch,
+	}, nil
+}
+
+// preflight checks the host for what runs the tools and removes the tree.
+func (d *diskToolsTree) preflight() error {
+	return d.runner.Preflight()
+}
+
+// archiveURL is where the tree's packages come from.
+func (d *diskToolsTree) archiveURL() string {
+	if d.mirrorURL != "" {
+		return d.mirrorURL
+	}
+	return d.release.ArchiveURL
+}
+
+// make has mmdebstrap install the tree under buildDir, as the tools tree
+// phase, and reads what it installed for the lock.
+func (d *diskToolsTree) make(ctx context.Context, buildDir string) error {
+	d.progress.Report(ProgressEvent{Phase: PhaseMakeToolsTree, Kind: EventPhaseStarted})
+	d.workDir = filepath.Join(buildDir, diskToolsDirName)
+	stageDir := filepath.Join(d.workDir, diskToolsStageName)
+	// Mode 0755 whatever the umask: mmdebstrap's user namespace is "other"
+	// to these directories.
+	if err := makeDirectoriesWithMode(stageDir, 0o755); err != nil {
+		return err
+	}
+	caInfoPath, err := writeAptCaInfo(d.workDir, d.trustPEM)
+	if err != nil {
+		return err
+	}
+	dpkgStatusPath := filepath.Join(stageDir, "dpkg-status")
+	listsDir := filepath.Join(stageDir, "lists")
+	spec := BootstrapSpec{
+		Suite:           d.release.Suite,
+		SourceLines:     d.release.SourceLines(d.mirrorURL),
+		Include:         DiskToolsPackages,
+		Variant:         diskToolsVariant,
+		CustomizeHooks:  diskToolsHooks(stageDir, dpkgStatusPath),
+		TreeDir:         filepath.Join(d.workDir, diskToolsTreeName),
+		WorkDir:         d.workDir,
+		Arch:            distro.SupportedArch, // the host's, which runs the tools
+		KeyringPath:     UbuntuArchiveKeyring,
+		SourceDateEpoch: d.epoch,
+		CaInfoPath:      caInfoPath,
+		Insecure:        d.insecure,
+		Progress:        toolsTreeProgress{d.progress},
+	}
+	// The tree exists from here on, in part at least, whatever mmdebstrap
+	// says of it, and remove must find it.
+	d.dir = spec.TreeDir
+	if err := d.bootstrapper.Run(ctx, spec); err != nil {
+		return describeTreeFailure(err)
+	}
+	installed, err := readDpkgStatus(dpkgStatusPath)
+	if err != nil {
+		return fmt.Errorf("the disk tools tree: %w", err)
+	}
+	if err := recordChecksums(listsDir, installed, indexOrigins(d.release, d.archiveURL(), nil)); err != nil {
+		return fmt.Errorf("the disk tools tree: %w", err)
+	}
+	d.packages = installed
+	d.progress.Report(ProgressEvent{Phase: PhaseMakeToolsTree, Kind: EventPhaseFinished})
+	return nil
+}
+
+// diskToolsHooks are the tree's customize hooks: what the lock is written
+// from, and nothing else, since the tree is run from and never shipped.
+func diskToolsHooks(stageDir, dpkgStatusPath string) []string {
+	return []string{
+		// The indexes apt verified; mmdebstrap deletes them in its cleanup,
+		// after the hooks. copy-out puts "lists" inside the destination.
+		"copy-out /var/lib/apt/lists " + shellQuote(stageDir),
+		"download /var/lib/dpkg/status " + shellQuote(dpkgStatusPath),
+	}
+}
+
+// describeTreeFailure says whose failure it is, and points the command line
+// at the tree's own mmdebstrap log rather than the image's.
+func describeTreeFailure(err error) error {
+	var bootstrapErr *BootstrapError
+	if errors.As(err, &bootstrapErr) {
+		bootstrapErr.Program = "mmdebstrap"
+		bootstrapErr.LogFile = filepath.Join(diskToolsDirName, LogFileName)
+	}
+	return fmt.Errorf("making the disk tools tree: %w", err)
+}
+
+// remove removes the tree make left, if any, however the build ended: an
+// interrupted build removes it too.
+func (d *diskToolsTree) remove(ctx context.Context) error {
+	if d.dir == "" {
+		return nil
+	}
+	dir := d.dir
+	d.dir = ""
+	if err := d.runner.RemoveTree(context.WithoutCancel(ctx), dir); err != nil {
+		return fmt.Errorf("removing the disk tools tree: %w", err)
+	}
+	return nil
+}
+
+// toolsTreeProgress reports mmdebstrap's output of the tree's build as lines
+// of the tools tree phase. The phases its parser recognizes are the image's,
+// and a display would see the build go backwards.
+type toolsTreeProgress struct {
+	progress Progress
+}
+
+func (p toolsTreeProgress) Report(event ProgressEvent) {
+	switch event.Kind {
+	case EventLogLine:
+		p.progress.Report(ProgressEvent{Phase: PhaseMakeToolsTree, Kind: EventLogLine, Line: event.Line})
+	case EventLogFile:
+		p.progress.Report(event)
+	case EventPhaseStarted, EventProgress, EventPhaseFinished:
+	}
 }

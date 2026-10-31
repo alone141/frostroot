@@ -23,6 +23,10 @@ type familyBuild interface {
 	checkAgainstLock() (packageCounts, error)
 	// composeLock returns the lock that records an online build's image.
 	composeLock() (recipe.Lockfile, packageCounts, error)
+	// buildTrustPEM returns the certificate authorities the build trusts
+	// while it fetches, beyond the host's own store: the recipe's and
+	// --ca-bundle's. The disk tools tree's apt trusts the same.
+	buildTrustPEM() []byte
 }
 
 // packageCounts is how many packages an image holds, for the Result.

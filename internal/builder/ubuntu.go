@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"frostroot/internal/distro"
@@ -126,8 +127,7 @@ func (u *ubuntuBuild) bootstrap(ctx context.Context, workDir string) (string, er
 	// source behind a proxy that inspects TLS needs the authority here too.
 	// Offline there is no source to fetch and no network to inspect.
 	if offline == nil {
-		buildTrustPEM := append(append([]byte(nil), u.certificates.PEM...), options.ExtraTrustPEM...)
-		caInfoPath, err := writeAptCaInfo(workDir, buildTrustPEM)
+		caInfoPath, err := writeAptCaInfo(workDir, u.buildTrustPEM())
 		if err != nil {
 			return "", err
 		}
@@ -204,6 +204,10 @@ func (u *ubuntuBuild) bootstrap(ctx context.Context, workDir string) (string, er
 	}
 	u.stage, u.installedPackages = stage, installedPackages
 	return u.bootstrapSpec.TarballPath, nil
+}
+
+func (u *ubuntuBuild) buildTrustPEM() []byte {
+	return slices.Concat(u.certificates.PEM, u.options.ExtraTrustPEM)
 }
 
 func (u *ubuntuBuild) checkAgainstLock() (packageCounts, error) {

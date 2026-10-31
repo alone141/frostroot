@@ -169,13 +169,17 @@ func (m *Mmdebstrap) bootstrapMode() string {
 // commandLine returns the mmdebstrap arguments for spec and the variables to
 // add to its environment.
 func (m *Mmdebstrap) commandLine(spec BootstrapSpec) (args, environment []string) {
+	variant := spec.Variant
+	if variant == "" {
+		variant = "important"
+	}
 	args = []string{
 		// Without a terminal mmdebstrap prints only its phase messages;
 		// --verbose adds apt's and dpkg's output, which is what the progress
 		// parser measures.
 		"--verbose",
 		"--mode=" + m.bootstrapMode(),
-		"--variant=important",
+		"--variant=" + variant,
 		"--architectures=" + spec.Arch,
 	}
 	if !spec.Trusted {
@@ -199,7 +203,13 @@ func (m *Mmdebstrap) commandLine(spec BootstrapSpec) (args, environment []string
 		args = append(args, "--customize-hook="+aptTrustCleanupHook)
 	}
 	// The source lines carry the components, so --components is not needed.
-	args = append(args, spec.Suite, spec.TarballPath)
+	target := spec.TarballPath
+	if spec.TreeDir != "" {
+		// mmdebstrap writes a directory to a path that does not exist and
+		// has no tarball suffix.
+		target = spec.TreeDir
+	}
+	args = append(args, spec.Suite, target)
 	args = append(args, spec.SourceLines...)
 	// mmdebstrap assembles the root filesystem in TMPDIR before packing it,
 	// and /tmp may be small or a tmpfs.
