@@ -308,7 +308,7 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 | `frostroot capture [--root DIR] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, starting with a page of what it found and what a recipe cannot carry, writes `frostroot.toml`, the signing keys of the third-party sources it could carry and the certificate authorities the machine added under `/usr/local/share/ca-certificates`, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys and certificates; needs no root. |
 | `frostroot validate` | Checks `frostroot.toml`, including that every source's key file is there and is a key, and prints every problem. No network, no root. |
 | `frostroot build [--mirror URL] [--ca-bundle FILE \| --insecure] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-<distro>-<release>-amd64.tar.gz`, such as `dist/lab-ubuntu-24.04-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. Refuses a disk recipe for now (exit 1). |
-| `frostroot vendor [--mirror URL] [--ca-bundle FILE \| --insecure] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, or `vendor/rpms/` for Fedora, and every wheel it names into `vendor/wheels/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name, including the partial download an abandoned run leaves behind. |
+| `frostroot vendor [--mirror URL] [--ca-bundle FILE \| --insecure] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, a disk image's tools tree's included, or `vendor/rpms/` for Fedora, and every wheel it names into `vendor/wheels/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name, including the partial download an abandoned run leaves behind. |
 | `frostroot build --offline [--keep-work] [--plain]` | Rebuilds the image from `frostroot.lock` and `vendor/debs/` or `vendor/rpms/`, without the network. Fails unless the result has exactly the lock's packages. The lock is read, not written. |
 | `frostroot version` | Prints the version and the commit it was built from. |
 
@@ -333,7 +333,7 @@ own server, which `--mirror`, an Ubuntu archive, does not replace.
 | Exit code | Meaning |
 |---|---|
 | 0 | success |
-| 1 | something you can fix: invalid or missing recipe, not Linux, mmdebstrap or ubuntu-keyring missing, for Fedora mkosi or a program it runs missing or an mkosi frostroot does not know, unusable work directory, a `dist/` you cannot write to; for `vendor` and `--offline`, no lock, a lock without checksums, a recipe that changed since the lock, an incomplete `vendor/debs/` or `vendor/rpms/` |
+| 1 | something you can fix: invalid or missing recipe, not Linux, mmdebstrap or ubuntu-keyring missing, for Fedora mkosi or a program it runs missing or an mkosi frostroot does not know, for a disk image bubblewrap or uidmap missing, unusable work directory, a `dist/` you cannot write to; for `vendor` and `--offline`, no lock, a lock without checksums, a recipe that changed since the lock, an incomplete `vendor/debs/` or `vendor/rpms/` |
 | 2 | the build failed: mmdebstrap or mkosi failed (unknown package, mirror unreachable), provisioning failed, the tarball could not be placed, an offline build's packages differ from the lock; for `vendor`, a download failed or a file did not match its checksum |
 | 130 | interrupted with Ctrl-C; nothing is written and the work directory is kept; `vendor` keeps finished downloads |
 
@@ -379,6 +379,19 @@ user's password is set at the first boot, so none is in the recipe. `init
 release, and `edit` moves a recipe between the two targets, carrying every
 answer. The design is in the
 [bare-metal spec](docs/superpowers/specs/2026-10-09-frostroot-bare-metal.md).
+
+This version also carries what a disk build will assemble the disk with,
+reached only by its tests until `build` makes disks: a **disk tools tree**,
+a small Ubuntu 26.04 tree of e2fsprogs, dosfstools, mtools, fdisk and
+qemu-utils that mmdebstrap makes in the build's work directory before the
+image, whose programs run through bubblewrap with an environment of
+frostroot's own, and which goes when the build is done. The lock records its
+packages as `disk_tools`; `vendor` fetches them into `vendor/debs/` beside
+the image's, and an offline build makes the tree from them and refuses one
+that is not the lock's. It is 26.04's tree whatever the recipe's release,
+because its e2fsprogs reads a tarball and dates what it writes by the frozen
+instant, and 24.04's does neither. A disk build will need `bubblewrap` and,
+unprivileged, `uidmap`, on top of mmdebstrap.
 
 ## Finding packages
 
@@ -1591,6 +1604,25 @@ binary this pull request starts from, rebuilt offline by that binary and by
 this pull request's to the same SHA-256, `79fb9edb`, with the lock untouched
 by both.
 
+The second pull request made the disk tools tree, with nothing assembled
+from it yet. Run here: `scripts/check.sh` clean on each commit, with
+golangci-lint v2.14.0 built with go1.27.2; and `TestIntegrationDiskToolsTree`
+as root, in a container on Ubuntu 24.04 with mmdebstrap 1.4.3 and bubblewrap
+0.9.0, in 51 s: mmdebstrap made the 26.04 tree, 104 packages with e2fsprogs
+1.47.2, in 34 s; mke2fs, mcopy, sfdisk, qemu-img, tar and dd answered
+through bubblewrap, mkfs.fat wrote a FAT onto a file under `/work`, and
+`env` in the sandbox showed frostroot's five variables, the `PWD` bwrap
+sets, and nothing of the host's; the 104 packages were vendored from the
+archive, a tree from the pool alone held the same 104, as the lock records
+them, in 12 s, and both trees were removed. The test's first run found a
+defect: a tool's output collected in one buffer lost all that mke2fs wrote
+to stderr, which is fixed and pinned (its revert cannot compile, so the
+comparison was broken instead, and `TestBubblewrapRunKeepsOneBufferOneWriter`
+failed). The unprivileged path, where mmdebstrap's tree belongs to the
+subordinate ids and `unshare --map-auto` removes it, was not run here, where
+only root is available: it is `scripts/integration.sh`'s to run on a machine
+with user namespaces. CI did not run, at the owner's request.
+
 
 ## Documentation
 
@@ -1637,7 +1669,7 @@ internal/pgp/       OpenPGP public keys: armor, the fingerprint of every primary
 internal/tui/       the full-screen form with its package picker, and the progress screen (the only package using the Charm libraries)
 internal/recipe/    frostroot.toml and frostroot.lock: types, strict parsing, validation
 internal/distro/    the families frostroot builds: Ubuntu's releases, archive URL, components and pocket lines, and Fedora's releases, repositories and signing key
-internal/builder/   orchestration and what depends on the family; for Ubuntu, the mmdebstrap runner and progress parser, provisioning, the Python step, dpkg status, lock checksums, offline builds; for Fedora, the mkosi runner, its configuration and scripts, the tools tree, the lock from dnf5's records, and the local repositories of an offline build
+internal/builder/   orchestration and what depends on the family; for Ubuntu, the mmdebstrap runner and progress parser, provisioning, the Python step, dpkg status, lock checksums, offline builds; for a disk image, the tools tree mmdebstrap makes, the bubblewrap runner that runs its programs and removes it, and the lock's record of it; for Fedora, the mkosi runner, its configuration and scripts, the tools tree, the lock from dnf5's records, and the local repositories of an offline build
 internal/pool/      the vendored pools: manifests from the lock, verify, fetch (with Launchpad's and Koji's fallbacks), prune, stage as a flat repository or a directory of files
 internal/deb/       Debian formats: control stanzas, Packages indexes, .deb control files, flat repository index
 internal/export/    tarball naming and atomic placement
