@@ -284,6 +284,10 @@ func mkdirAllReadable(dir string) error {
 	return nil
 }
 
+func (f *fedoraBuild) buildTrustPEM() []byte {
+	return f.options.ExtraTrustPEM
+}
+
 // checkAgainstLock fails when the rebuilt image, or the tools tree that made
 // it, holds other packages than the lock, or took one from another
 // repository.

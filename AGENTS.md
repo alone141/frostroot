@@ -110,7 +110,9 @@ Hand-typed alternatives break in ways that are easy to miss:
 - Only mmdebstrap or mkosi writes the tarball. Go code never tars, walks
   or deletes a root filesystem, because ownership, hardlinks and
   capabilities would come out wrong. `internal/export` only names and
-  places the tarball, and mkosi removes the Fedora tools tree it made.
+  places the tarball, mkosi removes the Fedora tools tree it made, and `rm`
+  removes the disk tools tree, in the user namespace that made it
+  (`Bubblewrap.RemoveTree`).
 - Two offline builds of one lock are byte-identical. Online builds and
   offline builds are not promised to match. An offline build takes
   everything from the lock and never writes it: the frozen instant, the deb
@@ -213,9 +215,10 @@ Hand-typed alternatives break in ways that are easy to miss:
   mmdebstrap. Use `t.TempDir()`, and inject the environment through
   `Getenv`.
 - Integration tests carry the `integration` build tag, are named
-  `TestIntegration*`, and call `skipUnlessMmdebstrapAvailable`, or for
-  Fedora `skipUnlessFedoraToolsAvailable`. `scripts/integration.sh`
-  requires ten of them by name, so renaming one means editing that list.
+  `TestIntegration*`, and call `skipUnlessMmdebstrapAvailable`, for
+  Fedora `skipUnlessFedoraToolsAvailable`, or for the disk tools tree
+  `skipUnlessDiskToolsAvailable`. `scripts/integration.sh` requires eleven
+  of them by name, so renaming one means editing that list.
 - A fake implements the real interface and lives in the test file that uses
   it. `builder` and `cli` each have their own `fakeBootstrapper`.
 - New hook text is run through a real `sh`, with hostile paths.

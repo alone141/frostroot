@@ -133,6 +133,32 @@ func TestMmdebstrapCommandLine(t *testing.T) {
 	}
 }
 
+// TestMmdebstrapCommandLineForATree: the disk tools tree is a directory of
+// the essential variant, with its own TMPDIR beside it.
+func TestMmdebstrapCommandLineForATree(t *testing.T) {
+	args, environment := (&Mmdebstrap{CurrentUID: uidFunc(0)}).commandLine(BootstrapSpec{
+		Suite:       "resolute",
+		SourceLines: []string{"deb http://a resolute main"},
+		Include:     []string{"e2fsprogs", "mtools"},
+		Variant:     "essential",
+		TreeDir:     "/w/disk-tools/tree",
+		WorkDir:     "/w/disk-tools",
+		Arch:        "amd64",
+		KeyringPath: "/k.gpg",
+	})
+	wantArgs := []string{
+		"--verbose", "--mode=root", "--variant=essential", "--architectures=amd64", "--keyring=/k.gpg",
+		"--include=e2fsprogs,mtools",
+		"resolute", "/w/disk-tools/tree", "deb http://a resolute main",
+	}
+	if !slices.Equal(args, wantArgs) {
+		t.Errorf("args =\n%s\nwant\n%s", strings.Join(args, "\n"), strings.Join(wantArgs, "\n"))
+	}
+	if want := []string{"TMPDIR=/w/disk-tools/tmp"}; !slices.Equal(environment, want) {
+		t.Errorf("environment = %q, want %q", environment, want)
+	}
+}
+
 func TestMmdebstrapCommandLineDefaultsAndOptionalFlags(t *testing.T) {
 	minimalSpec := BootstrapSpec{Suite: "noble", TarballPath: "/t", WorkDir: "/w", Arch: "amd64"}
 	args, environment := (&Mmdebstrap{CurrentUID: uidFunc(1000)}).commandLine(minimalSpec)

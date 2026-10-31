@@ -50,15 +50,23 @@ var (
 
 // BootstrapSpec is everything a Bootstrapper needs to build one image.
 type BootstrapSpec struct {
-	Suite             string   // apt code name, such as "noble"
-	SourceLines       []string // "deb ..." lines: the three pockets, or offline the one local repository
-	Include           []string // packages to install on top of the base system
-	CustomizeHooks    []string // mmdebstrap --customize-hook arguments, in order
-	TarballPath       string   // where the bootstrapper writes the image
-	WorkDir           string   // scratch space; during Preflight, the work root instead
-	Arch              string   // CPU architecture, such as "amd64"
-	InstallRecommends bool     // install Recommends, as apt does by default
-	KeyringPath       string   // keyring that verifies the archive; unused when Trusted
+	Suite          string   // apt code name, such as "noble"
+	SourceLines    []string // "deb ..." lines: the three pockets, or offline the one local repository
+	Include        []string // packages to install on top of the base system
+	CustomizeHooks []string // mmdebstrap --customize-hook arguments, in order
+	TarballPath    string   // where the bootstrapper writes the image
+	// TreeDir, when set, is the directory the bootstrapper writes the root
+	// filesystem to instead of a tarball at TarballPath: the disk tools
+	// tree, which a build runs programs from rather than ships.
+	TreeDir string
+	// Variant is mmdebstrap's: the package set the root filesystem starts
+	// from. "" is "important", what every image is built from; the disk
+	// tools tree is "essential".
+	Variant           string
+	WorkDir           string // scratch space; during Preflight, the work root instead
+	Arch              string // CPU architecture, such as "amd64"
+	InstallRecommends bool   // install Recommends, as apt does by default
+	KeyringPath       string // keyring that verifies the archive; unused when Trusted
 	// Trusted means the source lines carry [trusted=yes] and no keyring is
 	// involved: an offline build's local repository, whose files frostroot
 	// verified against the lock itself.
@@ -143,10 +151,12 @@ type Result struct {
 }
 
 // Builder runs builds: an Ubuntu recipe's with its Bootstrapper, a Fedora
-// recipe's with its Fedora bootstrapper.
+// recipe's with its Fedora bootstrapper, and a disk recipe's with the
+// Bootstrapper making the disk tools tree and Tools running what is in it.
 type Builder struct {
 	Bootstrapper Bootstrapper
 	Fedora       FedoraBootstrapper
+	Tools        ToolRunner
 }
 
 // Build builds imageRecipe, which the caller has already checked with
@@ -181,6 +191,10 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if err != nil {
 		return Result{}, err
 	}
+	disk := imageRecipe.Target() == recipe.TargetDisk
+	if disk && family == distro.Fedora {
+		return Result{}, fmt.Errorf("%w: a Fedora disk image comes in a later version", ErrFedoraOption)
+	}
 	image, offline, err := b.newFamilyBuild(family, imageRecipe, options, progress)
 	if err != nil {
 		return Result{}, err
@@ -189,6 +203,17 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if err != nil {
 		return Result{}, err
 	}
+	// The tree a disk build makes the disk with, nil for a tarball: what
+	// every family shares, as the instant is.
+	var tools *diskToolsTree
+	if disk {
+		if b.Tools == nil {
+			return Result{}, errors.New("this frostroot was built without a disk tool runner")
+		}
+		if tools, err = newDiskToolsTree(b.Bootstrapper, b.Tools, options, image.buildTrustPEM(), instant.epoch, offline, progress); err != nil {
+			return Result{}, err
+		}
+	}
 	currentUID := os.Getuid()
 	workRoot, err := WorkRoot(getenv, currentUID)
 	if err != nil {
@@ -196,6 +221,11 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	}
 	if err := image.preflight(ctx, workRoot, instant); err != nil {
 		return Result{}, err
+	}
+	if tools != nil {
+		if err := tools.preflight(); err != nil {
+			return Result{}, err
+		}
 	}
 	if err := checkOutputWritable(options.RecipeDir); err != nil {
 		return Result{}, err
@@ -221,6 +251,10 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	failBuild := func(err error) (Result, error) {
 		// Best effort throughout: the build has already failed, and that
 		// error is the one returned.
+		if tools != nil {
+			// The tree is no evidence of the failure; its log is, and stays.
+			_ = tools.remove(ctx)
+		}
 		if temporaryLockPath != "" {
 			_ = os.Remove(temporaryLockPath)
 		}
@@ -233,6 +267,13 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		return result, err
 	}
 
+	// The tree first: it takes a minute where the image takes several, and
+	// a host that cannot make it fails before the long step.
+	if tools != nil {
+		if err := tools.make(ctx, workDir); err != nil {
+			return failBuild(err)
+		}
+	}
 	builtTarballPath, err = image.bootstrap(ctx, workDir)
 	if err != nil {
 		return failBuild(err)
@@ -252,6 +293,12 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		if lock, counts, err = image.composeLock(); err != nil {
 			return failBuild(err)
 		}
+		if tools != nil {
+			// A lock for WSL names no target, as every lock written before
+			// there was a second target does.
+			lock.Target = recipe.TargetDisk
+			lock.DiskTools = tools.packages
+		}
 		result.PythonPackageCount = counts.python
 		temporaryLockPath, err = writeTemporaryLock(options.RecipeDir, lock)
 		if err != nil {
@@ -264,6 +311,14 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	// proves nothing.
 	if builtTarball, err := os.Stat(builtTarballPath); err != nil || builtTarball.Size() == 0 {
 		return failBuild(fmt.Errorf("bootstrap reported success but left no tarball at %s", builtTarballPath))
+	}
+	// The tree has done its work, and goes before anything lands in dist/:
+	// a tree that cannot be removed is a failed build, not a placed image
+	// with a warning, as it is for mkosi's.
+	if tools != nil {
+		if err := tools.remove(ctx); err != nil {
+			return failBuild(err)
+		}
 	}
 	progress.Report(ProgressEvent{Phase: PhasePlaceTarball, Kind: EventPhaseStarted})
 	tarballPath := filepath.Join(options.RecipeDir, export.TarballRelPath(imageRecipe.Image.Name, string(family), imageRecipe.Image.Release, imageRecipe.Image.Arch))
@@ -391,7 +446,7 @@ const maxNamedPoolProblems = 10
 func stageRepository(offline *offlinePlan, repositoryDir string, progress Progress) error {
 	progress.Report(ProgressEvent{Phase: PhasePrepareRepository, Kind: EventPhaseStarted})
 	release := deb.FlatRelease{Suite: offline.lock.Suite, Arch: offline.lock.Arch, Date: time.Now()}
-	err := pool.Stage(offline.poolDir, offline.entries, repositoryDir, release, func(doneBytes, totalBytes int64) {
+	err := pool.Stage(offline.poolDir, offline.entriesFor(offline.lock.Packages), repositoryDir, release, func(doneBytes, totalBytes int64) {
 		progress.Report(ProgressEvent{Phase: PhasePrepareRepository, Kind: EventProgress, Done: doneBytes, Total: totalBytes, Unit: UnitBytes})
 	})
 	if err != nil {

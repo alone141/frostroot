@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -54,8 +55,11 @@ func (k packageKey) String() string { return k.name + " " + k.version + " " + k.
 type offlinePlan struct {
 	lockPath string
 	lock     recipe.Lockfile
-	entries  []pool.Entry
-	poolDir  string
+	// entries is everything the pool must hold, once each: the image's
+	// packages and, for a disk image, the disk tools tree's; entriesFor
+	// picks either's.
+	entries []pool.Entry
+	poolDir string
 	// wheelEntries and wheelPoolDir are the Python side, empty for a lock
 	// with no Python packages.
 	wheelEntries []pool.Entry
@@ -64,12 +68,47 @@ type offlinePlan struct {
 
 // packageNames returns every locked package name, sorted, for --include.
 func (p *offlinePlan) packageNames() []string {
-	names := make([]string, 0, len(p.lock.Packages))
-	for _, locked := range p.lock.Packages {
+	return lockedNames(p.lock.Packages)
+}
+
+// lockedNames returns the names of packages, sorted, once each.
+func lockedNames(packages []recipe.LockPackage) []string {
+	names := make([]string, 0, len(packages))
+	for _, locked := range packages {
 		names = append(names, locked.Name)
 	}
 	slices.Sort(names)
 	return slices.Compact(names)
+}
+
+// entriesFor returns the pool entries of packages, in their order: the
+// image's for a local repository the image installs from, the disk tools
+// tree's for its own, so that neither sees the other's versions.
+func (p *offlinePlan) entriesFor(packages []recipe.LockPackage) []pool.Entry {
+	byFileName := map[string]pool.Entry{}
+	for _, entry := range p.entries {
+		byFileName[entry.FileName] = entry
+	}
+	entries := make([]pool.Entry, 0, len(packages))
+	for _, locked := range packages {
+		entries = append(entries, byFileName[path.Base(locked.Filename)])
+	}
+	return entries
+}
+
+// checkDiskToolsLock checks what a disk image's lock says of the tree an
+// offline build makes, which is hostile input: packages it has, each with
+// a name apt can be asked for.
+func checkDiskToolsLock(lock recipe.Lockfile) error {
+	if len(lock.DiskTools) == 0 {
+		return fmt.Errorf("%w: it records no disk tools; run frostroot build online, then frostroot vendor", pool.ErrBadLock)
+	}
+	for _, locked := range lock.DiskTools {
+		if err := recipe.CheckPackageName(locked.Name); err != nil {
+			return fmt.Errorf("%w: disk tools: %w", pool.ErrBadLock, err)
+		}
+	}
+	return nil
 }
 
 // checkLockTarget refuses a lock made for the other target. A disk image's
@@ -117,6 +156,11 @@ func planOffline(recipeDir string, imageRecipe recipe.Recipe, release distro.Rel
 	}
 	if err != nil {
 		return nil, err
+	}
+	if imageRecipe.Target() == recipe.TargetDisk {
+		if err := checkDiskToolsLock(lock); err != nil {
+			return nil, err
+		}
 	}
 	// The lock's source lines become the image's sources.list. With none,
 	// nothing would be staged in their place, and the line mmdebstrap was
@@ -444,22 +488,22 @@ func packagesIndexFiles(listsDir string, origins []indexOrigin) ([]indexFile, er
 
 // readIndexFile streams the entries of one index, gunzipping if its name
 // says so.
-func readIndexFile(path string, visit func(deb.IndexEntry) error) error {
-	file, err := os.Open(path)
+func readIndexFile(indexPath string, visit func(deb.IndexEntry) error) error {
+	file, err := os.Open(indexPath)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = file.Close() }() // read-only: closing cannot lose data
 	var reader io.Reader = file
-	if strings.HasSuffix(path, ".gz") {
+	if strings.HasSuffix(indexPath, ".gz") {
 		gzipReader, err := gzip.NewReader(file)
 		if err != nil {
-			return fmt.Errorf("%s: %w", path, err)
+			return fmt.Errorf("%s: %w", indexPath, err)
 		}
 		reader = gzipReader
 	}
 	if err := deb.ReadIndexEntries(reader, visit); err != nil {
-		return fmt.Errorf("%s: %w", filepath.Base(path), err)
+		return fmt.Errorf("%s: %w", filepath.Base(indexPath), err)
 	}
 	return nil
 }

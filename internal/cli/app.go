@@ -160,7 +160,7 @@ func (a *App) withDefaults() *App {
 		a.BuildInfo = debug.ReadBuildInfo
 	}
 	if a.Builder == nil {
-		a.Builder = &builder.Builder{Bootstrapper: &builder.Mmdebstrap{}, Fedora: &builder.Mkosi{}}
+		a.Builder = &builder.Builder{Bootstrapper: &builder.Mmdebstrap{}, Fedora: &builder.Mkosi{}, Tools: &builder.Bubblewrap{}}
 	}
 	return a
 }

@@ -94,6 +94,43 @@ func (f *vendorFixture) addWheels(t *testing.T, names ...string) {
 	f.saveLock(t)
 }
 
+// addDiskTools makes the fixture's lock a disk image's, with a tree of
+// e2fsprogs, served by the same server, and libc6, which the image holds
+// too.
+func (f *vendorFixture) addDiskTools(t *testing.T) {
+	t.Helper()
+	f.lock.Target = recipe.TargetDisk
+	content := []byte("deb e2fsprogs" + strings.Repeat(".", 50))
+	digest := sha256.Sum256(content)
+	urlPath := "pool/main/e/e2fsprogs/e2fsprogs_1.47.2-3ubuntu1_amd64.deb"
+	f.files[urlPath] = content
+	f.lock.DiskTools = []recipe.LockPackage{
+		{Name: "e2fsprogs", Version: "1.47.2-3ubuntu1", Arch: "amd64", SHA256: hex.EncodeToString(digest[:]), Size: int64(len(content)), Filename: urlPath},
+		f.lock.Packages[1],
+	}
+	f.saveLock(t)
+}
+
+func TestVendorFetchesTheDiskToolsToo(t *testing.T) {
+	fixture := newVendorFixture(t)
+	fixture.addDiskTools(t)
+	var stdout, stderr bytes.Buffer
+	if exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Vendored 3 packages (") || !strings.Contains(stdout.String(), "into vendor/debs: 3 downloaded.") {
+		t.Errorf("stdout should count the image's two files and the tree's one more, once each:\n%s", stdout.String())
+	}
+	for _, name := range []string{"curl_1_amd64.deb", "libc6_1_amd64.deb", "e2fsprogs_1.47.2-3ubuntu1_amd64.deb"} {
+		if _, err := os.Stat(filepath.Join(fixture.poolDir(), name)); err != nil {
+			t.Errorf("%s was not vendored: %v", name, err)
+		}
+	}
+	if requests := fixture.requests.Load(); requests != 3 {
+		t.Errorf("the server saw %d requests, want 3: libc6 is vendored once", requests)
+	}
+}
+
 func TestVendorFillsBothPools(t *testing.T) {
 	fixture := newVendorFixture(t)
 	fixture.addWheels(t, "numpy", "six")

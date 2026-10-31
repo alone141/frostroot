@@ -64,14 +64,25 @@ type fakeBootstrapper struct {
 	skipTarball        bool
 	emptyTarball       bool   // mmdebstrap creates its output file before it starts
 	pipReport          string // written where the Python step's download hook says; "" writes none
+	// For the disk tools tree, a second run with TreeDir set: what the
+	// tree's status and indexes say, or an error instead.
+	treeDpkgStatus string            // defaults to sampleToolsDpkgStatus
+	treeAptLists   map[string]string // defaults to sampleToolsAptLists()
+	treeRunErr     error
 
 	runCount          int
 	lastSpec          BootstrapSpec
+	treeRan           bool
+	treeSpec          BootstrapSpec
+	treeCaInfo        string          // the bundle the tree's apt was pointed at, as Run found it
 	stageFilesPresent map[string]bool // stage file name to whether it existed when Run was called
 	stagedSourcesList string          // the staged sources.list as Run found it; the work directory is gone afterwards
 }
 
 func (f *fakeBootstrapper) Run(_ context.Context, spec BootstrapSpec) error {
+	if spec.TreeDir != "" {
+		return f.runTree(spec)
+	}
 	f.runCount++
 	f.lastSpec = spec
 	f.stageFilesPresent = map[string]bool{}
@@ -121,6 +132,35 @@ func (f *fakeBootstrapper) Run(_ context.Context, spec BootstrapSpec) error {
 	dpkgStatus := f.dpkgStatus
 	if dpkgStatus == "" {
 		dpkgStatus = sampleDpkgStatus
+	}
+	return os.WriteFile(hookArgument(spec.CustomizeHooks, "download /var/lib/dpkg/status "), []byte(dpkgStatus), 0o644)
+}
+
+// runTree is Run for the disk tools tree: the directory, as a failed
+// mmdebstrap leaves one too, and the records the hooks ask for.
+func (f *fakeBootstrapper) runTree(spec BootstrapSpec) error {
+	f.treeRan, f.treeSpec = true, spec
+	if caInfo, err := os.ReadFile(spec.CaInfoPath); err == nil {
+		f.treeCaInfo = string(caInfo)
+	}
+	if err := os.MkdirAll(filepath.Join(spec.TreeDir, "usr", "sbin"), 0o755); err != nil {
+		return err
+	}
+	if f.treeRunErr != nil {
+		return f.treeRunErr
+	}
+	if listsParent := hookArgument(spec.CustomizeHooks, "copy-out /var/lib/apt/lists "); listsParent != "" {
+		aptLists := f.treeAptLists
+		if aptLists == nil {
+			aptLists = sampleToolsAptLists()
+		}
+		if err := writeAptLists(filepath.Join(listsParent, "lists"), listsForSpec(aptLists, spec)); err != nil {
+			return err
+		}
+	}
+	dpkgStatus := f.treeDpkgStatus
+	if dpkgStatus == "" {
+		dpkgStatus = sampleToolsDpkgStatus
 	}
 	return os.WriteFile(hookArgument(spec.CustomizeHooks, "download /var/lib/dpkg/status "), []byte(dpkgStatus), 0o644)
 }

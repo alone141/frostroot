@@ -714,6 +714,7 @@ func TestBuildPreflightFailuresAreUserErrors(t *testing.T) {
 		fmt.Errorf("%w at /usr/share/keyrings/ubuntu-archive-keyring.gpg", builder.ErrNoKeyring),
 		fmt.Errorf("%w: mkosi, createrepo_c; install with: sudo apt install mkosi createrepo-c", builder.ErrNoFedoraTool),
 		fmt.Errorf("%w: this host has mkosi %q, and frostroot builds Fedora with 20.2", builder.ErrMkosiVersion, "25.3"),
+		fmt.Errorf("%w: bwrap; install with: sudo apt install bubblewrap", builder.ErrNoDiskTool),
 	}
 	for _, preflightErr := range preflightErrors {
 		t.Run(preflightErr.Error(), func(t *testing.T) {

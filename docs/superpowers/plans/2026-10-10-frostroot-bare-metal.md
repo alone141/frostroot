@@ -101,22 +101,46 @@ says the disk target comes in a later version (exit 1).
    `dosfstools`, `mtools`, `fdisk`, `qemu-utils`, `tar` and `coreutils`, in
    the build's work directory, removed when the build ends whatever
    happens. Online it reads the archive frostroot already uses for 26.04;
-   its packages go into the lock's `disk_tools`.
+   its packages go into the lock's `disk_tools`. (As built: the tree is
+   made before the image, since it takes a minute where the image takes
+   several, and a host that cannot make it fails before the long step; it
+   has a work directory of its own under the build's, `disk-tools/`, with
+   mmdebstrap's log, TMPDIR and the stage the lock is written from; its apt
+   trusts what the image's apt trusts, `--ca-bundle` and `[certificates]`,
+   which the family build says in `buildTrustPEM`; and the lock names
+   `target = "disk"` from this pull request on, which pull request 1's
+   offline check already reads. A failed removal fails the build before
+   anything lands in `dist/`, as mkosi's does.)
 8. **Running a tool in it.** One function runs a tool with bubblewrap, the
    tree read-only as `/`, the work directory bound read-write at `/work`,
    and an environment of its own: `PATH`, `LC_ALL=C.UTF-8`, `TZ=UTC`,
    `SOURCE_DATE_EPOCH`, `MTOOLS_SKIP_CHECK=1`, nothing from the host's.
    Preflight checks for `bwrap` (a sentinel error with an install hint,
    exit 1 through `reportBuildFailure`). Tests: the argument list for
-   hostile work paths; a fake runner in the builder's tests.
+   hostile work paths; a fake runner in the builder's tests. (As built:
+   bwrap binds the tree's `/usr` and `/etc` read-only onto its own root,
+   with the merged-`/usr` links beside them, rather than the tree as `/`,
+   because a mount point for `/work` cannot be made under a read-only root.
+   The runner also removes the tree, with `rm` in a user namespace that
+   maps the subordinate ids again, `unshare --map-root-user --map-auto`, as
+   mmdebstrap's manual says to; its preflight asks for `unshare` and
+   uidmap's helpers too, unprivileged.)
 9. **`vendor` and the offline tree.** `vendor` fetches `disk_tools` into
    `vendor/debs/` beside the image's packages, checked by SHA-256 before
    the rename; `build --offline` makes the tree from the pool and compares
-   it with the lock afterwards.
+   it with the lock afterwards. (As built: the manifest lists the image's
+   files and then the tree's, once each, a file both hold with one checksum
+   being one file; the tree's local repository holds the tree's files and
+   the image's the image's, so that a 24.04 image's apt never sees the
+   tree's versions; and the tree is compared with the lock as soon as it is
+   made, before the image is built with it.)
 10. **Integration.** `TestIntegrationDiskToolsTree`: the tree is made,
     each tool answers `--version` through the runner, and an offline tree
     from a vendored lock holds the same packages. `scripts/integration.sh`
-    requires it.
+    requires it. (As built: the test also runs `mkfs.fat` on a file under
+    `/work` and `env`, which prove the work directory is bound read-write
+    and the environment is frostroot's five variables alone; the script
+    fails on a skip for want of bubblewrap too.)
 
 ## Pull request 3: the Ubuntu disk
 
