@@ -26,6 +26,12 @@ func TarballRelPath(imageName, family, release, arch string) string {
 	return filepath.Join("dist", fmt.Sprintf("%s-%s-%s-%s.tar.gz", imageName, family, release, arch))
 }
 
+// ImageRelPath returns where the raw disk image of a family lands, relative
+// to the recipe directory.
+func ImageRelPath(imageName, family, release, arch string) string {
+	return filepath.Join("dist", fmt.Sprintf("%s-%s-%s-%s.img", imageName, family, release, arch))
+}
+
 // CopyProgressFunc is told, after every chunk, how far a copy across
 // filesystems has got. A rename reports nothing: it is instant.
 type CopyProgressFunc func(copiedBytes, totalBytes int64)
@@ -94,9 +100,9 @@ func stage(sourcePath, destinationPath string, rename renameFunc, onCopyProgress
 	return stagedPath, nil
 }
 
-// copyInto copies the file at sourcePath into destination, reporting its
-// progress, and syncs it, so that what the caller renames into place is on
-// disk.
+// copyInto copies the file at sourcePath into destination, keeping its
+// holes where the system can, reporting its progress, and syncs it, so
+// that what the caller renames into place is on disk.
 func copyInto(sourcePath string, destination *os.File, onCopyProgress CopyProgressFunc) error {
 	source, err := os.Open(sourcePath)
 	if err != nil {
@@ -109,28 +115,36 @@ func copyInto(sourcePath string, destination *os.File, onCopyProgress CopyProgre
 	if err != nil {
 		return err
 	}
-	var writer io.Writer = destination
-	if onCopyProgress != nil {
-		writer = &progressWriter{writer: destination, totalBytes: sourceInfo.Size(), onProgress: onCopyProgress}
+	size := sourceInfo.Size()
+	report := func(copied int64) {
+		if onCopyProgress != nil {
+			onCopyProgress(copied, size)
+		}
 	}
-	if _, err := io.Copy(writer, source); err != nil {
+	if err := copyKeepingHoles(source, destination, size, report); err != nil {
 		return err
 	}
 	return destination.Sync()
+}
+
+// copyWhole copies size bytes of source into destination as they are,
+// reporting as it goes.
+func copyWhole(source, destination *os.File, size int64, report func(copied int64)) error {
+	_, err := io.Copy(&progressWriter{writer: destination, report: report}, io.LimitReader(source, size))
+	return err
 }
 
 // progressWriter reports the running total of bytes written through it.
 type progressWriter struct {
 	writer      io.Writer
 	writtenByte int64
-	totalBytes  int64
-	onProgress  CopyProgressFunc
+	report      func(copied int64)
 }
 
 func (w *progressWriter) Write(data []byte) (int, error) {
 	written, err := w.writer.Write(data)
 	w.writtenByte += int64(written)
-	w.onProgress(w.writtenByte, w.totalBytes)
+	w.report(w.writtenByte)
 	return written, err
 }
 

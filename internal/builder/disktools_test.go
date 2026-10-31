@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -274,6 +275,7 @@ type fakeToolRunner struct {
 	runs                 []ToolRun
 	removed              []string
 	lockPresentAtRemoval bool
+	runsAtRemoval        int // how many tools had run when the tree was removed
 }
 
 func (f *fakeToolRunner) Preflight() error {
@@ -284,16 +286,29 @@ func (f *fakeToolRunner) Preflight() error {
 func (f *fakeToolRunner) Run(_ context.Context, run ToolRun) error {
 	f.runs = append(f.runs, run)
 	if run.Stderr != nil {
-		_, _ = io.WriteString(run.Stderr, run.Tool+" ran\n")
+		_, _ = io.WriteString(run.Stderr, run.Tool+"\x20ran\n")
 	}
 	if f.failOn != "" && run.Tool == f.failOn {
 		return f.runErr
+	}
+	// truncate makes the file the later tools write into, sparse.
+	if run.Tool == "truncate" && len(run.Args) == 3 {
+		path := filepath.Join(run.WorkDir, run.Args[2])
+		size, err := strconv.ParseInt(run.Args[1], 10, 64)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, nil, 0o644); err != nil {
+			return err
+		}
+		return os.Truncate(path, size)
 	}
 	return nil
 }
 
 func (f *fakeToolRunner) RemoveTree(_ context.Context, dir string) error {
 	f.removed = append(f.removed, dir)
+	f.runsAtRemoval = len(f.runs)
 	if _, err := os.Stat(f.lockPath); f.lockPath != "" && err == nil {
 		f.lockPresentAtRemoval = true
 	}
@@ -373,8 +388,8 @@ func TestDiskBuildMakesTheToolsTreeAndRecordsItInTheLock(t *testing.T) {
 		t.Errorf("packages = %+v, want the image's own", lock.Packages)
 	}
 
-	if !runner.preflighted || !slices.Equal(runner.removed, []string{tree.TreeDir}) || len(runner.runs) != 0 {
-		t.Errorf("the runner preflighted %v, removed %q, ran %d tools; want preflighted, the tree removed once, nothing run", runner.preflighted, runner.removed, len(runner.runs))
+	if !runner.preflighted || !slices.Equal(runner.removed, []string{tree.TreeDir}) || len(runner.runs) == 0 || runner.runsAtRemoval != len(runner.runs) {
+		t.Errorf("the runner preflighted %v, removed %q, ran %d tools, %d of them before the removal; want preflighted, the tree removed once after every tool", runner.preflighted, runner.removed, len(runner.runs), runner.runsAtRemoval)
 	}
 	if runner.lockPresentAtRemoval {
 		t.Error("the tree was removed after the lock was placed; it goes before anything lands")
@@ -386,7 +401,7 @@ func TestDiskBuildMakesTheToolsTreeAndRecordsItInTheLock(t *testing.T) {
 	for _, event := range recorder.ofKind(EventPhaseStarted) {
 		started = append(started, event.Phase)
 	}
-	if want := []Phase{PhaseMakeToolsTree, PhaseWriteLock, PhasePlaceTarball}; !slices.Equal(started, want) {
+	if want := []Phase{PhaseMakeToolsTree, PhaseAssembleDisk, PhaseWriteLock, PhasePlaceImage}; !slices.Equal(started, want) {
 		t.Errorf("phases started = %v, want %v", started, want)
 	}
 }
@@ -558,10 +573,10 @@ func TestToolsTreeProgressRelabelsTheBootstrapsOutput(t *testing.T) {
 	}
 }
 
-// expectedDiskTarballPath is where a build of sampleDiskRecipe places its
-// tarball.
-func expectedDiskTarballPath(options Options) string {
-	return filepath.Join(options.RecipeDir, "dist", "cpp-lab-ubuntu-24.04-amd64.tar.gz")
+// expectedDiskImagePath is where a build of sampleDiskRecipe places its
+// raw image.
+func expectedDiskImagePath(options Options) string {
+	return filepath.Join(options.RecipeDir, "dist", "cpp-lab-ubuntu-24.04-amd64.img")
 }
 
 // writeVendoredDiskLock builds sampleDiskRecipe online with fakes, puts a
@@ -594,7 +609,7 @@ func writeVendoredDiskLock(t *testing.T, options Options) recipe.Lockfile {
 	if err := recipe.SaveLock(lockPath, lock); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(expectedDiskTarballPath(options)); err != nil {
+	if err := os.Remove(expectedDiskImagePath(options)); err != nil {
 		t.Fatal(err)
 	}
 	return lock
@@ -682,8 +697,8 @@ func TestDiskBuildOfflineMakesTheTreeFromThePool(t *testing.T) {
 	if !result.Offline || !result.Reproducible || result.InstalledPackageCount != 2 {
 		t.Errorf("Result = %+v, want an offline, reproducible build of the lock's 2 packages", result)
 	}
-	if _, err := os.Stat(expectedDiskTarballPath(options)); err != nil {
-		t.Errorf("tarball not placed: %v", err)
+	if _, err := os.Stat(expectedDiskImagePath(options)); err != nil {
+		t.Errorf("image not placed: %v", err)
 	}
 }
 
@@ -710,8 +725,8 @@ func TestDiskBuildOfflineFailsWhenTheTreeDiffersFromTheLock(t *testing.T) {
 		t.Errorf("removed %q, work directory %q; want the tree removed and the directory kept", runner.removed, result.WorkDir)
 	}
 	// The lock is an offline build's input, so only dist/ is looked at.
-	if _, err := os.Stat(expectedDiskTarballPath(options)); !errors.Is(err, os.ErrNotExist) {
-		t.Error("no tarball may be placed when the tree differs from the lock")
+	if _, err := os.Stat(expectedDiskImagePath(options)); !errors.Is(err, os.ErrNotExist) {
+		t.Error("no image may be placed when the tree differs from the lock")
 	}
 	assertNoTemporaryFiles(t, options.RecipeDir)
 }

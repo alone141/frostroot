@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"frostroot/internal/recipe"
 )
 
 // sizedFixtureLayout is the fixture layout sized by the spike's tarball.
@@ -176,4 +178,78 @@ func TestAssembleDiskStopsAtTheFirstFailure(t *testing.T) {
 	if len(recorder.ofKind(EventPhaseFinished)) != 0 {
 		t.Error("the assembly phase finished after a failure")
 	}
+}
+
+// TestDiskBuildAssemblesAndPlacesTheImage: through Build, with fakes, the
+// disk is assembled after the image, the tree removed after the last tool,
+// and the raw image placed in dist/ with the lock, the tarball staying a
+// work file.
+func TestDiskBuildAssemblesAndPlacesTheImage(t *testing.T) {
+	options, _ := newTestOptions(t)
+	recorder := &recordingProgress{}
+	options.Progress = recorder
+	bootstrapper := &fakeBootstrapper{}
+	runner := &fakeToolRunner{lockPath: filepath.Join(options.RecipeDir, LockFileName)}
+	result, err := (&Builder{Bootstrapper: bootstrapper, Tools: runner}).Build(context.Background(), sampleDiskRecipe(), options)
+	if err != nil {
+		t.Fatalf("Build = %v", err)
+	}
+	if result.ImagePath != expectedDiskImagePath(options) || result.TarballPath != "" {
+		t.Errorf("Result = %+v, want the image placed and no tarball", result)
+	}
+	lock, err := recipe.LoadLock(result.LockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(result.ImagePath); err != nil || info.Size() != lock.Disk.DiskBytes {
+		t.Errorf("the image: %v, %d bytes; want the lock's %d", err, info.Size(), lock.Disk.DiskBytes)
+	}
+	entries, err := os.ReadDir(filepath.Dir(result.ImagePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("dist/ holds %d entries, want the image alone", len(entries))
+	}
+	var tools []string
+	for _, run := range runner.runs {
+		tools = append(tools, run.Tool)
+	}
+	if tools[0] != "truncate" || tools[len(tools)-1] != "dd" || !slices.Contains(tools, "mke2fs") || !slices.Contains(tools, "sh") {
+		t.Errorf("tools ran: %q", tools)
+	}
+	for _, run := range runner.runs {
+		if run.TreeDir != bootstrapper.treeSpec.TreeDir || run.WorkDir != filepath.Dir(bootstrapper.treeSpec.WorkDir) || run.SourceDateEpoch != result.SourceDateEpoch {
+			t.Errorf("%s ran in tree %q, work %q, at %d", run.Tool, run.TreeDir, run.WorkDir, run.SourceDateEpoch)
+		}
+		if run.Tool == "mke2fs" && !slices.Contains(run.Args, "image.tar") {
+			t.Errorf("mke2fs read %q, want the uncompressed tarball", run.Args)
+		}
+	}
+	if runner.runsAtRemoval != len(runner.runs) || runner.lockPresentAtRemoval {
+		t.Error("the tree must go after the last tool and before the lock lands")
+	}
+	var started []Phase
+	for _, event := range recorder.ofKind(EventPhaseStarted) {
+		started = append(started, event.Phase)
+	}
+	if want := []Phase{PhaseMakeToolsTree, PhaseAssembleDisk, PhaseWriteLock, PhasePlaceImage}; !slices.Equal(started, want) {
+		t.Errorf("phases started = %v, want %v", started, want)
+	}
+	if result.WorkDir != "" {
+		t.Error("the work directory, the tarball in it, was kept after success")
+	}
+}
+
+func TestDiskBuildFailsWhenTheAssemblyFails(t *testing.T) {
+	options, _ := newTestOptions(t)
+	runner := &fakeToolRunner{failOn: "mke2fs", runErr: errors.New("mke2fs: exit status 1: mke2fs: Could not open image.tar")}
+	result, err := (&Builder{Bootstrapper: &fakeBootstrapper{}, Tools: runner}).Build(context.Background(), sampleDiskRecipe(), options)
+	if err == nil || !strings.Contains(err.Error(), "assembling the disk: mke2fs: exit status 1") {
+		t.Fatalf("Build = %v, want the assembly's failure", err)
+	}
+	if len(runner.removed) != 1 || result.WorkDir == "" {
+		t.Errorf("removed %q, work directory %q; want the tree removed and the directory kept", runner.removed, result.WorkDir)
+	}
+	assertNoDiskBuildOutput(t, options)
 }
