@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -125,13 +126,31 @@ func (b *Bubblewrap) Run(ctx context.Context, run ToolRun) error {
 		stderr = io.Discard
 	}
 	tail := newTailBuffer(errorTailBytes)
-	if err := b.runCommand()(ctx, "bwrap", bubblewrapCommand(run), nil, stdout, io.MultiWriter(stderr, tail)); err != nil {
+	// One writer for both streams stays one writer, which exec serves with
+	// one pipe and one goroutine. Wrapping only stderr made it another, and
+	// a buffer given for both then lost what the program wrote to stderr:
+	// exec reads stdout straight into a bytes.Buffer, and the read that
+	// finds end of file cut the buffer back to what it held when it began.
+	if sameWriter(stdout, stderr) {
+		combined := io.MultiWriter(stdout, tail)
+		stdout, stderr = combined, combined
+	} else {
+		stderr = io.MultiWriter(stderr, tail)
+	}
+	if err := b.runCommand()(ctx, "bwrap", bubblewrapCommand(run), nil, stdout, stderr); err != nil {
 		if last := lastLine(strings.TrimSpace(tail.String())); last != "" {
 			return fmt.Errorf("%s: %w: %s", run.Tool, err, last)
 		}
 		return fmt.Errorf("%s: %w", run.Tool, err)
 	}
 	return nil
+}
+
+// sameWriter reports whether a and b are one writer. An uncomparable
+// writer type would panic on ==, and is two writers either way; so is nil.
+func sameWriter(a, b io.Writer) bool {
+	typeOfA := reflect.TypeOf(a)
+	return typeOfA != nil && typeOfA == reflect.TypeOf(b) && typeOfA.Comparable() && a == b
 }
 
 // bubblewrapCommand returns bwrap's arguments for run. The tree's /usr and

@@ -117,6 +117,37 @@ func TestBubblewrapRunsTheProgramAndRepeatsItsLastLineOnFailure(t *testing.T) {
 	}
 }
 
+// TestBubblewrapRunKeepsOneBufferOneWriter: a caller that collects both
+// streams in one buffer, as a build does, must hand exec one writer, or the
+// stdout goroutine's last read cuts the buffer back to what it held before
+// stderr was written. Two buffers stay two writers, stderr's with the tail.
+func TestBubblewrapRunKeepsOneBufferOneWriter(t *testing.T) {
+	var gotStdout, gotStderr io.Writer
+	runner := &Bubblewrap{CurrentUID: uidFunc(1000), RunCommand: func(_ context.Context, _ string, _, _ []string, stdout, stderr io.Writer) error {
+		gotStdout, gotStderr = stdout, stderr
+		_, _ = io.WriteString(stdout, "out\n")
+		_, _ = io.WriteString(stderr, "err\n")
+		return errors.New("exit status 1")
+	}}
+	var both bytes.Buffer
+	err := runner.Run(context.Background(), ToolRun{TreeDir: "/tree", WorkDir: "/work", Tool: "mke2fs", Stdout: &both, Stderr: &both})
+	if !sameWriter(gotStdout, gotStderr) {
+		t.Errorf("one buffer for both streams became two writers, %T and %T", gotStdout, gotStderr)
+	}
+	if both.String() != "out\nerr\n" || err == nil || !strings.HasSuffix(err.Error(), ": err") {
+		t.Errorf("both = %q, err = %v; want both lines, and the last of them in the error", both.String(), err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err = runner.Run(context.Background(), ToolRun{TreeDir: "/tree", WorkDir: "/work", Tool: "mke2fs", Stdout: &stdout, Stderr: &stderr})
+	if sameWriter(gotStdout, gotStderr) || stdout.String() != "out\n" || stderr.String() != "err\n" || err == nil || !strings.HasSuffix(err.Error(), ": err") {
+		t.Errorf("two buffers: stdout = %q, stderr = %q, err = %v; want each stream in its own, the last line of stderr in the error", stdout.String(), stderr.String(), err)
+	}
+	if sameWriter(nil, nil) || !sameWriter(&both, &both) || sameWriter(&stdout, &stderr) || sameWriter(io.Discard, &both) {
+		t.Error("sameWriter tells writers apart by identity")
+	}
+}
+
 // TestBubblewrapPreflightNamesEveryMissingProgram: one error that says all
 // of it, and the one apt line that fixes it. Root maps no subordinate ids,
 // so it is not asked for unshare's helpers.
