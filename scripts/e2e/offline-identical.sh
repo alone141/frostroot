@@ -35,7 +35,7 @@ e2e_run build "$lab" "$FROSTROOT" build --plain "${e2eTrustFlags[@]}"
 e2e_expect_status 0 build
 e2e_check "the lock records the instant the image is frozen at" e2e_matches "$lock" '^source_date_epoch = [1-9]'
 if [ "$E2E_TARGET" = disk ]; then
-	e2e_check "the lock records the disk's seed and sizes" e2e_matches "$lock" '^seed = "[0-9a-f-]{36}"'
+	e2e_check "the lock records the disk's seed and sizes" e2e_matches "$lock" "^seed = '[0-9a-f-]{36}'"
 	e2e_check "and the tools tree it was made with" e2e_contains "$lock" "[[disk_tools]]"
 fi
 entries=$(e2e_entries "$tarball")
