@@ -30,9 +30,9 @@ func skipUnlessFedoraToolsAvailable(t *testing.T) {
 	}
 }
 
-// newFedoraWorkRoot returns a work root mkosi's user namespace can enter,
+// newIntegrationWorkRoot returns a work root mkosi's user namespace can enter,
 // and removes it when the test ends. Not t.TempDir: its parent is 0700.
-func newFedoraWorkRoot(t *testing.T) string {
+func newIntegrationWorkRoot(t *testing.T) string {
 	t.Helper()
 	cacheHome, err := os.MkdirTemp("/var/tmp", "frostroot-integration-*")
 	if err != nil {
@@ -41,15 +41,15 @@ func newFedoraWorkRoot(t *testing.T) string {
 	if err := os.Chmod(cacheHome, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { removeFedoraWorkRoot(t, cacheHome) })
+	t.Cleanup(func() { removeIntegrationWorkRoot(t, cacheHome) })
 	return cacheHome
 }
 
-// removeFedoraWorkRoot removes a test's work root. The package cache an
+// removeIntegrationWorkRoot removes a test's work root. The package cache an
 // unprivileged mkosi fills belongs to the subordinate ids, which only a user
 // namespace that maps them and the user can remove, as scripts/e2e/lib.sh
 // does.
-func removeFedoraWorkRoot(t *testing.T, dir string) {
+func removeIntegrationWorkRoot(t *testing.T, dir string) {
 	t.Helper()
 	if os.Getuid() == 0 {
 		if err := os.RemoveAll(dir); err != nil {
@@ -88,7 +88,7 @@ func fedoraTinyRecipe(t *testing.T) recipe.Recipe {
 // Takes a few minutes and about 250 MB of downloads.
 func TestIntegrationFedoraTiny(t *testing.T) {
 	skipUnlessFedoraToolsAvailable(t)
-	cacheHome := newFedoraWorkRoot(t)
+	cacheHome := newIntegrationWorkRoot(t)
 	builder := Builder{Fedora: &Mkosi{}}
 	progress := &testLogProgress{t: t}
 	result, err := builder.Build(context.Background(), fedoraTinyRecipe(t), Options{
@@ -266,7 +266,7 @@ func TestIntegrationFedoraTiny(t *testing.T) {
 // twice, once through mkosi and once into vendor/rpms.
 func TestIntegrationFedoraOfflineRebuild(t *testing.T) {
 	skipUnlessFedoraToolsAvailable(t)
-	cacheHome := newFedoraWorkRoot(t)
+	cacheHome := newIntegrationWorkRoot(t)
 	recipeDir := t.TempDir()
 	imageRecipe := fedoraTinyRecipe(t)
 	imageRecipe.Packages.Include = []string{"jq"}

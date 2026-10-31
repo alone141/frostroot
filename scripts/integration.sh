@@ -6,15 +6,16 @@
 # usage: scripts/integration.sh [GO-TEST-ARGS...]
 #
 #   With no arguments every integration test runs (five real Ubuntu
-#   bootstraps, four real Fedora builds, two of them offline, and the real
-#   index of every release: 15 to 20 minutes), and the run fails unless each
+#   bootstraps, four real Fedora builds, two of them offline, two disk tools
+#   trees, one of them offline, and the real index of every release: 15 to
+#   20 minutes), and the run fails unless each
 #   test CI requires was seen to pass. Arguments replace ./..., e.g.
 #   -run TestIntegrationPython ./internal/builder/; a subset cannot prove the
 #   list, so only the skip check applies then.
 #
 # Needs Linux, mmdebstrap, ubuntu-keyring, mkosi 20.2 with dnf, rpm,
-# createrepo_c and bubblewrap (Ubuntu 24.04's), the network, and user
-# namespaces or root. The log goes to $FROSTROOT_INTEGRATION_LOG, by default
+# createrepo_c and bubblewrap (Ubuntu 24.04's), uidmap unless root, the
+# network, and user namespaces or root. The log goes to $FROSTROOT_INTEGRATION_LOG, by default
 # /var/tmp/frostroot-integration-<uid>.log. $FROSTROOT_INTEGRATION_TIMEOUT
 # is go test's -timeout, 40m by default: plenty on a CI runner, which takes
 # about twelve minutes, and not always on a slow link or a busy machine,
@@ -41,6 +42,7 @@ requiredTests=(
 	TestIntegrationFedoraTiny
 	TestIntegrationFedoraOfflineRebuild
 	TestIntegrationFedoraCatalogExistsInEveryRelease
+	TestIntegrationDiskToolsTree
 )
 
 # skipUnlessMmdebstrapAvailable and skipUnlessFedoraToolsAvailable skip when
@@ -81,12 +83,13 @@ timeout=${FROSTROOT_INTEGRATION_TIMEOUT:-40m}
 go test -tags=integration -timeout "$timeout" -v "${testArgs[@]}" 2>&1 | tee "$log"
 status=${PIPESTATUS[0]}
 
-# Only the reasons skipUnlessMmdebstrapAvailable and
-# skipUnlessFedoraToolsAvailable give, not any skip:
+# Only the reasons skipUnlessMmdebstrapAvailable,
+# skipUnlessFedoraToolsAvailable and skipUnlessDiskToolsAvailable give, not
+# any skip:
 # TestIntegrationUnreachableWorkRootFailsFast skips as root on purpose,
 # because root mode has no user namespace to make unreachable, and that is a
 # fact about the host rather than a run that did nothing.
-skipReasons="needs Linux|mmdebstrap not installed|ubuntu-keyring not installed|Fedora's build tools are not available"
+skipReasons="needs Linux|mmdebstrap not installed|ubuntu-keyring not installed|Fedora's build tools are not available|bubblewrap not installed"
 if grep -qE -- "$skipReasons" "$log"; then
 	echo "The integration tests skipped for want of a prerequisite:"
 	grep -E -- "$skipReasons" "$log"
