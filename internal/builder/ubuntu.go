@@ -29,6 +29,7 @@ type ubuntuBuild struct {
 
 	// Set by preflight.
 	instant          frozenInstant
+	disk             *diskLayout // nil for a tarball
 	imageSourceLines []string
 	bootstrapSpec    BootstrapSpec
 
@@ -81,7 +82,7 @@ func newUbuntuBuild(bootstrapper Bootstrapper, imageRecipe recipe.Recipe, option
 	return build, offline, nil
 }
 
-func (u *ubuntuBuild) preflight(_ context.Context, workRoot string, instant frozenInstant) error {
+func (u *ubuntuBuild) preflight(_ context.Context, workRoot string, instant frozenInstant, disk *diskLayout) error {
 	// Apt splits a "deb" line on whitespace and reads options out of
 	// brackets, and every build hands it a path under the work root: the
 	// signed-by path of an extra source, and the copy:// URL of the
@@ -91,7 +92,7 @@ func (u *ubuntuBuild) preflight(_ context.Context, workRoot string, instant froz
 	if strings.ContainsAny(workRoot, " \t[]") {
 		return fmt.Errorf("%w: %s contains a space or a bracket, which an apt source line cannot carry; set XDG_CACHE_HOME to another directory", ErrBadWorkRoot, workRoot)
 	}
-	u.instant = instant
+	u.instant, u.disk = instant, disk
 	// The lines the image keeps: keys under /etc/apt/keyrings. The lines
 	// mmdebstrap gets name the staged keys instead, once the stage exists.
 	u.imageSourceLines = SourceLines(u.release, u.options.MirrorURL, u.imageRecipe.Sources, ImageKeyringDir)
@@ -105,6 +106,12 @@ func (u *ubuntuBuild) preflight(_ context.Context, workRoot string, instant froz
 		WorkDir:           workRoot,
 		SourceDateEpoch:   instant.epoch,
 		Progress:          u.progress,
+	}
+	if disk != nil {
+		// The kernel and the boot chain, and no cleanup after the last
+		// hook, which writes the machine-id a disk image boots with.
+		u.bootstrapSpec.Include = diskPackagesToInstall(u.imageRecipe, u.release)
+		u.bootstrapSpec.SkipReproducibleCleanup = true
 	}
 	if u.offline != nil {
 		// Every locked package, so that the outcome does not depend on the
@@ -170,6 +177,9 @@ func (u *ubuntuBuild) bootstrap(ctx context.Context, workDir string) (string, er
 			stageOptions.Keys[name] = key.binary
 		}
 	}
+	if u.disk != nil {
+		stageOptions.Disk = &DiskStageOptions{identifiers: u.disk.identifiers(), release: u.release}
+	}
 	stage, err := WriteStage(filepath.Join(workDir, "stage"), imageRecipe, stageOptions)
 	if err != nil {
 		return "", err
@@ -193,6 +203,11 @@ func (u *ubuntuBuild) bootstrap(ctx context.Context, workDir string) (string, er
 	}
 	u.bootstrapSpec.CustomizeHooks = CustomizeHooks(stage)
 	u.bootstrapSpec.TarballPath = filepath.Join(workDir, "image.tar.gz")
+	if u.disk != nil {
+		// A work file mke2fs reads, never an output: uncompressed, so
+		// that neither side spends time on gzip.
+		u.bootstrapSpec.TarballPath = filepath.Join(workDir, "image.tar")
+	}
 	u.bootstrapSpec.WorkDir = workDir
 	if err := u.bootstrapper.Run(ctx, u.bootstrapSpec); err != nil {
 		return "", err

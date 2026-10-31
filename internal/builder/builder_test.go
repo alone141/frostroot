@@ -63,6 +63,7 @@ type fakeBootstrapper struct {
 	skipExtendedStates bool              // leave no extended_states even when asked
 	skipTarball        bool
 	emptyTarball       bool   // mmdebstrap creates its output file before it starts
+	tarballBytes       int64  // a sparse tarball of this size instead of a few bytes, for what a disk build sizes by
 	pipReport          string // written where the Python step's download hook says; "" writes none
 	// For the disk tools tree, a second run with TreeDir set: what the
 	// tree's status and indexes say, or an error instead.
@@ -77,6 +78,7 @@ type fakeBootstrapper struct {
 	treeCaInfo        string          // the bundle the tree's apt was pointed at, as Run found it
 	stageFilesPresent map[string]bool // stage file name to whether it existed when Run was called
 	stagedSourcesList string          // the staged sources.list as Run found it; the work directory is gone afterwards
+	stagedFstab       string          // a disk build's staged fstab, as Run found it
 }
 
 func (f *fakeBootstrapper) Run(_ context.Context, spec BootstrapSpec) error {
@@ -93,12 +95,22 @@ func (f *fakeBootstrapper) Run(_ context.Context, spec BootstrapSpec) error {
 	if sourcesList, err := os.ReadFile(filepath.Join(spec.WorkDir, "stage", "sources.list")); err == nil {
 		f.stagedSourcesList = string(sourcesList)
 	}
+	if fstab, err := os.ReadFile(filepath.Join(spec.WorkDir, "stage", "disk", "fstab")); err == nil {
+		f.stagedFstab = string(fstab)
+	}
 	if f.runErr != nil {
 		return f.runErr
 	}
 	switch {
 	case f.emptyTarball:
 		if err := os.WriteFile(spec.TarballPath, nil, 0o644); err != nil {
+			return err
+		}
+	case f.tarballBytes > 0:
+		if err := os.WriteFile(spec.TarballPath, []byte("tarball"), 0o644); err != nil {
+			return err
+		}
+		if err := os.Truncate(spec.TarballPath, f.tarballBytes); err != nil {
 			return err
 		}
 	case !f.skipTarball:

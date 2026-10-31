@@ -261,6 +261,12 @@ type Stage struct {
 	// uploaded for the Python step, which deletes it; empty when the build
 	// was given none.
 	ExtraTrustPath string
+	// DiskFiles are what a disk image holds beyond a WSL image's
+	// provisioning, each with where it goes, and DiskScriptPath the script
+	// the last hook runs; both empty for a WSL image, which is what says
+	// the build makes a tarball.
+	DiskFiles      []stagedDiskFile
+	DiskScriptPath string
 }
 
 // StageOptions say what WriteStage renders besides the provisioning files.
@@ -297,6 +303,9 @@ type StageOptions struct {
 	// not install, from --ca-bundle. They reach the Python step and nothing
 	// else, and never the image.
 	ExtraTrust []byte
+	// Disk says what a disk image holds beyond the provisioning, nil for
+	// a WSL image.
+	Disk *DiskStageOptions
 }
 
 // WriteStage renders every provisioning file for imageRecipe into stageDir.
@@ -305,9 +314,12 @@ type StageOptions struct {
 // from inside mmdebstrap's user namespace, where it is "other" to these files.
 func WriteStage(stageDir string, imageRecipe recipe.Recipe, options StageOptions) (Stage, error) {
 	stage := Stage{
-		WSLConfPath:         filepath.Join(stageDir, "wsl.conf"),
 		ProvisionScriptPath: filepath.Join(stageDir, "provision.sh"),
 		DpkgStatusPath:      filepath.Join(stageDir, "dpkg-status"),
+	}
+	// A disk image has no wsl.conf.
+	if options.Disk == nil {
+		stage.WSLConfPath = filepath.Join(stageDir, "wsl.conf")
 	}
 	if options.RecordForLock {
 		stage.AptListsDir = filepath.Join(stageDir, "lists")
@@ -321,8 +333,27 @@ func WriteStage(stageDir string, imageRecipe recipe.Recipe, options StageOptions
 		return Stage{}, err
 	}
 	contentByPath := map[string]string{
-		stage.WSLConfPath:         RenderWSLConf(imageRecipe),
 		stage.ProvisionScriptPath: provisionScript,
+	}
+	if stage.WSLConfPath != "" {
+		contentByPath[stage.WSLConfPath] = RenderWSLConf(imageRecipe)
+	}
+	if options.Disk != nil {
+		files, script, err := renderDiskFiles(imageRecipe, *options.Disk)
+		if err != nil {
+			return Stage{}, err
+		}
+		diskDir := filepath.Join(stageDir, "disk")
+		if err := makeDirectoriesWithMode(diskDir, 0o755); err != nil {
+			return Stage{}, err
+		}
+		for _, file := range files {
+			hostPath := filepath.Join(diskDir, file.stageName)
+			contentByPath[hostPath] = file.content
+			stage.DiskFiles = append(stage.DiskFiles, stagedDiskFile{hostPath: hostPath, imagePath: file.imagePath})
+		}
+		stage.DiskScriptPath = filepath.Join(stageDir, "disk.sh")
+		contentByPath[stage.DiskScriptPath] = script
 	}
 	if sudoers := RenderSudoers(imageRecipe); sudoers != "" {
 		stage.SudoersPath = filepath.Join(stageDir, "sudoers")
@@ -457,7 +488,10 @@ func shellQuote(value string) string {
 // paths is correct there too. The provision script is read from the stage
 // directory rather than copied into the image, so nothing is left behind.
 func CustomizeHooks(stage Stage) []string {
-	hooks := []string{"upload " + shellQuote(stage.WSLConfPath) + " /etc/wsl.conf"}
+	var hooks []string
+	if stage.WSLConfPath != "" {
+		hooks = append(hooks, "upload "+shellQuote(stage.WSLConfPath)+" /etc/wsl.conf")
+	}
 	if stage.SudoersPath != "" {
 		hooks = append(hooks, "upload "+shellQuote(stage.SudoersPath)+" "+sudoersDropInPath)
 	}
@@ -483,8 +517,14 @@ func CustomizeHooks(stage Stage) []string {
 	// mmdebstrap copies these from the build host and leaves them behind.
 	// They go last, because they are also how anything running in the chroot
 	// resolves a name: deleting them in the provision script left pip with no
-	// DNS, and that is what the Python step needs the network for.
-	hooks = append(hooks, `rm -f "$1/etc/resolv.conf" "$1/etc/hostname"`)
+	// DNS, and that is what the Python step needs the network for. A disk
+	// image writes its own in their place, in its script, which runs here
+	// for the same reason.
+	if stage.DiskScriptPath != "" {
+		hooks = append(hooks, diskHooks(stage)...)
+	} else {
+		hooks = append(hooks, `rm -f "$1/etc/resolv.conf" "$1/etc/hostname"`)
+	}
 	if stage.AutoMarksPath != "" {
 		// upload makes the file root's, mode 0644, as apt's own would be.
 		hooks = append(hooks, "upload "+shellQuote(stage.AutoMarksPath)+" "+aptExtendedStatesPath)

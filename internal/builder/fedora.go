@@ -79,7 +79,7 @@ func newFedoraBuild(bootstrapper FedoraBootstrapper, imageRecipe recipe.Recipe, 
 	return build, build.offline, nil
 }
 
-func (f *fedoraBuild) preflight(ctx context.Context, workRoot string, instant frozenInstant) error {
+func (f *fedoraBuild) preflight(ctx context.Context, workRoot string, instant frozenInstant, _ *diskLayout) error {
 	f.instant = instant
 	f.cacheDir = filepath.Join(workRoot, fedoraPackageCacheName)
 	return f.bootstrapper.Preflight(ctx, FedoraSpec{WorkDir: workRoot})

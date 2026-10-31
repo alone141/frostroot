@@ -62,11 +62,15 @@ type BootstrapSpec struct {
 	// Variant is mmdebstrap's: the package set the root filesystem starts
 	// from. "" is "important", what every image is built from; the disk
 	// tools tree is "essential".
-	Variant           string
-	WorkDir           string // scratch space; during Preflight, the work root instead
-	Arch              string // CPU architecture, such as "amd64"
-	InstallRecommends bool   // install Recommends, as apt does by default
-	KeyringPath       string // keyring that verifies the archive; unused when Trusted
+	Variant string
+	// SkipReproducibleCleanup keeps mmdebstrap from its cleanup/reproducible
+	// step, which runs after the last hook and empties /etc/machine-id: a
+	// disk image writes its own and removes the step's files itself.
+	SkipReproducibleCleanup bool
+	WorkDir                 string // scratch space; during Preflight, the work root instead
+	Arch                    string // CPU architecture, such as "amd64"
+	InstallRecommends       bool   // install Recommends, as apt does by default
+	KeyringPath             string // keyring that verifies the archive; unused when Trusted
 	// Trusted means the source lines carry [trusted=yes] and no keyring is
 	// involved: an offline build's local repository, whose files frostroot
 	// verified against the lock itself.
@@ -203,14 +207,20 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if err != nil {
 		return Result{}, err
 	}
-	// The tree a disk build makes the disk with, nil for a tarball: what
-	// every family shares, as the instant is.
+	// The tree a disk build makes the disk with, and the layout of the
+	// disk, nil for a tarball: what every family shares, as the instant is.
+	// Online the layout's seed is drawn here; offline it is the lock's,
+	// read as hostile input before any work is done.
 	var tools *diskToolsTree
+	var layout *diskLayout
 	if disk {
 		if b.Tools == nil {
 			return Result{}, errors.New("this frostroot was built without a disk tool runner")
 		}
 		if tools, err = newDiskToolsTree(b.Bootstrapper, b.Tools, options, image.buildTrustPEM(), instant.epoch, offline, progress); err != nil {
+			return Result{}, err
+		}
+		if layout, err = chooseDiskLayout(offline); err != nil {
 			return Result{}, err
 		}
 	}
@@ -219,7 +229,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if err != nil {
 		return Result{}, err
 	}
-	if err := image.preflight(ctx, workRoot, instant); err != nil {
+	if err := image.preflight(ctx, workRoot, instant, layout); err != nil {
 		return Result{}, err
 	}
 	if tools != nil {
@@ -278,6 +288,17 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if err != nil {
 		return failBuild(err)
 	}
+	// An online disk build sizes the disk by the tarball it will hold;
+	// offline the lock said.
+	if layout != nil && !layout.fromLock {
+		tarballInfo, err := os.Stat(builtTarballPath)
+		if err != nil {
+			return failBuild(fmt.Errorf("sizing the disk: %w", err))
+		}
+		if err := layout.size(tarballInfo.Size(), imageRecipe.DiskSize()); err != nil {
+			return failBuild(err)
+		}
+	}
 	lockPath := filepath.Join(options.RecipeDir, LockFileName)
 	var counts packageCounts
 	if offline != nil {
@@ -298,6 +319,8 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 			// there was a second target does.
 			lock.Target = recipe.TargetDisk
 			lock.DiskTools = tools.packages
+			locked := layout.lock()
+			lock.Disk = &locked
 		}
 		result.PythonPackageCount = counts.python
 		temporaryLockPath, err = writeTemporaryLock(options.RecipeDir, lock)
@@ -376,6 +399,23 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	}
 	result.WorkDir = ""
 	return result, nil
+}
+
+// chooseDiskLayout returns a disk build's layout: the lock's offline, a
+// seed of its own online.
+func chooseDiskLayout(offline *offlinePlan) (*diskLayout, error) {
+	if offline != nil {
+		layout, err := diskLayoutFromLock(offline.lock)
+		if err != nil {
+			return nil, err
+		}
+		return &layout, nil
+	}
+	layout, err := newDiskLayout()
+	if err != nil {
+		return nil, err
+	}
+	return &layout, nil
 }
 
 // verifyPool checks vendor/debs, or a Fedora lock's vendor/rpms, and
