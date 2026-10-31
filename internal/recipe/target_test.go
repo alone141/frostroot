@@ -12,6 +12,8 @@ func diskRecipe(t *testing.T) Recipe {
 	t.Helper()
 	imageRecipe := loadValidRecipe(t)
 	imageRecipe.Image.Target = TargetDisk
+	// valid.toml is 22.04's, which builds no disk.
+	imageRecipe.Image.Release = "26.04"
 	imageRecipe.WSL = WSL{}
 	imageRecipe.Disk = &Disk{Size: "16G", Formats: []string{DiskFormatQcow2}}
 	return imageRecipe
@@ -113,6 +115,33 @@ func TestValidateRefusesWhatATargetCannotUse(t *testing.T) {
 				t.Fatalf("Validate = %q, want a problem mentioning %q", problems, testCase.wantMessage)
 			}
 		})
+	}
+}
+
+// TestValidateRefusesADiskRecipeOfAReleaseWithoutDisks: the releases the
+// bare-metal spec measured or read build disks; an older one is refused
+// with the ones that do.
+func TestValidateRefusesADiskRecipeOfAReleaseWithoutDisks(t *testing.T) {
+	for _, release := range []string{"20.04", "22.04"} {
+		imageRecipe := diskRecipe(t)
+		imageRecipe.Image.Release = release
+		problems := Validate(imageRecipe)
+		if len(problems) != 1 || !strings.Contains(problems[0], "a disk image is built for Ubuntu 24.04 or 26.04, not "+release) {
+			t.Errorf("%s: Validate = %q, want the one refusal naming the releases that build disks", release, problems)
+		}
+	}
+	for _, release := range []string{"24.04", "26.04"} {
+		imageRecipe := diskRecipe(t)
+		imageRecipe.Image.Release = release
+		if problems := Validate(imageRecipe); len(problems) != 0 {
+			t.Errorf("%s: Validate = %q, want a disk recipe accepted", release, problems)
+		}
+	}
+	// The same WSL recipe of 22.04 is as valid as it was.
+	imageRecipe := diskRecipe(t)
+	imageRecipe.Image.Target, imageRecipe.Image.Release, imageRecipe.Disk = "", "22.04", nil
+	if problems := Validate(imageRecipe); len(problems) != 0 {
+		t.Errorf("a 22.04 WSL recipe: Validate = %q", problems)
 	}
 }
 
