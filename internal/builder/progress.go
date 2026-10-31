@@ -33,7 +33,8 @@ const (
 	PhaseVendorCheck       // vendor: check what vendor/ already holds
 	PhaseVendorDownload    // vendor: download the rest
 	PhaseVendorPrune       // vendor --prune: remove files the lock does not name
-	PhaseMakeToolsTree     // Fedora build: mkosi makes the tools tree
+	PhaseMakeToolsTree     // Fedora build: mkosi makes the tools tree; disk build: mmdebstrap does
+	PhaseAssembleDisk      // disk build: the tools tree makes the disk from the tarball
 	phaseCount
 )
 
@@ -56,6 +57,7 @@ var phaseTitles = [phaseCount]string{
 	PhaseVendorDownload:    "Download packages",
 	PhaseVendorPrune:       "Remove packages not in the lock",
 	PhaseMakeToolsTree:     "Make the tools tree",
+	PhaseAssembleDisk:      "Assemble the disk image",
 }
 
 // Title returns the phase's name as a progress display shows it.

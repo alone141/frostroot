@@ -89,6 +89,12 @@ func TestBubblewrapCommandLine(t *testing.T) {
 	if args := bubblewrapCommand(run); slices.Contains(args, "SOURCE_DATE_EPOCH") {
 		t.Errorf("SOURCE_DATE_EPOCH set without an instant: %q", args)
 	}
+	// A program's own variables come after frostroot's, before "--".
+	run.Variables = [][2]string{{"MKE2FS_CONFIG", "/work/mke2fs.conf"}}
+	args = bubblewrapCommand(run)
+	if index := slices.Index(args, "MKE2FS_CONFIG"); index < 0 || args[index-1] != "--setenv" || args[index+1] != "/work/mke2fs.conf" || index > slices.Index(args, "--") {
+		t.Errorf("the program's variable is not set before --: %q", args)
+	}
 }
 
 func TestBubblewrapRunsTheProgramAndRepeatsItsLastLineOnFailure(t *testing.T) {
@@ -257,6 +263,9 @@ func sampleDiskRecipe() recipe.Recipe {
 type fakeToolRunner struct {
 	preflightErr error
 	removeErr    error
+	// failOn names a tool whose run fails, with runErr.
+	failOn string
+	runErr error
 	// lockPath, when set, is looked for as the tree is removed: a build
 	// removes the tree before it places anything.
 	lockPath string
@@ -274,6 +283,12 @@ func (f *fakeToolRunner) Preflight() error {
 
 func (f *fakeToolRunner) Run(_ context.Context, run ToolRun) error {
 	f.runs = append(f.runs, run)
+	if run.Stderr != nil {
+		_, _ = io.WriteString(run.Stderr, run.Tool+" ran\n")
+	}
+	if f.failOn != "" && run.Tool == f.failOn {
+		return f.runErr
+	}
 	return nil
 }
 

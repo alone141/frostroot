@@ -60,7 +60,10 @@ type ToolRun struct {
 	// SourceDateEpoch is the instant the program dates what it writes at,
 	// as SOURCE_DATE_EPOCH; 0 leaves the variable unset.
 	SourceDateEpoch int64
-	Stdout, Stderr  io.Writer // nil discards
+	// Variables are set for the program besides the environment every
+	// program gets, name and value: mke2fs's configuration file.
+	Variables      [][2]string
+	Stdout, Stderr io.Writer // nil discards
 }
 
 // toolWorkMount is where a tool finds the build's work directory.
@@ -178,6 +181,9 @@ func bubblewrapCommand(run ToolRun) []string {
 	}
 	if run.SourceDateEpoch > 0 {
 		args = append(args, "--setenv", SourceDateEpochVariable, strconv.FormatInt(run.SourceDateEpoch, 10))
+	}
+	for _, variable := range run.Variables {
+		args = append(args, "--setenv", variable[0], variable[1])
 	}
 	args = append(args, "--", run.Tool)
 	return append(args, run.Args...)
