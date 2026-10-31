@@ -7,6 +7,7 @@ package distro
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -36,7 +37,35 @@ type Release struct {
 	// install outside a virtual environment (PEP 668), which someone who
 	// asks for python3-pip is told.
 	ExternallyManagedPython bool
+	// DiskPackages are what a disk image of the release holds beyond a
+	// WSL image: the kernel, the signed boot chain, and what the first
+	// boot needs to grow the root and bring the network up. Nil for a
+	// release frostroot makes no disk of: the bare-metal spec's spike
+	// measured 26.04, and 24.04 differs from it in ways the spec read.
+	DiskPackages []string
+	// FirstBootSSHKeys means the release's openssh-server makes no host
+	// keys at a first boot by itself, so a disk image that holds it ships
+	// a unit that does. 26.04's sshd-keygen.service does it on its own.
+	FirstBootSSHKeys bool
 }
+
+// ubuntuDiskPackages are what every disk image of Ubuntu holds beyond a
+// WSL image's packages, on 24.04 and 26.04 alike: linux-image-generic
+// brings the modules, the firmware and the microcode a real PC needs, where
+// -virtual does not; initramfs-tools is named because 26.04 ships dracut
+// too; the signed GRUB and shim boot under Secure Boot with Microsoft's
+// keys; mokutil shows the state; dosfstools checks the EFI system
+// partition; netplan with systemd-networkd and systemd-resolved bring the
+// network up. Not grub-pc, which conflicts.
+var ubuntuDiskPackages = []string{
+	"linux-image-generic", "initramfs-tools", "grub-efi-amd64", "grub-efi-amd64-signed", "shim-signed",
+	"mokutil", "dosfstools", "netplan.io", "systemd-resolved",
+}
+
+// resoluteDiskPackages adds systemd-repart, which grows the root partition
+// at the first boot, and is a package of universe on 26.04 where 24.04's
+// systemd carries it.
+var resoluteDiskPackages = append(slices.Clone(ubuntuDiskPackages), "systemd-repart")
 
 // allComponents is the whole archive, in the order Ubuntu's own sources.list
 // names it: what a stock install and the official WSL image enable. Up to
@@ -51,8 +80,8 @@ var allComponents = []string{"main", "restricted", "universe", "multiverse"}
 var releasesByVersion = map[string]Release{
 	"20.04": {Suite: "focal", ArchiveURL: ubuntuArchiveURL, Components: allComponents, EndOfLife: true},
 	"22.04": {Suite: "jammy", ArchiveURL: ubuntuArchiveURL, Components: allComponents},
-	"24.04": {Suite: "noble", ArchiveURL: ubuntuArchiveURL, Components: allComponents, ExternallyManagedPython: true},
-	"26.04": {Suite: "resolute", ArchiveURL: ubuntuArchiveURL, Components: allComponents, ExternallyManagedPython: true},
+	"24.04": {Suite: "noble", ArchiveURL: ubuntuArchiveURL, Components: allComponents, ExternallyManagedPython: true, DiskPackages: ubuntuDiskPackages, FirstBootSSHKeys: true},
+	"26.04": {Suite: "resolute", ArchiveURL: ubuntuArchiveURL, Components: allComponents, ExternallyManagedPython: true, DiskPackages: resoluteDiskPackages},
 }
 
 // Lookup returns how to bootstrap an Ubuntu release, such as "24.04", for an
@@ -71,9 +100,30 @@ func Lookup(version, arch string) (Release, error) {
 	if len(problems) > 0 {
 		return Release{}, errors.Join(problems...)
 	}
-	// Copy the slice so callers cannot modify the shared table.
+	// Copy the slices so callers cannot modify the shared table.
 	release.Components = append([]string(nil), release.Components...)
+	release.DiskPackages = slices.Clone(release.DiskPackages)
 	return release, nil
+}
+
+// BuildsDisks reports whether frostroot makes disk images of the release.
+func (r Release) BuildsDisks() bool {
+	return r.DiskPackages != nil
+}
+
+// DiskVersions lists the versions of family that frostroot makes disk
+// images of, oldest first, and none for a family whose disk is not built
+// yet.
+func DiskVersions(family Family) []string {
+	var versions []string
+	if family == Ubuntu {
+		for _, version := range SupportedVersions(Ubuntu) {
+			if releasesByVersion[version].BuildsDisks() {
+				versions = append(versions, version)
+			}
+		}
+	}
+	return versions
 }
 
 // SourceLines returns the three apt source lines for the release: the release

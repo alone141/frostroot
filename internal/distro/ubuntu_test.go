@@ -185,3 +185,59 @@ func TestVersionsInStandardSupportLeavesOutEndOfLife(t *testing.T) {
 		t.Fatalf("VersionsInStandardSupport(Ubuntu) = %q, want %q", got, want)
 	}
 }
+
+// TestLookupDiskPackagesPerRelease: the releases the bare-metal spec
+// measured or read build disks, each with what its first boot needs, and
+// the older ones build none.
+func TestLookupDiskPackagesPerRelease(t *testing.T) {
+	for _, version := range []string{"20.04", "22.04"} {
+		release, err := Lookup(version, "amd64")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if release.BuildsDisks() || release.DiskPackages != nil {
+			t.Errorf("%s builds disks, with %q; want none", version, release.DiskPackages)
+		}
+	}
+	noble, err := Lookup("24.04", "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolute, err := Lookup("26.04", "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, release := range []Release{noble, resolute} {
+		if !release.BuildsDisks() {
+			t.Errorf("%s builds no disks", release.Suite)
+		}
+		for _, want := range []string{"linux-image-generic", "initramfs-tools", "grub-efi-amd64", "grub-efi-amd64-signed", "shim-signed", "mokutil", "dosfstools", "netplan.io", "systemd-resolved"} {
+			if !slices.Contains(release.DiskPackages, want) {
+				t.Errorf("%s's disk packages %q lack %s", release.Suite, release.DiskPackages, want)
+			}
+		}
+		if slices.Contains(release.DiskPackages, "grub-pc") || slices.Contains(release.DiskPackages, "linux-image-virtual") {
+			t.Errorf("%s's disk packages %q hold what conflicts with the signed boot chain or lacks a PC's drivers", release.Suite, release.DiskPackages)
+		}
+	}
+	// systemd-repart is a package of its own on 26.04 and part of systemd
+	// on 24.04; 24.04's openssh-server makes no host keys at a first boot.
+	if slices.Contains(noble.DiskPackages, "systemd-repart") || !slices.Contains(resolute.DiskPackages, "systemd-repart") {
+		t.Errorf("systemd-repart: noble %q, resolute %q", noble.DiskPackages, resolute.DiskPackages)
+	}
+	if !noble.FirstBootSSHKeys || resolute.FirstBootSSHKeys {
+		t.Errorf("FirstBootSSHKeys: noble %v, resolute %v; want only noble", noble.FirstBootSSHKeys, resolute.FirstBootSSHKeys)
+	}
+	if want := []string{"24.04", "26.04"}; !slices.Equal(DiskVersions(Ubuntu), want) || DiskVersions(Fedora) != nil {
+		t.Errorf("DiskVersions = %q for Ubuntu, %q for Fedora; want %q and none", DiskVersions(Ubuntu), DiskVersions(Fedora), want)
+	}
+	// A copy, as Components is: a caller's change must not reach the table.
+	resolute.DiskPackages[0] = "changed"
+	again, err := Lookup("26.04", "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.DiskPackages[0] == "changed" {
+		t.Error("Lookup hands out the table's own disk packages")
+	}
+}

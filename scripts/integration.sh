@@ -13,6 +13,15 @@
 #   -run TestIntegrationPython ./internal/builder/; a subset cannot prove the
 #   list, so only the skip check applies then.
 #
+#   The disk integration tests, TestIntegrationResoluteDisk and
+#   TestIntegrationDiskOfflineRebuild, build a whole 26.04 disk image with
+#   the kernel and its firmware, 1.4 GB of it, and the second vendors it and
+#   rebuilds it twice; they run only with FROSTROOT_INTEGRATION_DISK=1, and
+#   are not required, so CI never runs them (the owner's choice):
+#     FROSTROOT_INTEGRATION_DISK=1 scripts/integration.sh -run 'TestIntegration.*Disk' ./internal/builder/
+#   They need the host's e2fsprogs, util-linux, dosfstools and mtools too,
+#   which read the disk back.
+#
 # Needs Linux, mmdebstrap, ubuntu-keyring, mkosi 20.2 with dnf, rpm,
 # createrepo_c and bubblewrap (Ubuntu 24.04's), uidmap unless root, the
 # network, and user namespaces or root. The log goes to $FROSTROOT_INTEGRATION_LOG, by default

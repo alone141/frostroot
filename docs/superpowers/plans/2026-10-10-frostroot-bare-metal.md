@@ -158,6 +158,17 @@ says the disk target comes in a later version (exit 1).
     skipped and its seven deletions done in the hook; no `wsl.conf`. Every
     value is validated and quoted, and the hook is run through a real `sh`
     with hostile paths. `TestHooksAndScriptNeverSwallowFailures` covers it.
+    (As built: the release says what its disk holds, `distro.Release`'s
+    `DiskPackages` and `FirstBootSSHKeys`, and `validate` refuses a disk
+    recipe of 20.04 or 22.04, which build none, the owner's choice; the
+    image ships its name as `/etc/hostname`, the owner's answer to the
+    spike's open question; `locale.conf` is the recipe's locale and
+    `vconsole.conf` says `KEYMAP=us`; the files are uploaded by the hooks
+    and a script of their own, run where the WSL build removes the
+    resolver, after the Python step, writes the rest; the set-password
+    program is bash, whose `kill` knows the real-time signals, and wants
+    `getty-pre.target` to be ordered before every getty; the ssh-keygen
+    unit is always linked on 24.04 and conditions itself on `sshd`.)
 12. **The identifiers.** From the lock's seed by HMAC-SHA256, as
     systemd-repart derives them: the disk GUID, each partition's UUID, the
     root filesystem's UUID and hash seed, the ESP's serial. An online build
@@ -165,6 +176,14 @@ says the disk target comes in a later version (exit 1).
     lock's `[disk]` as hostile input first (the seed a UUID, the sizes
     bounded, `shim` a name frostroot knows). Tests: known vectors; every
     value a valid UUID; offline takes the lock's; each bad `[disk]` refused.
+    (As built: the derivation is systemd-repart v255's to the byte, HMAC
+    keyed by the seed with the tokens `disk-uuid` and the partition's type,
+    and the file system's keyed by its partition with `file-system-uuid`;
+    the known vectors are what `systemd-repart` itself wrote from the
+    fixture's seed, read back with `sfdisk --dump`. The hash seed is
+    frostroot's own token, `hash-seed`, since repart passes mke2fs none.
+    The partitions carry repart's names, `esp` and `root-x86-64`, and the
+    root its grow attribute, bit 59.)
 13. **The assembly.** Through the tools runner: the three ESP binaries out
     of the tarball by their member names (the shim's from the lock),
     `mke2fs -d` with `-U`, `-E nodiscard,lazy_itable_init=1,hash_seed=` and
@@ -175,26 +194,49 @@ says the disk target comes in a later version (exit 1).
     tarball plus a quarter plus 256 MiB, or `[disk] size`. The tarball is a
     work file, never an output. Tests: the rendered `sfdisk` script,
     `grub.cfg`s and `MKE2FS_CONFIG`; the order of tool calls against a
-    fake.
+    fake. (As built: the tarball is uncompressed, `image.tar`; each file
+    is made by `truncate` first, since mke2fs and mkfs.fat want a file of
+    the size; sfdisk reads its script on standard input, which the tree's
+    `sh` opens, the one shell in the assembly, with a constant path;
+    `MKE2FS_CONFIG` pins Debian's ext4 features without `orphan_file` and
+    `metadata_csum_seed`, which GRUB cannot read everywhere, and no
+    size-dependent type; a tool run carries its own variables for it.)
 14. **The outputs.** `dist/<name>-ubuntu-<release>-amd64.img` staged with
     `export.Stage`, the lock renamed, then the image; a failure between
     puts both back. `export`'s cross-device copy keeps holes
     (`SEEK_DATA`/`SEEK_HOLE` on Linux; the Windows build still compiles).
     Tests: a sparse file copied across a fake device boundary stays
     sparse; an interrupted placement leaves the previous image and lock.
+    (As built: the assembly runs right after the image, before the lock
+    is written, and the tree goes after the last tool and before anything
+    lands in `dist/`; the result names the image or the tarball, never
+    both; a phase of its own places the image, and the build's phases are
+    `DiskPhases`.)
 15. **Integration.** `TestIntegrationResoluteDisk`: a disk is built, its
     GPT read back with `sfdisk --dump`, both filesystems checked read-only
     with `fsck`, the ESP listed, and the root's owners, capabilities and
     hardlinks checked as `testTinyImage` does; `TestIntegrationDiskOfflineRebuild`:
     two offline rebuilds, one SHA-256. `scripts/integration.sh` requires
-    both.
+    both. (As built: neither is required, and both run only with
+    `FROSTROOT_INTEGRATION_DISK=1`, the owner's choice on 2026-10-31,
+    since a whole disk with the kernel and its firmware would take CI's
+    integration job past its budget; the checks read the disk with the
+    host's e2fsprogs, util-linux, dosfstools and mtools, each partition
+    copied out of the image first.)
 16. **Scenarios.** A new `disk-boot`: QEMU and OVMF with Microsoft's keys,
     the password passed as a hashed credential, a login on the serial line,
     and `mokutil --sb-state`, `systemctl is-system-running`, the grown root,
     DHCP and no host keys checked; and with the snakeoil variables, the
     firmware refusing the disk. `offline-identical`, `no-build-leaks` and
     `failed-build` learn `E2E_TARGET=disk`. `scripts/e2e/README.md` and
-    AGENTS.md's list say which scenarios a disk change runs.
+    AGENTS.md's list say which scenarios a disk change runs. (As built:
+    `disk_boot.py` drives QEMU's serial console over its standard streams,
+    from an overlay twice the image's size, and the host keys are checked
+    to exist, made at the first boot, rather than not to; `no-build-leaks`
+    compares two disks' roots by their contents, since each online build
+    draws a seed of its own, and allows the lock's seed lines and the two
+    files that carry the root's UUID to differ; the library reads a disk's
+    root back with `sfdisk` and `debugfs`.)
 
 ## Pull request 4: the Fedora disk
 

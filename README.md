@@ -307,9 +307,9 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 | `frostroot edit [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back; fetches any missing source keys. The full-screen form can move the recipe to the other distribution. The file is regenerated from the template, so your own comments in it do not survive. |
 | `frostroot capture [--root DIR] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, starting with a page of what it found and what a recipe cannot carry, writes `frostroot.toml`, the signing keys of the third-party sources it could carry and the certificate authorities the machine added under `/usr/local/share/ca-certificates`, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys and certificates; needs no root. |
 | `frostroot validate` | Checks `frostroot.toml`, including that every source's key file is there and is a key, and prints every problem. No network, no root. |
-| `frostroot build [--mirror URL] [--ca-bundle FILE \| --insecure] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-<distro>-<release>-amd64.tar.gz`, such as `dist/lab-ubuntu-24.04-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. Refuses a disk recipe for now (exit 1). |
+| `frostroot build [--mirror URL] [--ca-bundle FILE \| --insecure] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-<distro>-<release>-amd64.tar.gz`, such as `dist/lab-ubuntu-24.04-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. A disk recipe gets `dist/<name>-<distro>-<release>-amd64.img` instead, a raw GPT image that boots with Secure Boot on (see [Disk images](#disk-images)). |
 | `frostroot vendor [--mirror URL] [--ca-bundle FILE \| --insecure] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, a disk image's tools tree's included, or `vendor/rpms/` for Fedora, and every wheel it names into `vendor/wheels/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name, including the partial download an abandoned run leaves behind. |
-| `frostroot build --offline [--keep-work] [--plain]` | Rebuilds the image from `frostroot.lock` and `vendor/debs/` or `vendor/rpms/`, without the network. Fails unless the result has exactly the lock's packages. The lock is read, not written. |
+| `frostroot build --offline [--keep-work] [--plain]` | Rebuilds the image from `frostroot.lock` and `vendor/debs/` or `vendor/rpms/`, without the network. Fails unless the result has exactly the lock's packages. The lock is read, not written. A disk recipe's rebuild makes the same image, byte for byte. |
 | `frostroot version` | Prints the version and the commit it was built from. |
 
 All of them work on the recipe in the current directory. `--plain` asks for
@@ -369,29 +369,45 @@ byte order mark are both accepted.
 ### Disk images
 
 `target = "disk"` in `[image]` asks for a disk image that boots a PC or a VM
-with Secure Boot on, instead of a tarball for WSL. **This version writes and
-checks disk recipes, and `build` refuses them (exit 1): building a disk image
-comes in a later version.** What is settled so far is the recipe: a disk
-recipe has no `[wsl]`, which is `wsl.conf`'s, and may have a `[disk]` table
-with the image file's size and the formats written beside the raw image. Its
-user's password is set at the first boot, so none is in the recipe. `init
+with Secure Boot on, instead of a tarball for WSL: `build` writes
+`dist/<name>-ubuntu-<release>-amd64.img`, a raw GPT image with an EFI system
+partition and an ext4 root, for Ubuntu 24.04 and 26.04. A disk recipe has no
+`[wsl]`, which is `wsl.conf`'s, and may have a `[disk]` table with the image
+file's size, by default the content with room to spare, and the formats to
+write beside the raw image, of which qcow2 comes in a later version. `init
 --target disk` writes one, the full-screen form asks the target after the
 release, and `edit` moves a recipe between the two targets, carrying every
-answer. The design is in the
-[bare-metal spec](docs/superpowers/specs/2026-10-09-frostroot-bare-metal.md).
+answer.
 
-This version also carries what a disk build will assemble the disk with,
-reached only by its tests until `build` makes disks: a **disk tools tree**,
-a small Ubuntu 26.04 tree of e2fsprogs, dosfstools, mtools, fdisk and
-qemu-utils that mmdebstrap makes in the build's work directory before the
-image, whose programs run through bubblewrap with an environment of
-frostroot's own, and which goes when the build is done. The lock records its
-packages as `disk_tools`; `vendor` fetches them into `vendor/debs/` beside
-the image's, and an offline build makes the tree from them and refuses one
-that is not the lock's. It is 26.04's tree whatever the recipe's release,
-because its e2fsprogs reads a tarball and dates what it writes by the frozen
-instant, and 24.04's does neither. A disk build will need `bubblewrap` and,
-unprivileged, `uidmap`, on top of mmdebstrap.
+Beyond a WSL image, the disk holds the kernel with its modules and
+firmware, the signed shim and GRUB that boot under Secure Boot with
+Microsoft's keys, one GRUB entry for the kernel the image was built with,
+netplan asking DHCP of every wired interface, and the image's name as its
+host name. Nothing per machine ships: the machine id reads `uninitialized`,
+there are no SSH host keys (a 24.04 image makes them at its first boot;
+26.04 does on its own), and no password is in the recipe, the lock or the
+image. The first boot asks for the user's password on the screen before any
+login, and systemd-repart grows the root partition to the end of whatever
+disk the image was written to. A hypervisor can pass the password's hash as
+the credential `passwd.hashed-password.<user>`, over SMBIOS or fw_cfg, to
+provision a headless VM. Write the image to a disk with `dd`, or attach it
+to a VM with OVMF.
+
+The disk is assembled by a **disk tools tree**: a small Ubuntu 26.04 tree
+of e2fsprogs, dosfstools, mtools, fdisk and qemu-utils that mmdebstrap makes
+in the build's work directory before the image, whose programs run through
+bubblewrap with an environment of frostroot's own, and which goes when the
+build is done. It is 26.04's whatever the recipe's release, because its
+e2fsprogs reads the tarball and dates what it writes by the frozen instant.
+The lock records the tree's packages as `disk_tools`, and the disk's layout
+as `[disk]`: the seed every identifier on the disk derives from, as
+systemd-repart derives them, the sizes, and the shim file copied. `vendor`
+fetches the tree's packages into `vendor/debs/` beside the image's, and
+`build --offline` makes the tree and the disk from them: two offline builds
+of one lock are the same image, byte for byte. A disk build needs
+`bubblewrap` and, unprivileged, `uidmap`, on top of mmdebstrap, and about
+three times the image's size in its work directory. The design is in the
+[bare-metal spec](docs/superpowers/specs/2026-10-09-frostroot-bare-metal.md).
 
 ## Finding packages
 
@@ -1630,6 +1646,46 @@ no change. And its integration job ran the unprivileged path as the
 runner's own user, on go1.27.3: `scripts/integration.sh` saw all eleven
 required tests pass, `TestIntegrationDiskToolsTree` among them, in 13
 minutes.
+
+The third pull request made the Ubuntu disk. Run here, as root in a
+container on Ubuntu 24.04 with mmdebstrap 1.4.3, bubblewrap 0.9.0, QEMU
+8.2.2 and OVMF, without KVM: `scripts/check.sh` clean on each commit, with
+golangci-lint v2.14.0 built with go1.27.3. The two disk integration tests
+with `FROSTROOT_INTEGRATION_DISK=1`, which CI never runs, at the owner's
+choice: `TestIntegrationResoluteDisk` in 224 s, a 26.04 disk whose GPT,
+root and EFI system partition, read back with the host's sfdisk,
+e2fsprogs, dosfstools and mtools, carry the identifiers the lock's seed
+gives, the shim, GRUB and MokManager where the firmware looks, and nothing
+per machine; and `TestIntegrationDiskOfflineRebuild` in 590 s, two
+rebuilds from the pool alone one SHA-256 and the lock untouched. Its first
+run found an expectation of the test's own, since mdir prints names that
+fit 8.3 as two columns. The four scenarios with `E2E_TARGET=disk`, each
+a 24.04 disk: `failed-build` passed its 8 checks in 137 s, with neither a
+lock nor an image nor `dist/` written; `no-build-leaks` its 15 in 400 s,
+two online disks at one instant, one plain and one with `--ca-bundle` and
+`--insecure`, whose roots differ only in fstab and grub.cfg, which carry
+the seed each build drew, and whose locks differ only in the seed line;
+`disk-boot` its 18 in 400 s: the disk built in 270 s and booted under TCG
+in 111 s by OVMF with Microsoft's keys, mokutil reporting Secure Boot
+enabled under kernel 6.8.0-147, systemd running with no unit failed, the
+root grown to fill the 8G disk, an address by DHCP and archive.ubuntu.com
+resolved, the host name `e2e-disk`, a machine-id of its own, the password
+set from the SMBIOS credential by `frostroot-set-password.service` with
+`Result=success`, the ed25519 host key made at the first boot, and the
+firmware with OVMF's snakeoil variables refusing the disk in 3 s; and
+`offline-identical` its 14 in 613 s, the online build in 274 s, vendor in
+15 s, and two offline rebuilds, 146 s and 145 s, one SHA-256, `2ab8f48c`,
+with the lock as it was. The scenarios' first runs found three things of
+the scenarios' own and nothing of the build's: the boot driver's pattern
+cut the echoed command rather than the answer out of the serial log, 4
+checks; pip in `offline-identical`'s online build could not verify
+files.pythonhosted.org through this container's inspecting proxy, which
+`E2E_CA_BUNDLE` now answers with `--ca-bundle`; and its check of the lock's
+seed looked for double quotes where the lock writes single ones. CI ran on
+the pull request: all four jobs green on the heads before the scenario's
+one-line fix, and the three fast jobs green on it while its integration
+job was still running as this was written. A real PC with Secure Boot on,
+and the first login of a 26.04 disk, are still to check.
 
 
 ## Documentation

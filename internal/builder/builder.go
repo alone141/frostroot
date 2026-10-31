@@ -62,11 +62,15 @@ type BootstrapSpec struct {
 	// Variant is mmdebstrap's: the package set the root filesystem starts
 	// from. "" is "important", what every image is built from; the disk
 	// tools tree is "essential".
-	Variant           string
-	WorkDir           string // scratch space; during Preflight, the work root instead
-	Arch              string // CPU architecture, such as "amd64"
-	InstallRecommends bool   // install Recommends, as apt does by default
-	KeyringPath       string // keyring that verifies the archive; unused when Trusted
+	Variant string
+	// SkipReproducibleCleanup keeps mmdebstrap from its cleanup/reproducible
+	// step, which runs after the last hook and empties /etc/machine-id: a
+	// disk image writes its own and removes the step's files itself.
+	SkipReproducibleCleanup bool
+	WorkDir                 string // scratch space; during Preflight, the work root instead
+	Arch                    string // CPU architecture, such as "amd64"
+	InstallRecommends       bool   // install Recommends, as apt does by default
+	KeyringPath             string // keyring that verifies the archive; unused when Trusted
 	// Trusted means the source lines carry [trusted=yes] and no keyring is
 	// involved: an offline build's local repository, whose files frostroot
 	// verified against the lock itself.
@@ -129,8 +133,12 @@ type Options struct {
 
 // Result describes a finished or failed build.
 type Result struct {
-	LockPath              string // the lock written, or offline the lock rebuilt from
+	LockPath string // the lock written, or offline the lock rebuilt from
+	// TarballPath is the tarball placed, for a WSL recipe; ImagePath the
+	// raw disk image placed, for a disk recipe, whose tarball was a work
+	// file. One of the two is set.
 	TarballPath           string
+	ImagePath             string
 	InstalledPackageCount int    // packages recorded in the lock
 	WorkDir               string // set when the work directory was kept: KeepWork, a failure, or a failed cleanup
 	CleanupErr            error  // the build succeeded but the work directory could not be removed
@@ -203,14 +211,20 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if err != nil {
 		return Result{}, err
 	}
-	// The tree a disk build makes the disk with, nil for a tarball: what
-	// every family shares, as the instant is.
+	// The tree a disk build makes the disk with, and the layout of the
+	// disk, nil for a tarball: what every family shares, as the instant is.
+	// Online the layout's seed is drawn here; offline it is the lock's,
+	// read as hostile input before any work is done.
 	var tools *diskToolsTree
+	var layout *diskLayout
 	if disk {
 		if b.Tools == nil {
 			return Result{}, errors.New("this frostroot was built without a disk tool runner")
 		}
 		if tools, err = newDiskToolsTree(b.Bootstrapper, b.Tools, options, image.buildTrustPEM(), instant.epoch, offline, progress); err != nil {
+			return Result{}, err
+		}
+		if layout, err = chooseDiskLayout(offline); err != nil {
 			return Result{}, err
 		}
 	}
@@ -219,7 +233,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if err != nil {
 		return Result{}, err
 	}
-	if err := image.preflight(ctx, workRoot, instant); err != nil {
+	if err := image.preflight(ctx, workRoot, instant, layout); err != nil {
 		return Result{}, err
 	}
 	if tools != nil {
@@ -247,7 +261,9 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	// debugging evidence. Nothing in dist/ or the lock is touched until the
 	// bootstrap has fully succeeded.
 	result := Result{WorkDir: workDir, Offline: offline != nil, SourceDateEpoch: instant.epoch, Reproducible: instant.fromLock}
-	var builtTarballPath, temporaryLockPath, stagedTarballPath string
+	// The output is the tarball, or for a disk recipe the raw image made
+	// from it, which is then a work file.
+	var builtTarballPath, builtOutputPath, temporaryLockPath, stagedOutputPath string
 	failBuild := func(err error) (Result, error) {
 		// Best effort throughout: the build has already failed, and that
 		// error is the one returned.
@@ -258,11 +274,11 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		if temporaryLockPath != "" {
 			_ = os.Remove(temporaryLockPath)
 		}
-		if stagedTarballPath != "" {
-			// The image is beside its destination under a temporary name,
+		if stagedOutputPath != "" {
+			// The output is beside its destination under a temporary name,
 			// waiting for the lock to land. It goes back to the work
 			// directory, which a failed build keeps, and dist/ is as it was.
-			export.Unstage(stagedTarballPath, builtTarballPath)
+			export.Unstage(stagedOutputPath, builtOutputPath)
 		}
 		return result, err
 	}
@@ -277,6 +293,29 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	builtTarballPath, err = image.bootstrap(ctx, workDir)
 	if err != nil {
 		return failBuild(err)
+	}
+	// An online disk build sizes the disk by the tarball it will hold;
+	// offline the lock said.
+	if layout != nil && !layout.fromLock {
+		tarballInfo, err := os.Stat(builtTarballPath)
+		if err != nil {
+			return failBuild(fmt.Errorf("sizing the disk: %w", err))
+		}
+		if err := layout.size(tarballInfo.Size(), imageRecipe.DiskSize()); err != nil {
+			return failBuild(err)
+		}
+	}
+	// mmdebstrap creates its output file before it starts, so existence alone
+	// proves nothing.
+	if builtTarball, err := os.Stat(builtTarballPath); err != nil || builtTarball.Size() == 0 {
+		return failBuild(fmt.Errorf("bootstrap reported success but left no tarball at %s", builtTarballPath))
+	}
+	builtOutputPath = builtTarballPath
+	if layout != nil {
+		assembly := &diskAssembly{runner: b.Tools, treeDir: tools.dir, workDir: workDir, tarball: filepath.Base(builtTarballPath), layout: *layout, epoch: instant.epoch, progress: progress}
+		if builtOutputPath, err = assembly.assemble(ctx); err != nil {
+			return failBuild(err)
+		}
 	}
 	lockPath := filepath.Join(options.RecipeDir, LockFileName)
 	var counts packageCounts
@@ -298,6 +337,8 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 			// there was a second target does.
 			lock.Target = recipe.TargetDisk
 			lock.DiskTools = tools.packages
+			locked := layout.lock()
+			lock.Disk = &locked
 		}
 		result.PythonPackageCount = counts.python
 		temporaryLockPath, err = writeTemporaryLock(options.RecipeDir, lock)
@@ -307,11 +348,6 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		progress.Report(ProgressEvent{Phase: PhaseWriteLock, Kind: EventPhaseFinished})
 	}
 
-	// mmdebstrap creates its output file before it starts, so existence alone
-	// proves nothing.
-	if builtTarball, err := os.Stat(builtTarballPath); err != nil || builtTarball.Size() == 0 {
-		return failBuild(fmt.Errorf("bootstrap reported success but left no tarball at %s", builtTarballPath))
-	}
 	// The tree has done its work, and goes before anything lands in dist/:
 	// a tree that cannot be removed is a failed build, not a placed image
 	// with a warning, as it is for mkosi's.
@@ -320,10 +356,15 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 			return failBuild(err)
 		}
 	}
-	progress.Report(ProgressEvent{Phase: PhasePlaceTarball, Kind: EventPhaseStarted})
-	tarballPath := filepath.Join(options.RecipeDir, export.TarballRelPath(imageRecipe.Image.Name, string(family), imageRecipe.Image.Release, imageRecipe.Image.Arch))
+	placePhase, outputNoun := PhasePlaceTarball, "tarball"
+	outputPath := filepath.Join(options.RecipeDir, export.TarballRelPath(imageRecipe.Image.Name, string(family), imageRecipe.Image.Release, imageRecipe.Image.Arch))
+	if layout != nil {
+		placePhase, outputNoun = PhasePlaceImage, "image"
+		outputPath = filepath.Join(options.RecipeDir, export.ImageRelPath(imageRecipe.Image.Name, string(family), imageRecipe.Image.Release, imageRecipe.Image.Arch))
+	}
+	progress.Report(ProgressEvent{Phase: placePhase, Kind: EventPhaseStarted})
 	reportCopied := func(copiedBytes, totalBytes int64) {
-		progress.Report(ProgressEvent{Phase: PhasePlaceTarball, Kind: EventProgress, Done: copiedBytes, Total: totalBytes, Unit: UnitBytes})
+		progress.Report(ProgressEvent{Phase: placePhase, Kind: EventProgress, Done: copiedBytes, Total: totalBytes, Unit: UnitBytes})
 	}
 	// Three steps, so that dist/ holds one image and its lock whatever
 	// fails: the tarball is staged beside its destination, the slow step
@@ -335,9 +376,9 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	// For the instant between the two renames the lock describes an image
 	// that is beside it under a temporary name, and should the tarball's
 	// rename fail then, the previous lock is put back.
-	stagedTarballPath, err = export.Stage(builtTarballPath, tarballPath, reportCopied)
+	stagedOutputPath, err = export.Stage(builtOutputPath, outputPath, reportCopied)
 	if err != nil {
-		return failBuild(fmt.Errorf("placing tarball: %w", err))
+		return failBuild(fmt.Errorf("placing %s: %w", outputNoun, err))
 	}
 	var previousLock []byte
 	lockPlaced, hadPreviousLock := false, false
@@ -352,20 +393,24 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		}
 		temporaryLockPath, lockPlaced = "", true
 	}
-	if err := os.Rename(stagedTarballPath, tarballPath); err != nil {
+	if err := os.Rename(stagedOutputPath, outputPath); err != nil {
 		if lockPlaced {
 			restoreLock(lockPath, previousLock, hadPreviousLock)
 		}
-		return failBuild(fmt.Errorf("placing tarball: %w", err))
+		return failBuild(fmt.Errorf("placing %s: %w", outputNoun, err))
 	}
-	stagedTarballPath = ""
+	stagedOutputPath = ""
 	// A copy across filesystems left the source in the work directory, a
 	// rename left nothing; tidying either way, not part of placing.
-	_ = os.Remove(builtTarballPath)
-	progress.Report(ProgressEvent{Phase: PhasePlaceTarball, Kind: EventPhaseFinished})
+	_ = os.Remove(builtOutputPath)
+	progress.Report(ProgressEvent{Phase: placePhase, Kind: EventPhaseFinished})
 
 	result.LockPath = lockPath
-	result.TarballPath = tarballPath
+	if layout != nil {
+		result.ImagePath = outputPath
+	} else {
+		result.TarballPath = outputPath
+	}
 	result.InstalledPackageCount = counts.installed
 	if options.KeepWork {
 		return result, nil
@@ -376,6 +421,23 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	}
 	result.WorkDir = ""
 	return result, nil
+}
+
+// chooseDiskLayout returns a disk build's layout: the lock's offline, a
+// seed of its own online.
+func chooseDiskLayout(offline *offlinePlan) (*diskLayout, error) {
+	if offline != nil {
+		layout, err := diskLayoutFromLock(offline.lock)
+		if err != nil {
+			return nil, err
+		}
+		return &layout, nil
+	}
+	layout, err := newDiskLayout()
+	if err != nil {
+		return nil, err
+	}
+	return &layout, nil
 }
 
 // verifyPool checks vendor/debs, or a Fedora lock's vendor/rpms, and

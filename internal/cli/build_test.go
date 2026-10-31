@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -51,7 +52,13 @@ func (f *fakeBootstrapper) Run(_ context.Context, spec builder.BootstrapSpec) er
 		spec.Progress.Report(builder.ProgressEvent{Phase: builder.PhaseDownload, Kind: builder.EventLogLine, Line: fmt.Sprintf("Get:%d http://archive.ubuntu.com/ubuntu jammy/main amd64 package%d", line+1, line)})
 	}
 	spec.Progress.Report(builder.ProgressEvent{Phase: builder.PhaseDownload, Kind: builder.EventPhaseFinished})
-	if err := os.WriteFile(spec.TarballPath, []byte("tar"), 0o644); err != nil {
+	if spec.TreeDir != "" {
+		// The disk tools tree: a directory, whose records the hooks below
+		// ask for as the image's.
+		if err := os.MkdirAll(filepath.Join(spec.TreeDir, "usr"), 0o755); err != nil {
+			return err
+		}
+	} else if err := os.WriteFile(spec.TarballPath, []byte("tar"), 0o644); err != nil {
 		return err
 	}
 	dpkgStatus := f.dpkgStatus
@@ -102,6 +109,32 @@ func (f *fakeBootstrapper) bootstrapRan() bool {
 	return f.lastSpec.Suite != ""
 }
 
+// fakeToolRunner stands in for bubblewrap: it makes the files truncate
+// would, so that a disk build has an image to place, and removes the tree.
+type fakeToolRunner struct {
+	runs []builder.ToolRun
+}
+
+func (f *fakeToolRunner) Preflight() error { return nil }
+
+func (f *fakeToolRunner) Run(_ context.Context, run builder.ToolRun) error {
+	f.runs = append(f.runs, run)
+	if run.Tool != "truncate" || len(run.Args) != 3 {
+		return nil
+	}
+	path := filepath.Join(run.WorkDir, run.Args[2])
+	size, err := strconv.ParseInt(run.Args[1], 10, 64)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		return err
+	}
+	return os.Truncate(path, size)
+}
+
+func (f *fakeToolRunner) RemoveTree(_ context.Context, dir string) error { return os.RemoveAll(dir) }
+
 // newBuildApp returns an App that builds the recipe in recipeDir with
 // bootstrapper, on Linux, outside WSL, with its work root in a temporary
 // directory.
@@ -120,7 +153,7 @@ func newBuildApp(t *testing.T, recipeDir string, bootstrapper builder.Bootstrapp
 			return ""
 		},
 		WSLPath: func(string) (string, error) { return "", errors.New("not running under WSL") },
-		Builder: &builder.Builder{Bootstrapper: bootstrapper},
+		Builder: &builder.Builder{Bootstrapper: bootstrapper, Tools: &fakeToolRunner{}},
 	}
 }
 

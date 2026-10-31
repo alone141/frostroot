@@ -188,6 +188,9 @@ func (m *Mmdebstrap) commandLine(spec BootstrapSpec) (args, environment []string
 	if spec.InstallRecommends {
 		args = append(args, `--aptopt=Apt::Install-Recommends "true"`)
 	}
+	if spec.SkipReproducibleCleanup {
+		args = append(args, "--skip=cleanup/reproducible")
+	}
 	trustSettings := aptTrustSettings(spec.CaInfoPath, spec.Insecure)
 	if len(trustSettings) > 0 {
 		args = append(args, "--setup-hook="+aptTrustSetupHook(trustSettings))

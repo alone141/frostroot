@@ -28,6 +28,7 @@ The README's "Layout" section maps the packages.
 | Test one package, or one test | `scripts/check.sh --only test -- -run TestName ./internal/cli/` | Arguments after `--` go to `go test`. |
 | Check for known vulnerabilities | `scripts/check.sh --only vuln` | Runs govulncheck against the toolchain go.mod pins. Needs the network. |
 | Run the integration tests as CI does | `scripts/integration.sh` | Real mmdebstrap and real mkosi. About 12 minutes in CI and much longer on a slow link; `FROSTROOT_INTEGRATION_TIMEOUT=90m` raises the 40m limit. Fails if a required test skipped or went missing. |
+| Run the disk integration tests | `FROSTROOT_INTEGRATION_DISK=1 scripts/integration.sh -run 'TestIntegration.*Disk' ./internal/builder/` | A real 26.04 disk, read back with the host's e2fsprogs, util-linux, dosfstools and mtools, and its offline rebuild twice: about 30 minutes, 3 GB of downloads, 5 GB of disk. Never in CI, at the owner's choice; they skip without the variable. |
 | Prove a test pins a fix | `scripts/mutate.sh --revert COMMIT` | Reverts the commit's non-test code, keeps its tests, and runs them. Exit 0 means the tests caught it. |
 | Break one line and run the tests | `scripts/mutate.sh --sed FILE 'SED'` | Restores the file however the run ends. |
 | Run real-build scenarios | `scripts/e2e/run.sh`, then `scripts/e2e/run.sh NAME` | No arguments lists them. Each scenario checks its own results. See [scripts/e2e/README.md](scripts/e2e/README.md). |
@@ -87,6 +88,10 @@ Hand-typed alternatives break in ways that are easy to miss:
     `docs/superpowers/specs/2026-09-28-frostroot-resolute.md`
   - anything of a Fedora build: `offline-identical`, `no-build-leaks` and
     `failed-build` with `E2E_DISTRO=fedora`, and `wsl-boot` on Windows
+  - anything of a disk image, what it holds, the assembly or the lock's
+    `[disk]`: `disk-boot`, and `offline-identical`, `no-build-leaks` and
+    `failed-build` with `E2E_TARGET=disk`; the disk integration tests
+    too, by hand, since CI never runs them
 - A new recipe field needs a form field, a mapping in `FromRecipe` and
   `ToRecipe`, and a line in the recipe template in `internal/cli/init.go`.
   Otherwise `edit` silently drops it. `TestRecipeRoundTrip` and
@@ -107,12 +112,15 @@ Hand-typed alternatives break in ways that are easy to miss:
   the last `--customize-hook`. Never use `--aptopt` for them: mmdebstrap
   ships every `--aptopt` in the image. See `aptTrustSetupHook` in
   `internal/builder/bootstrap.go`.
-- Only mmdebstrap or mkosi writes the tarball. Go code never tars, walks
-  or deletes a root filesystem, because ownership, hardlinks and
-  capabilities would come out wrong. `internal/export` only names and
-  places the tarball, mkosi removes the Fedora tools tree it made, and `rm`
-  removes the disk tools tree, in the user namespace that made it
-  (`Bubblewrap.RemoveTree`).
+- Only mmdebstrap or mkosi writes the tarball, and only the disk tools
+  tree's programs write a file system or a partition table. Go code never
+  tars, walks or deletes a root filesystem, because ownership, hardlinks
+  and capabilities would come out wrong; for a disk it renders text (the
+  sfdisk script, fstab, grub.cfg, the units) and runs tools
+  (`diskAssembly` in `internal/builder/diskassemble.go`). `internal/export`
+  only names and places the tarball or the image, mkosi removes the Fedora
+  tools tree it made, and `rm` removes the disk tools tree, in the user
+  namespace that made it (`Bubblewrap.RemoveTree`).
 - Two offline builds of one lock are byte-identical. Online builds and
   offline builds are not promised to match. An offline build takes
   everything from the lock and never writes it: the frozen instant, the deb
@@ -218,7 +226,10 @@ Hand-typed alternatives break in ways that are easy to miss:
   `TestIntegration*`, and call `skipUnlessMmdebstrapAvailable`, for
   Fedora `skipUnlessFedoraToolsAvailable`, or for the disk tools tree
   `skipUnlessDiskToolsAvailable`. `scripts/integration.sh` requires eleven
-  of them by name, so renaming one means editing that list.
+  of them by name, so renaming one means editing that list. The disk
+  integration tests, `TestIntegration*Disk*`, are not among them: they run
+  only with `FROSTROOT_INTEGRATION_DISK=1`, and `skipUnlessDiskIntegrationAsked`
+  says so.
 - A fake implements the real interface and lives in the test file that uses
   it. `builder` and `cli` each have their own `fakeBootstrapper`.
 - New hook text is run through a real `sh`, with hostile paths.

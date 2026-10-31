@@ -96,8 +96,8 @@ func TestInitWithTargetDisk(t *testing.T) {
 		t.Errorf("the summary does not describe the disk:\n%s", stdout)
 	}
 	exitCode, validated, note := runValidateIn(recipeDir)
-	if exitCode != exitSuccess || !strings.Contains(validated, "Ubuntu 26.04 amd64, disk image,") || !strings.Contains(note, "building a disk image comes in a later version") {
-		t.Errorf("validate: exit %d, stdout %q, stderr %q", exitCode, validated, note)
+	if exitCode != exitSuccess || !strings.Contains(validated, "Ubuntu 26.04 amd64, disk image,") || strings.TrimSpace(note) != "" {
+		t.Errorf("validate: exit %d, stdout %q, stderr %q; want the summary and no note", exitCode, validated, note)
 	}
 }
 
@@ -117,26 +117,49 @@ func TestInitRefusesAnUnknownTarget(t *testing.T) {
 	}
 }
 
-// TestBuildRefusesADiskRecipe: a disk recipe validates, and build says
-// that this version does not build it yet, as a user error, before any
-// bootstrapper is asked to.
-func TestBuildRefusesADiskRecipe(t *testing.T) {
+// TestBuildMakesADiskImage: a disk recipe builds a raw image in dist/ with
+// the lock, and the report says how to use it: no wsl --import, the
+// password at the first boot.
+func TestBuildMakesADiskImage(t *testing.T) {
 	recipeDir := newRecipeDir(t, "disk.toml")
 	bootstrapper := &fakeBootstrapper{}
 	var stdout, stderr bytes.Buffer
 	app := newBuildApp(t, recipeDir, bootstrapper, &stdout, &stderr)
-	if exitCode := app.Run([]string{"build", "--plain"}); exitCode != exitUserError {
-		t.Fatalf("exit code = %d, want a user error\n%s", exitCode, stderr.String())
+	if exitCode := app.Run([]string{"build", "--plain"}); exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, want success\n%s", exitCode, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), `asks for a disk image (target = "disk")`) || !strings.Contains(stderr.String(), "later version") {
-		t.Errorf("stderr = %q", stderr.String())
+	imagePath := filepath.Join(recipeDir, "dist", "pc-lab-ubuntu-26.04-amd64.img")
+	if _, err := os.Stat(imagePath); err != nil {
+		t.Errorf("the image was not placed: %v", err)
 	}
-	if bootstrapper.bootstrapRan() {
-		t.Error("the bootstrapper ran")
+	if _, err := os.Stat(filepath.Join(recipeDir, "dist", "pc-lab-ubuntu-26.04-amd64.tar.gz")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a tarball was placed for a disk recipe: %v", err)
 	}
-	for _, path := range []string{filepath.Join(recipeDir, "frostroot.lock"), filepath.Join(recipeDir, "dist")} {
-		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("%s exists after a refused build: %v", path, err)
+	for _, want := range []string{
+		"Wrote dist/pc-lab-ubuntu-26.04-amd64.img (", ", sparse)", "Wrote frostroot.lock (",
+		"sudo dd if=dist/pc-lab-ubuntu-26.04-amd64.img of=/dev/sdX", "The first boot asks for the password of student on the screen",
+		"frostroot vendor",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("stdout lacks %q:\n%s", want, stdout.String())
 		}
+	}
+	if strings.Contains(stdout.String(), "wsl --import") {
+		t.Errorf("a disk image is not imported into WSL:\n%s", stdout.String())
+	}
+	for _, want := range []string{"frostroot: Make the tools tree", "frostroot: Assemble the disk image", "frostroot: Write frostroot.lock", "frostroot: Place the disk image"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr lacks the phase %q:\n%s", want, stderr.String())
+		}
+	}
+	lock, err := recipe.LoadLock(filepath.Join(recipeDir, "frostroot.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lock.Target != recipe.TargetDisk || lock.Disk == nil || lock.Disk.DiskBytes != 16<<30 || len(lock.DiskTools) == 0 {
+		t.Errorf("lock: target %q, disk %+v, %d tools; want the disk target, the 16G asked for, the tree's packages", lock.Target, lock.Disk, len(lock.DiskTools))
+	}
+	if spec := bootstrapper.lastSpec; spec.Suite != "resolute" || !strings.Contains(strings.Join(spec.Include, " "), "linux-image-generic") {
+		t.Errorf("the image was built as %+v", spec)
 	}
 }

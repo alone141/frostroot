@@ -1,6 +1,7 @@
 package export
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -278,5 +279,60 @@ func TestCreateTemp(t *testing.T) {
 		if !strings.HasPrefix(name, ".frostroot.lock.") || !strings.HasSuffix(name, ".tmp") {
 			t.Errorf("name %q does not follow the pattern", name)
 		}
+	}
+}
+
+func TestImageRelPath(t *testing.T) {
+	if got := ImageRelPath("lab", "ubuntu", "26.04", "amd64"); got != filepath.Join("dist", "lab-ubuntu-26.04-amd64.img") {
+		t.Errorf("ImageRelPath = %q", got)
+	}
+}
+
+// TestStageKeepsHolesAcrossFilesystems: a raw disk image is mostly holes,
+// and a copy that wrote every zero would fill the drive dist/ is on.
+func TestStageKeepsHolesAcrossFilesystems(t *testing.T) {
+	const size = 8 << 20
+	sourcePath := filepath.Join(t.TempDir(), "disk.img")
+	source, err := os.Create(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.WriteAt([]byte("head"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.WriteAt([]byte("tail"), 6<<20); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Truncate(size); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+	destinationPath := filepath.Join(t.TempDir(), "dist", "lab.img")
+	var reports [][2]int64
+	stagedPath, err := stage(sourcePath, destinationPath, renameAcrossFilesystems, func(copied, total int64) { reports = append(reports, [2]int64{copied, total}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(stagedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("the copy differs from the source: %d bytes, want %d", len(got), len(want))
+	}
+	if last := reports[len(reports)-1]; last != [2]int64{size, size} {
+		t.Errorf("last report = %v, want the whole size, holes included", last)
+	}
+	if allocated(t, sourcePath) >= size {
+		t.Skip("this file system keeps no holes, so there are none to keep")
+	}
+	if copied := allocated(t, stagedPath); copied >= size/2 {
+		t.Errorf("the copy takes %d bytes on disk for %d of content; the holes were written out", copied, size)
 	}
 }

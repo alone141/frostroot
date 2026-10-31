@@ -159,6 +159,20 @@ func TestMmdebstrapCommandLineForATree(t *testing.T) {
 	}
 }
 
+// TestMmdebstrapCommandLineSkipsTheReproducibleCleanupForADisk: the step
+// that empties machine-id after the last hook is skipped only when asked.
+func TestMmdebstrapCommandLineSkipsTheReproducibleCleanupForADisk(t *testing.T) {
+	spec := BootstrapSpec{Suite: "resolute", TarballPath: "/w/image.tar", WorkDir: "/w", Arch: "amd64", SkipReproducibleCleanup: true}
+	args, _ := (&Mmdebstrap{CurrentUID: uidFunc(1000)}).commandLine(spec)
+	if !slices.Contains(args, "--skip=cleanup/reproducible") {
+		t.Errorf("args = %q, want the cleanup skipped", args)
+	}
+	spec.SkipReproducibleCleanup = false
+	if args, _ := (&Mmdebstrap{CurrentUID: uidFunc(1000)}).commandLine(spec); slices.Contains(args, "--skip=cleanup/reproducible") {
+		t.Errorf("args = %q, want no skip for a WSL image", args)
+	}
+}
+
 func TestMmdebstrapCommandLineDefaultsAndOptionalFlags(t *testing.T) {
 	minimalSpec := BootstrapSpec{Suite: "noble", TarballPath: "/t", WorkDir: "/w", Arch: "amd64"}
 	args, environment := (&Mmdebstrap{CurrentUID: uidFunc(1000)}).commandLine(minimalSpec)

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# proves: a build that asks for a package that does not exist fails with exit 2, prints apt's own explanation first, or dnf5's for Fedora, keeps its work directory, and writes neither a lock nor a tarball
-# needs: the network, user namespaces, and mmdebstrap and ubuntu-keyring, or for Fedora mkosi with dnf, rpm, createrepo_c and bubblewrap
+# proves: a build that asks for a package that does not exist fails with exit 2, prints apt's own explanation first, or dnf5's for Fedora, keeps its work directory, and writes neither a lock nor a tarball, nor a disk image with E2E_TARGET=disk
+# needs: the network, user namespaces, and mmdebstrap and ubuntu-keyring, or for Fedora mkosi with dnf, rpm, createrepo_c and bubblewrap, and bubblewrap for a disk
 # takes: about 2 minutes
 #
 # The line that explains a failed build is found in mmdebstrap's whole log,
@@ -27,5 +27,6 @@ e2e_check "it points at the line of the log that explains it" e2e_contains "$LAB
 e2e_check "and that line is the package manager's" e2e_contains "$LAB/build.err" "$explanation"
 e2e_check "it keeps the work directory to look at" e2e_contains "$LAB/build.err" "work directory kept at"
 e2e_check "no lock was written" test ! -e "$lab/frostroot.lock"
-e2e_check "no tarball was written" test ! -e "$lab/$(e2e_tarball e2e-broken)"
+e2e_check "no tarball or image was written" test ! -e "$lab/$(e2e_output e2e-broken)"
+e2e_check "and no file of any kind in dist/" test ! -d "$lab/dist"
 e2e_end

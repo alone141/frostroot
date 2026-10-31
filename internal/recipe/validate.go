@@ -472,6 +472,14 @@ func targetProblems(imageRecipe Recipe) []string {
 	if imageRecipe.WSL != (WSL{}) {
 		problems = append(problems, "[wsl] is for WSL recipes: a disk image has no wsl.conf, so remove the table")
 	}
+	// An Ubuntu release frostroot makes no disk of: the boot chain and the
+	// first boot were measured on the releases that build one. Fedora's
+	// disk is build's to refuse until it is built.
+	if family, err := distro.FamilyOf(imageRecipe.Image.Distro); err == nil && family == distro.Ubuntu {
+		if release, err := distro.Lookup(imageRecipe.Image.Release, imageRecipe.Image.Arch); err == nil && !release.BuildsDisks() {
+			problems = append(problems, fmt.Sprintf("a disk image is built for Ubuntu %s, not %s", orList(distro.DiskVersions(distro.Ubuntu)), imageRecipe.Image.Release))
+		}
+	}
 	if size := imageRecipe.DiskSize(); size != "" {
 		if err := CheckDiskSize(size); err != nil {
 			problems = append(problems, err.Error())
@@ -569,4 +577,16 @@ func DefaultUser(imageRecipe Recipe) string {
 		return imageRecipe.WSL.DefaultUser
 	}
 	return imageRecipe.User.Name
+}
+
+// orList renders choices the way a sentence offers them: "24.04", "24.04 or
+// 26.04", "22.04, 24.04 or 26.04".
+func orList(choices []string) string {
+	switch len(choices) {
+	case 0:
+		return ""
+	case 1:
+		return choices[0]
+	}
+	return strings.Join(choices[:len(choices)-1], ", ") + " or " + choices[len(choices)-1]
 }

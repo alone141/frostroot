@@ -33,7 +33,9 @@ const (
 	PhaseVendorCheck       // vendor: check what vendor/ already holds
 	PhaseVendorDownload    // vendor: download the rest
 	PhaseVendorPrune       // vendor --prune: remove files the lock does not name
-	PhaseMakeToolsTree     // Fedora build: mkosi makes the tools tree
+	PhaseMakeToolsTree     // Fedora build: mkosi makes the tools tree; disk build: mmdebstrap does
+	PhaseAssembleDisk      // disk build: the tools tree makes the disk from the tarball
+	PhasePlaceImage        // disk build: the raw image lands in dist/
 	phaseCount
 )
 
@@ -56,6 +58,8 @@ var phaseTitles = [phaseCount]string{
 	PhaseVendorDownload:    "Download packages",
 	PhaseVendorPrune:       "Remove packages not in the lock",
 	PhaseMakeToolsTree:     "Make the tools tree",
+	PhaseAssembleDisk:      "Assemble the disk image",
+	PhasePlaceImage:        "Place the disk image",
 }
 
 // Title returns the phase's name as a progress display shows it.
@@ -88,6 +92,27 @@ func FedoraPhases(offline bool) []Phase {
 		return []Phase{PhaseVerifyVendored, PhasePrepareRepository, PhaseMakeToolsTree, PhaseInstallRequested, PhaseProvision, PhaseCreateTarball, PhaseCheckLock, PhasePlaceTarball}
 	}
 	return []Phase{PhaseMakeToolsTree, PhaseDownload, PhaseInstallRequested, PhaseProvision, PhaseCreateTarball, PhaseWriteLock, PhasePlaceTarball}
+}
+
+// DiskPhases returns the phases of a disk build, in order: the tools tree
+// before the image, which has Phases' or OfflinePhases' own, then the
+// assembly, and the image placed instead of a tarball.
+func DiskPhases(python, offline bool) []Phase {
+	phases := []Phase{PhaseMakeToolsTree}
+	if offline {
+		phases = []Phase{PhaseVerifyVendored, PhaseMakeToolsTree, PhasePrepareRepository}
+	}
+	phases = append(phases, PhaseUpdateIndex, PhaseDownload, PhaseExtract, PhaseInstallEssential, PhaseInstallRequested, PhaseProvision)
+	if python {
+		phases = append(phases, PhaseInstallPython)
+	}
+	phases = append(phases, PhaseCreateTarball, PhaseAssembleDisk)
+	if offline {
+		phases = append(phases, PhaseCheckLock)
+	} else {
+		phases = append(phases, PhaseWriteLock)
+	}
+	return append(phases, PhasePlaceImage)
 }
 
 // OfflinePhases returns the phases of a build from the vendored pools, in

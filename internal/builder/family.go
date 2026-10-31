@@ -12,9 +12,10 @@ import (
 // they are declared, with checkAgainstLock for an offline build and
 // composeLock for an online one.
 type familyBuild interface {
-	// preflight takes the build's work root and frozen instant, and checks
-	// the host before any work directory exists.
-	preflight(ctx context.Context, workRoot string, instant frozenInstant) error
+	// preflight takes the build's work root, frozen instant and, for a
+	// disk image, its layout, and checks the host before any work
+	// directory exists.
+	preflight(ctx context.Context, workRoot string, instant frozenInstant, disk *diskLayout) error
 	// bootstrap installs the image in workDir, reads what it installed, and
 	// returns the path of the tarball it wrote there.
 	bootstrap(ctx context.Context, workDir string) (tarballPath string, err error)
