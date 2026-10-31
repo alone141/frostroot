@@ -1647,6 +1647,46 @@ runner's own user, on go1.27.3: `scripts/integration.sh` saw all eleven
 required tests pass, `TestIntegrationDiskToolsTree` among them, in 13
 minutes.
 
+The third pull request made the Ubuntu disk. Run here, as root in a
+container on Ubuntu 24.04 with mmdebstrap 1.4.3, bubblewrap 0.9.0, QEMU
+8.2.2 and OVMF, without KVM: `scripts/check.sh` clean on each commit, with
+golangci-lint v2.14.0 built with go1.27.3. The two disk integration tests
+with `FROSTROOT_INTEGRATION_DISK=1`, which CI never runs, at the owner's
+choice: `TestIntegrationResoluteDisk` in 224 s, a 26.04 disk whose GPT,
+root and EFI system partition, read back with the host's sfdisk,
+e2fsprogs, dosfstools and mtools, carry the identifiers the lock's seed
+gives, the shim, GRUB and MokManager where the firmware looks, and nothing
+per machine; and `TestIntegrationDiskOfflineRebuild` in 590 s, two
+rebuilds from the pool alone one SHA-256 and the lock untouched. Its first
+run found an expectation of the test's own, since mdir prints names that
+fit 8.3 as two columns. The four scenarios with `E2E_TARGET=disk`, each
+a 24.04 disk: `failed-build` passed its 8 checks in 137 s, with neither a
+lock nor an image nor `dist/` written; `no-build-leaks` its 15 in 400 s,
+two online disks at one instant, one plain and one with `--ca-bundle` and
+`--insecure`, whose roots differ only in fstab and grub.cfg, which carry
+the seed each build drew, and whose locks differ only in the seed line;
+`disk-boot` its 18 in 400 s: the disk built in 270 s and booted under TCG
+in 111 s by OVMF with Microsoft's keys, mokutil reporting Secure Boot
+enabled under kernel 6.8.0-147, systemd running with no unit failed, the
+root grown to fill the 8G disk, an address by DHCP and archive.ubuntu.com
+resolved, the host name `e2e-disk`, a machine-id of its own, the password
+set from the SMBIOS credential by `frostroot-set-password.service` with
+`Result=success`, the ed25519 host key made at the first boot, and the
+firmware with OVMF's snakeoil variables refusing the disk in 3 s; and
+`offline-identical` its 14 in 613 s, the online build in 274 s, vendor in
+15 s, and two offline rebuilds, 146 s and 145 s, one SHA-256, `2ab8f48c`,
+with the lock as it was. The scenarios' first runs found three things of
+the scenarios' own and nothing of the build's: the boot driver's pattern
+cut the echoed command rather than the answer out of the serial log, 4
+checks; pip in `offline-identical`'s online build could not verify
+files.pythonhosted.org through this container's inspecting proxy, which
+`E2E_CA_BUNDLE` now answers with `--ca-bundle`; and its check of the lock's
+seed looked for double quotes where the lock writes single ones. CI ran on
+the pull request: all four jobs green on the heads before the scenario's
+one-line fix, and the three fast jobs green on it while its integration
+job was still running as this was written. A real PC with Secure Boot on,
+and the first login of a 26.04 disk, are still to check.
+
 
 ## Documentation
 
