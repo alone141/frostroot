@@ -12,7 +12,11 @@ import (
 	"strconv"
 	"strings"
 
+	"time"
+
+	"frostroot/internal/deb"
 	"frostroot/internal/distro"
+	"frostroot/internal/pool"
 	"frostroot/internal/recipe"
 )
 
@@ -235,7 +239,8 @@ const diskToolsVariant = "essential"
 const (
 	diskToolsDirName   = "disk-tools"
 	diskToolsTreeName  = "tree"
-	diskToolsStageName = "stage" // what the lock is written from
+	diskToolsStageName = "stage" // what the lock is written from, or checked against
+	diskToolsPoolName  = "pool"  // offline: the local repository of the vendored tools
 )
 
 // diskToolsTree is the tree a disk build runs its tools in: made by
@@ -250,6 +255,7 @@ type diskToolsTree struct {
 	trustPEM     []byte // what the tree's apt trusts beyond the host's store
 	insecure     bool
 	epoch        int64
+	offline      *offlinePlan // nil online
 
 	// Set by make.
 	workDir  string // the tree's own work directory
@@ -258,7 +264,7 @@ type diskToolsTree struct {
 }
 
 // newDiskToolsTree resolves the release the tree is made from.
-func newDiskToolsTree(bootstrapper Bootstrapper, runner ToolRunner, options Options, trustPEM []byte, epoch int64, progress Progress) (*diskToolsTree, error) {
+func newDiskToolsTree(bootstrapper Bootstrapper, runner ToolRunner, options Options, trustPEM []byte, epoch int64, offline *offlinePlan, progress Progress) (*diskToolsTree, error) {
 	release, err := distro.Lookup(diskToolsRelease, distro.SupportedArch)
 	if err != nil {
 		return nil, err
@@ -272,6 +278,7 @@ func newDiskToolsTree(bootstrapper Bootstrapper, runner ToolRunner, options Opti
 		trustPEM:     trustPEM,
 		insecure:     options.Insecure,
 		epoch:        epoch,
+		offline:      offline,
 	}, nil
 }
 
@@ -289,7 +296,9 @@ func (d *diskToolsTree) archiveURL() string {
 }
 
 // make has mmdebstrap install the tree under buildDir, as the tools tree
-// phase, and reads what it installed for the lock.
+// phase: online from the archive, reading what it installed for the lock;
+// offline from a local repository of the vendored tools, checking what it
+// installed against the lock.
 func (d *diskToolsTree) make(ctx context.Context, buildDir string) error {
 	d.progress.Report(ProgressEvent{Phase: PhaseMakeToolsTree, Kind: EventPhaseStarted})
 	d.workDir = filepath.Join(buildDir, diskToolsDirName)
@@ -299,10 +308,6 @@ func (d *diskToolsTree) make(ctx context.Context, buildDir string) error {
 	if err := makeDirectoriesWithMode(stageDir, 0o755); err != nil {
 		return err
 	}
-	caInfoPath, err := writeAptCaInfo(d.workDir, d.trustPEM)
-	if err != nil {
-		return err
-	}
 	dpkgStatusPath := filepath.Join(stageDir, "dpkg-status")
 	listsDir := filepath.Join(stageDir, "lists")
 	spec := BootstrapSpec{
@@ -310,15 +315,30 @@ func (d *diskToolsTree) make(ctx context.Context, buildDir string) error {
 		SourceLines:     d.release.SourceLines(d.mirrorURL),
 		Include:         DiskToolsPackages,
 		Variant:         diskToolsVariant,
-		CustomizeHooks:  diskToolsHooks(stageDir, dpkgStatusPath),
+		CustomizeHooks:  diskToolsHooks(stageDir, dpkgStatusPath, d.offline == nil),
 		TreeDir:         filepath.Join(d.workDir, diskToolsTreeName),
 		WorkDir:         d.workDir,
 		Arch:            distro.SupportedArch, // the host's, which runs the tools
 		KeyringPath:     UbuntuArchiveKeyring,
 		SourceDateEpoch: d.epoch,
-		CaInfoPath:      caInfoPath,
-		Insecure:        d.insecure,
 		Progress:        toolsTreeProgress{d.progress},
+	}
+	if d.offline == nil {
+		caInfoPath, err := writeAptCaInfo(d.workDir, d.trustPEM)
+		if err != nil {
+			return err
+		}
+		spec.CaInfoPath, spec.Insecure = caInfoPath, d.insecure
+	} else {
+		// Every locked package by name, from a repository of exactly the
+		// lock's files, which frostroot verified itself, as the image's.
+		repositoryDir := filepath.Join(d.workDir, diskToolsPoolName)
+		if err := d.stageRepository(repositoryDir); err != nil {
+			return err
+		}
+		spec.SourceLines = []string{"deb [trusted=yes] copy://" + repositoryDir + " ./"}
+		spec.Include = lockedNames(d.offline.lock.DiskTools)
+		spec.Trusted, spec.KeyringPath = true, ""
 	}
 	// The tree exists from here on, in part at least, whatever mmdebstrap
 	// says of it, and remove must find it.
@@ -330,23 +350,42 @@ func (d *diskToolsTree) make(ctx context.Context, buildDir string) error {
 	if err != nil {
 		return fmt.Errorf("the disk tools tree: %w", err)
 	}
-	if err := recordChecksums(listsDir, installed, indexOrigins(d.release, d.archiveURL(), nil)); err != nil {
-		return fmt.Errorf("the disk tools tree: %w", err)
+	if d.offline == nil {
+		if err := recordChecksums(listsDir, installed, indexOrigins(d.release, d.archiveURL(), nil)); err != nil {
+			return fmt.Errorf("the disk tools tree: %w", err)
+		}
+	} else if details := packageSetDifferences(d.offline.lock.DiskTools, installed, "the disk tools tree"); len(details) > 0 {
+		return fmt.Errorf("%w: %s", ErrImageDiffersFromLock, strings.Join(details, "; "))
 	}
 	d.packages = installed
 	d.progress.Report(ProgressEvent{Phase: PhaseMakeToolsTree, Kind: EventPhaseFinished})
 	return nil
 }
 
+// stageRepository builds the local flat repository an offline tree installs
+// from, with a bytes bar under the tools tree phase.
+func (d *diskToolsTree) stageRepository(repositoryDir string) error {
+	release := deb.FlatRelease{Suite: d.release.Suite, Arch: distro.SupportedArch, Date: time.Now()}
+	err := pool.Stage(d.offline.poolDir, d.offline.entriesFor(d.offline.lock.DiskTools), repositoryDir, release, func(doneBytes, totalBytes int64) {
+		d.progress.Report(ProgressEvent{Phase: PhaseMakeToolsTree, Kind: EventProgress, Done: doneBytes, Total: totalBytes, Unit: UnitBytes})
+	})
+	if err != nil {
+		return fmt.Errorf("preparing the disk tools' local repository: %w", err)
+	}
+	return nil
+}
+
 // diskToolsHooks are the tree's customize hooks: what the lock is written
-// from, and nothing else, since the tree is run from and never shipped.
-func diskToolsHooks(stageDir, dpkgStatusPath string) []string {
-	return []string{
+// from, or offline checked against, and nothing else, since the tree is run
+// from and never shipped.
+func diskToolsHooks(stageDir, dpkgStatusPath string, recordForLock bool) []string {
+	var hooks []string
+	if recordForLock {
 		// The indexes apt verified; mmdebstrap deletes them in its cleanup,
 		// after the hooks. copy-out puts "lists" inside the destination.
-		"copy-out /var/lib/apt/lists " + shellQuote(stageDir),
-		"download /var/lib/dpkg/status " + shellQuote(dpkgStatusPath),
+		hooks = append(hooks, "copy-out /var/lib/apt/lists "+shellQuote(stageDir))
 	}
+	return append(hooks, "download /var/lib/dpkg/status "+shellQuote(dpkgStatusPath))
 }
 
 // describeTreeFailure says whose failure it is, and points the command line

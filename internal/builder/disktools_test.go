@@ -12,7 +12,10 @@ import (
 	"strings"
 	"testing"
 
+	"frostroot/internal/deb"
+	"frostroot/internal/deb/debtest"
 	"frostroot/internal/distro"
+	"frostroot/internal/pool"
 	"frostroot/internal/recipe"
 )
 
@@ -297,7 +300,7 @@ func TestDiskBuildMakesTheToolsTreeAndRecordsItInTheLock(t *testing.T) {
 	if want := filepath.Join(workRoot, "build-*", "disk-tools"); !matchesGlob(t, want, tree.WorkDir) || tree.TreeDir != filepath.Join(tree.WorkDir, "tree") || tree.TarballPath != "" {
 		t.Errorf("the tree's work directory is %q and the tree %q, want %s and tree below it, with no tarball", tree.WorkDir, tree.TreeDir, want)
 	}
-	if want := diskToolsHooks(filepath.Join(tree.WorkDir, "stage"), filepath.Join(tree.WorkDir, "stage", "dpkg-status")); !slices.Equal(tree.CustomizeHooks, want) {
+	if want := diskToolsHooks(filepath.Join(tree.WorkDir, "stage"), filepath.Join(tree.WorkDir, "stage", "dpkg-status"), true); !slices.Equal(tree.CustomizeHooks, want) {
 		t.Errorf("the tree's hooks are %q, want %q", tree.CustomizeHooks, want)
 	}
 	// The image is built as it was, after the tree, for the recipe's own
@@ -506,5 +509,192 @@ func TestToolsTreeProgressRelabelsTheBootstrapsOutput(t *testing.T) {
 	}
 	if !slices.Equal(recorder.events, want) {
 		t.Errorf("events = %+v, want %+v", recorder.events, want)
+	}
+}
+
+// expectedDiskTarballPath is where a build of sampleDiskRecipe places its
+// tarball.
+func expectedDiskTarballPath(options Options) string {
+	return filepath.Join(options.RecipeDir, "dist", "cpp-lab-ubuntu-24.04-amd64.tar.gz")
+}
+
+// writeVendoredDiskLock builds sampleDiskRecipe online with fakes, puts a
+// .deb for every package the lock names, the tree's included, into
+// vendor/debs, and fixes the lock's checksums to those files.
+func writeVendoredDiskLock(t *testing.T, options Options) recipe.Lockfile {
+	t.Helper()
+	if _, err := buildDiskWith(&fakeBootstrapper{}, &fakeToolRunner{}, options); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(options.RecipeDir, LockFileName)
+	lock, err := recipe.LoadLock(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	poolDir := filepath.Join(options.RecipeDir, "vendor", "debs")
+	if err := os.MkdirAll(poolDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, packages := range [][]recipe.LockPackage{lock.Packages, lock.DiskTools} {
+		for index, locked := range packages {
+			path := debtest.Build(t, poolDir, filepath.Base(locked.Filename), ".zst", debtest.Control(locked.Name, locked.Version, locked.Arch))
+			size, digest, err := deb.SHA256File(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			packages[index].Size, packages[index].SHA256 = size, digest
+		}
+	}
+	if err := recipe.SaveLock(lockPath, lock); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(expectedDiskTarballPath(options)); err != nil {
+		t.Fatal(err)
+	}
+	return lock
+}
+
+// diskOfflineFakeBootstrapper is a fakeBootstrapper that records which
+// files each local repository held: the tree's and the image's apart.
+type diskOfflineFakeBootstrapper struct {
+	fakeBootstrapper
+	treeRepositoryFiles, imageRepositoryFiles []string
+}
+
+func (f *diskOfflineFakeBootstrapper) Run(ctx context.Context, spec BootstrapSpec) error {
+	if len(spec.SourceLines) == 1 {
+		repositoryDir := strings.TrimSuffix(strings.TrimPrefix(spec.SourceLines[0], "deb [trusted=yes] copy://"), " ./")
+		entries, err := os.ReadDir(repositoryDir)
+		if err != nil {
+			return err
+		}
+		var names []string
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		if spec.TreeDir != "" {
+			f.treeRepositoryFiles = names
+		} else {
+			f.imageRepositoryFiles = names
+		}
+	}
+	return f.fakeBootstrapper.Run(ctx, spec)
+}
+
+func TestDiskBuildOfflineMakesTheTreeFromThePool(t *testing.T) {
+	options, _ := newTestOptions(t)
+	lock := writeVendoredDiskLock(t, options)
+	lockPath := filepath.Join(options.RecipeDir, LockFileName)
+	lockBefore, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.Offline = true
+	options.ExtraTrustPEM = certificatePEM(t, "Build-only Proxy CA")
+	bootstrapper := &diskOfflineFakeBootstrapper{}
+	runner := &fakeToolRunner{}
+	result, err := buildDiskWith(bootstrapper, runner, options)
+	if err != nil {
+		t.Fatalf("Build = %v", err)
+	}
+	tree := bootstrapper.treeSpec
+	if !tree.Trusted || tree.KeyringPath != "" || tree.CaInfoPath != "" {
+		t.Errorf("an offline tree trusts its own verified repository, no keyring and no bundle: %+v", tree)
+	}
+	if len(tree.SourceLines) != 1 || tree.SourceLines[0] != "deb [trusted=yes] copy://"+filepath.Join(tree.WorkDir, "pool")+" ./" {
+		t.Errorf("SourceLines = %q, want the tree's own local repository", tree.SourceLines)
+	}
+	if want := []string{"e2fsprogs", "mtools"}; !slices.Equal(tree.Include, want) {
+		t.Errorf("Include = %q, want every locked tool, sorted", tree.Include)
+	}
+	if want := []string{"download /var/lib/dpkg/status '" + filepath.Join(tree.WorkDir, "stage", "dpkg-status") + "'"}; !slices.Equal(tree.CustomizeHooks, want) {
+		t.Errorf("hooks = %q, want the status download alone: no apt lists are copied offline", tree.CustomizeHooks)
+	}
+	if tree.Suite != "resolute" || tree.Variant != "essential" || tree.SourceDateEpoch != lock.SourceDateEpoch {
+		t.Errorf("the tree is %s %s frozen at %d, want resolute, essential, the lock's %d", tree.Suite, tree.Variant, tree.SourceDateEpoch, lock.SourceDateEpoch)
+	}
+	// Each repository holds its own build's files: the image's apt must
+	// never see the tree's newer versions.
+	slices.Sort(bootstrapper.treeRepositoryFiles)
+	if want := []string{"Packages", "Release", "e2fsprogs_1.47.2-3ubuntu1_amd64.deb", "mtools_4.0.49-1_amd64.deb"}; !slices.Equal(bootstrapper.treeRepositoryFiles, want) {
+		t.Errorf("the tree's repository held %q, want %q", bootstrapper.treeRepositoryFiles, want)
+	}
+	slices.Sort(bootstrapper.imageRepositoryFiles)
+	if want := []string{"Packages", "Release", "git_1%3a2.34.1-1ubuntu1.11_amd64.deb", "libc6_2.35-0ubuntu3.8_amd64.deb"}; !slices.Equal(bootstrapper.imageRepositoryFiles, want) {
+		t.Errorf("the image's repository held %q, want %q", bootstrapper.imageRepositoryFiles, want)
+	}
+	if !slices.Equal(runner.removed, []string{tree.TreeDir}) {
+		t.Errorf("removed %q, want the tree", runner.removed)
+	}
+	lockAfter, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(lockAfter) != string(lockBefore) {
+		t.Error("an offline build must not rewrite the lock")
+	}
+	if !result.Offline || !result.Reproducible || result.InstalledPackageCount != 2 {
+		t.Errorf("Result = %+v, want an offline, reproducible build of the lock's 2 packages", result)
+	}
+	if _, err := os.Stat(expectedDiskTarballPath(options)); err != nil {
+		t.Errorf("tarball not placed: %v", err)
+	}
+}
+
+func TestDiskBuildOfflineFailsWhenTheTreeDiffersFromTheLock(t *testing.T) {
+	options, _ := newTestOptions(t)
+	writeVendoredDiskLock(t, options)
+	options.Offline = true
+	bootstrapper := &fakeBootstrapper{treeDpkgStatus: "Package: e2fsprogs\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1.47.2-3ubuntu1\n\n" +
+		"Package: mtools\nStatus: install ok installed\nArchitecture: amd64\nVersion: 4.0.50-1\n"}
+	runner := &fakeToolRunner{}
+	result, err := buildDiskWith(bootstrapper, runner, options)
+	if !errors.Is(err, ErrImageDiffersFromLock) {
+		t.Fatalf("Build = %v, want ErrImageDiffersFromLock", err)
+	}
+	for _, want := range []string{"the disk tools tree", "mtools 4.0.49-1 amd64", "mtools 4.0.50-1 amd64"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %v, want it to say %q", err, want)
+		}
+	}
+	if bootstrapper.runCount != 0 {
+		t.Error("the image was built with a tree that is not the lock's")
+	}
+	if len(runner.removed) != 1 || result.WorkDir == "" {
+		t.Errorf("removed %q, work directory %q; want the tree removed and the directory kept", runner.removed, result.WorkDir)
+	}
+	// The lock is an offline build's input, so only dist/ is looked at.
+	if _, err := os.Stat(expectedDiskTarballPath(options)); !errors.Is(err, os.ErrNotExist) {
+		t.Error("no tarball may be placed when the tree differs from the lock")
+	}
+	assertNoTemporaryFiles(t, options.RecipeDir)
+}
+
+func TestDiskBuildOfflineRefusesALockWithoutTheTree(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		edit  func(lock *recipe.Lockfile)
+		wants string
+	}{
+		{"no disk tools", func(lock *recipe.Lockfile) { lock.DiskTools = nil }, "records no disk tools"},
+		{"a tool apt cannot be asked for", func(lock *recipe.Lockfile) { lock.DiskTools[0].Name = "--bad name" }, "disk tools"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			options, _ := newTestOptions(t)
+			lock := writeVendoredDiskLock(t, options)
+			testCase.edit(&lock)
+			if err := recipe.SaveLock(filepath.Join(options.RecipeDir, LockFileName), lock); err != nil {
+				t.Fatal(err)
+			}
+			options.Offline = true
+			bootstrapper := &fakeBootstrapper{}
+			result, err := buildDiskWith(bootstrapper, &fakeToolRunner{}, options)
+			if !errors.Is(err, pool.ErrBadLock) || !strings.Contains(err.Error(), testCase.wants) {
+				t.Fatalf("Build = %v, want ErrBadLock saying %q", err, testCase.wants)
+			}
+			if bootstrapper.treeRan || bootstrapper.runCount != 0 || result.WorkDir != "" {
+				t.Error("a refused build did work")
+			}
+		})
 	}
 }

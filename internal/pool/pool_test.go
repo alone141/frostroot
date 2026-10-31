@@ -213,6 +213,56 @@ func TestManifest(t *testing.T) {
 	}
 }
 
+// TestManifestIncludesTheDiskToolsOnce: a disk image's lock names the tools
+// tree's packages too, vendored beside the image's; a file both hold is
+// fetched once, and one file name with two checksums is an edited lock.
+func TestManifestIncludesTheDiskToolsOnce(t *testing.T) {
+	curl, e2fsprogs := entryFor("curl", "1"), entryFor("e2fsprogs", "1.47.2-3ubuntu1")
+	lock := lockFor(curl)
+	lock.Target = recipe.TargetDisk
+	shared := lock.Packages[0]
+	shared.SHA256 = strings.ToUpper(shared.SHA256) // the same checksum, however spelled
+	lock.DiskTools = []recipe.LockPackage{
+		{Name: e2fsprogs.Package, Version: e2fsprogs.Version, Arch: e2fsprogs.Arch, SHA256: e2fsprogs.SHA256, Size: e2fsprogs.Size, Filename: e2fsprogs.URLPath},
+		shared,
+	}
+	entries, err := Manifest(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []Entry{curl, e2fsprogs}; !slices.Equal(entries, want) {
+		t.Errorf("Manifest =\n%+v\nwant\n%+v", entries, want)
+	}
+
+	differentChecksum := lock
+	differentChecksum.DiskTools = slices.Clone(lock.DiskTools)
+	differentChecksum.DiskTools[1].SHA256 = e2fsprogs.SHA256
+	noChecksum := lock
+	noChecksum.DiskTools = slices.Clone(lock.DiskTools)
+	noChecksum.DiskTools[0].SHA256 = ""
+	escaping := lock
+	escaping.DiskTools = slices.Clone(lock.DiskTools)
+	escaping.DiskTools[0].Filename = "../escape.deb"
+	unknownSource := lock
+	unknownSource.DiskTools = slices.Clone(lock.DiskTools)
+	unknownSource.DiskTools[0].Source = "nowhere"
+	for _, testCase := range []struct {
+		name string
+		lock recipe.Lockfile
+	}{
+		{"one file name, two checksums", differentChecksum},
+		{"a tool without a checksum", noChecksum},
+		{"a tool whose file name escapes the pool", escaping},
+		{"a tool from a source the lock does not describe", unknownSource},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := Manifest(testCase.lock); !errors.Is(err, ErrBadLock) {
+				t.Errorf("Manifest error = %v, want ErrBadLock", err)
+			}
+		})
+	}
+}
+
 func TestManifestRefusals(t *testing.T) {
 	uppercaseDigest := lockFor(entryFor("curl", "1"))
 	uppercaseDigest.Packages[0].SHA256 = strings.ToUpper(uppercaseDigest.Packages[0].SHA256)

@@ -66,8 +66,9 @@ func (e Entry) DownloadURL() string {
 	return strings.TrimRight(e.BaseURL, "/") + "/" + e.URLPath
 }
 
-// Manifest lists what a complete pool for lock holds, in the lock's order.
-// It refuses locks of another format version or of a family it cannot
+// Manifest lists what a complete pool for lock holds, in the lock's order:
+// the image's packages, then the disk tools tree's for a disk image, once
+// each. It refuses locks of another format version or of a family it cannot
 // vendor, locks without checksums, packages from a repository the lock does
 // not describe, and file names that could escape the pool directory.
 func Manifest(lock recipe.Lockfile) ([]Entry, error) {
@@ -86,38 +87,68 @@ func Manifest(lock recipe.Lockfile) ([]Entry, error) {
 	if !lock.HasChecksums() {
 		return nil, ErrNoChecksums
 	}
-	entries := make([]Entry, 0, len(lock.Packages))
-	seenFileNames := map[string]string{}
+	entries := make([]Entry, 0, len(lock.Packages)+len(lock.DiskTools))
+	seen := map[string]recipe.LockPackage{} // by file name
 	for _, locked := range lock.Packages {
-		fileName, err := poolFileName(locked.Filename)
+		entry, err := ubuntuEntry(lock, locked)
 		if err != nil {
-			return nil, fmt.Errorf("%w: package %s: %w", ErrBadLock, locked.Name, err)
+			return nil, err
 		}
-		if other, seen := seenFileNames[fileName]; seen {
-			return nil, fmt.Errorf("%w: packages %s and %s share the file name %s", ErrBadLock, other, locked.Name, fileName)
+		if other, dup := seen[entry.FileName]; dup {
+			return nil, fmt.Errorf("%w: packages %s and %s share the file name %s", ErrBadLock, other.Name, locked.Name, entry.FileName)
 		}
-		seenFileNames[fileName] = locked.Name
-		baseURL := lock.Mirror
-		if locked.Source != "" {
-			repository, found := lock.Repository(locked.Source)
-			if !found {
-				return nil, fmt.Errorf("%w: package %s comes from source %q, which the lock does not describe", ErrBadLock, locked.Name, locked.Source)
+		seen[entry.FileName] = locked
+		entries = append(entries, entry)
+	}
+	// The disk tools tree's packages are vendored beside the image's. A
+	// file both hold, one name with one checksum, is vendored once; one
+	// name with two checksums is an edited lock.
+	for _, locked := range lock.DiskTools {
+		if locked.SHA256 == "" || locked.Size <= 0 || locked.Filename == "" {
+			return nil, fmt.Errorf("%w: disk tools package %s records no checksum, size or file name", ErrBadLock, locked.Name)
+		}
+		entry, err := ubuntuEntry(lock, locked)
+		if err != nil {
+			return nil, err
+		}
+		if other, dup := seen[entry.FileName]; dup {
+			if strings.ToLower(other.SHA256) != entry.SHA256 {
+				return nil, fmt.Errorf("%w: packages %s and %s share the file name %s with different checksums", ErrBadLock, other.Name, locked.Name, entry.FileName)
 			}
-			baseURL = repository.URL
+			continue
 		}
-		entries = append(entries, Entry{
-			Package:  locked.Name,
-			Version:  locked.Version,
-			Arch:     locked.Arch,
-			FileName: fileName,
-			URLPath:  locked.Filename,
-			BaseURL:  baseURL,
-			Source:   locked.Source,
-			Size:     locked.Size,
-			SHA256:   strings.ToLower(locked.SHA256),
-		})
+		seen[entry.FileName] = locked
+		entries = append(entries, entry)
 	}
 	return entries, nil
+}
+
+// ubuntuEntry returns the entry for one package of an Ubuntu lock, from
+// the archive or from the source the lock describes.
+func ubuntuEntry(lock recipe.Lockfile, locked recipe.LockPackage) (Entry, error) {
+	fileName, err := poolFileName(locked.Filename)
+	if err != nil {
+		return Entry{}, fmt.Errorf("%w: package %s: %w", ErrBadLock, locked.Name, err)
+	}
+	baseURL := lock.Mirror
+	if locked.Source != "" {
+		repository, found := lock.Repository(locked.Source)
+		if !found {
+			return Entry{}, fmt.Errorf("%w: package %s comes from source %q, which the lock does not describe", ErrBadLock, locked.Name, locked.Source)
+		}
+		baseURL = repository.URL
+	}
+	return Entry{
+		Package:  locked.Name,
+		Version:  locked.Version,
+		Arch:     locked.Arch,
+		FileName: fileName,
+		URLPath:  locked.Filename,
+		BaseURL:  baseURL,
+		Source:   locked.Source,
+		Size:     locked.Size,
+		SHA256:   strings.ToLower(locked.SHA256),
+	}, nil
 }
 
 // WheelManifest lists what a complete wheel pool for lock holds, in the

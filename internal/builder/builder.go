@@ -210,7 +210,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		if b.Tools == nil {
 			return Result{}, errors.New("this frostroot was built without a disk tool runner")
 		}
-		if tools, err = newDiskToolsTree(b.Bootstrapper, b.Tools, options, image.buildTrustPEM(), instant.epoch, progress); err != nil {
+		if tools, err = newDiskToolsTree(b.Bootstrapper, b.Tools, options, image.buildTrustPEM(), instant.epoch, offline, progress); err != nil {
 			return Result{}, err
 		}
 	}
@@ -446,7 +446,7 @@ const maxNamedPoolProblems = 10
 func stageRepository(offline *offlinePlan, repositoryDir string, progress Progress) error {
 	progress.Report(ProgressEvent{Phase: PhasePrepareRepository, Kind: EventPhaseStarted})
 	release := deb.FlatRelease{Suite: offline.lock.Suite, Arch: offline.lock.Arch, Date: time.Now()}
-	err := pool.Stage(offline.poolDir, offline.entries, repositoryDir, release, func(doneBytes, totalBytes int64) {
+	err := pool.Stage(offline.poolDir, offline.entriesFor(offline.lock.Packages), repositoryDir, release, func(doneBytes, totalBytes int64) {
 		progress.Report(ProgressEvent{Phase: PhasePrepareRepository, Kind: EventProgress, Done: doneBytes, Total: totalBytes, Unit: UnitBytes})
 	})
 	if err != nil {
