@@ -106,8 +106,8 @@ which never asks it, writes an Ubuntu recipe unless --distro says Fedora.
 It asks the target after the release: a tarball for WSL, or a disk image
 that boots a PC or a VM, whose questions have no systemd and a Disk page
 instead. --target answers it, and --plain writes a WSL recipe unless
---target says disk. This version writes and checks a disk recipe; building
-one comes in a later version.
+--target says disk. No password is asked for a disk image's user: it is set
+at the first boot.
 
 ` + indexUsageText
 

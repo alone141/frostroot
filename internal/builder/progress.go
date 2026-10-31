@@ -94,6 +94,27 @@ func FedoraPhases(offline bool) []Phase {
 	return []Phase{PhaseMakeToolsTree, PhaseDownload, PhaseInstallRequested, PhaseProvision, PhaseCreateTarball, PhaseWriteLock, PhasePlaceTarball}
 }
 
+// DiskPhases returns the phases of a disk build, in order: the tools tree
+// before the image, which has Phases' or OfflinePhases' own, then the
+// assembly, and the image placed instead of a tarball.
+func DiskPhases(python, offline bool) []Phase {
+	phases := []Phase{PhaseMakeToolsTree}
+	if offline {
+		phases = []Phase{PhaseVerifyVendored, PhaseMakeToolsTree, PhasePrepareRepository}
+	}
+	phases = append(phases, PhaseUpdateIndex, PhaseDownload, PhaseExtract, PhaseInstallEssential, PhaseInstallRequested, PhaseProvision)
+	if python {
+		phases = append(phases, PhaseInstallPython)
+	}
+	phases = append(phases, PhaseCreateTarball, PhaseAssembleDisk)
+	if offline {
+		phases = append(phases, PhaseCheckLock)
+	} else {
+		phases = append(phases, PhaseWriteLock)
+	}
+	return append(phases, PhasePlaceImage)
+}
+
 // OfflinePhases returns the phases of a build from the vendored pools, in
 // order.
 func OfflinePhases(python bool) []Phase {

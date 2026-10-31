@@ -41,8 +41,13 @@ it. A host where it cannot is refused (exit 1) rather than given an incomplete
 image.
 The image is frozen at the instant the build starts, or at SOURCE_DATE_EPOCH
 when that is set: no file in it is dated later, and the lock records the instant.
-A disk recipe (target = "disk") is refused for now (exit 1): this version
-writes and checks disk recipes, and building a disk image comes later.
+
+A disk recipe (target = "disk") builds dist/<name>-<distro>-<release>-amd64.img
+instead: a raw GPT image that boots a PC or a VM with Secure Boot on, which
+asks for its user's password at the first boot. The disk is assembled by a
+tree of tools the build makes first, which needs bubblewrap, and uidmap
+unless run as root; the lock records the tree and the disk's layout. The
+build holds about three times the image's size in its work directory.
 
 On a network that inspects TLS, --ca-bundle names a PEM file of certificate
 authorities to trust while fetching. It is not installed in the image and not
@@ -62,8 +67,9 @@ With --offline, rebuild the image from frostroot.lock and vendor/debs, or
 vendor/rpms for Fedora (see frostroot vendor), without the network: the same
 packages at the same versions, verified against the lock, frozen at the lock's
 instant, so that every offline build of one lock produces the same bytes. A
-Fedora rebuild makes its tools tree from the lock too. The lock is read, not
-written.
+Fedora rebuild makes its tools tree from the lock too, and a disk recipe's
+rebuild its disk tools tree and the same disk, byte for byte. The lock is
+read, not written.
 
 `
 
@@ -111,10 +117,6 @@ func (a *App) runBuild(args []string) int {
 	}
 	imageRecipe, ok := a.loadRecipe()
 	if !ok {
-		return exitUserError
-	}
-	if imageRecipe.Target() == recipe.TargetDisk {
-		a.stderrf("frostroot: %s asks for a disk image (target = %q): %s\n", recipeFileName, recipe.TargetDisk, diskNotBuiltYet)
 		return exitUserError
 	}
 	family, err := distro.FamilyOf(imageRecipe.Image.Distro)
@@ -179,6 +181,9 @@ func (a *App) runBuild(args []string) int {
 	phases := builder.Phases(hasPython)
 	if *offline {
 		phases = builder.OfflinePhases(hasPython)
+	}
+	if imageRecipe.Target() == recipe.TargetDisk {
+		phases = builder.DiskPhases(hasPython, *offline)
 	}
 	screen := tui.BuildScreen(imageRecipe.Image.Name, imageRecipe.Image.Release, release.Suite, imageRecipe.Image.Arch, archiveURL, phases)
 	if a.useFullScreen(*plain) {
@@ -334,7 +339,7 @@ func (a *App) reportBuildFailure(err error, interrupted bool, archiveURL, keptWo
 	case errors.Is(err, builder.ErrNotLinux), errors.Is(err, builder.ErrNoMmdebstrap),
 		errors.Is(err, builder.ErrNoMount), errors.Is(err, builder.ErrNoFedoraTool), errors.Is(err, builder.ErrMkosiVersion),
 		errors.Is(err, builder.ErrFedoraOption), errors.Is(err, builder.ErrUserNamespacesRestricted),
-		errors.Is(err, builder.ErrNoDiskTool),
+		errors.Is(err, builder.ErrNoDiskTool), errors.Is(err, builder.ErrDiskTooSmall),
 		errors.Is(err, builder.ErrNoKeyring), errors.Is(err, builder.ErrBadWorkRoot),
 		errors.Is(err, builder.ErrUnwritableOutput), errors.Is(err, builder.ErrNoLock),
 		errors.Is(err, builder.ErrLockMismatch), errors.Is(err, builder.ErrPoolIncomplete),
@@ -355,28 +360,37 @@ func (a *App) reportBuildFailure(err error, interrupted bool, archiveURL, keptWo
 // megabyte is the unit tarball sizes are reported in.
 const megabyte = 1 << 20
 
-// reportBuildSuccess prints what was written and how to import it.
+// reportBuildSuccess prints what was written and how to use it: a tarball
+// is imported into WSL, a disk image written to a disk or attached to a VM.
 func (a *App) reportBuildSuccess(imageRecipe recipe.Recipe, result builder.Result) {
 	imageName := imageRecipe.Image.Name
-	relativeTarballPath := filepath.ToSlash(result.TarballPath)
-	if relative, err := filepath.Rel(a.RecipeDir, result.TarballPath); err == nil {
-		relativeTarballPath = filepath.ToSlash(relative)
+	outputPath, noun := result.TarballPath, "tarball"
+	if result.ImagePath != "" {
+		outputPath, noun = result.ImagePath, "image"
+	}
+	relativeOutputPath := filepath.ToSlash(outputPath)
+	if relative, err := filepath.Rel(a.RecipeDir, outputPath); err == nil {
+		relativeOutputPath = filepath.ToSlash(relative)
 	}
 	sizeSuffix := ""
-	if tarballInfo, err := os.Stat(result.TarballPath); err == nil {
-		sizeSuffix = " (" + formatMegabytes(tarballInfo.Size()) + ")"
+	if outputInfo, err := os.Stat(outputPath); err == nil {
+		sizeSuffix = " (" + formatMegabytes(outputInfo.Size()) + ")"
+		if result.ImagePath != "" {
+			// Mostly holes: what it takes on disk is what the image holds.
+			sizeSuffix = " (" + formatMegabytes(outputInfo.Size()) + ", sparse)"
+		}
 	}
 	frozenAt := formatInstant(result.SourceDateEpoch)
 	switch {
 	case result.Offline && result.Reproducible:
-		a.stdoutf("\nWrote %s%s, rebuilt from frostroot.lock: %s, every one as locked.\n", relativeTarballPath, sizeSuffix, packageCount(result.InstalledPackageCount))
-		a.stdoutf("Frozen at %s: every offline build of this lock produces this tarball, byte for byte.\n", frozenAt)
+		a.stdoutf("\nWrote %s%s, rebuilt from frostroot.lock: %s, every one as locked.\n", relativeOutputPath, sizeSuffix, packageCount(result.InstalledPackageCount))
+		a.stdoutf("Frozen at %s: every offline build of this lock produces this %s, byte for byte.\n", frozenAt, noun)
 	case result.Offline:
-		a.stdoutf("\nWrote %s%s, rebuilt from frostroot.lock: %s, every one as locked.\n", relativeTarballPath, sizeSuffix, packageCount(result.InstalledPackageCount))
-		a.stderrf("warning: frostroot.lock was written before frostroot 0.6 and records no instant to freeze at, so this tarball\n" +
-			"is not byte-identical with other builds. Run frostroot build online once more, then frostroot vendor, and it will be.\n")
+		a.stdoutf("\nWrote %s%s, rebuilt from frostroot.lock: %s, every one as locked.\n", relativeOutputPath, sizeSuffix, packageCount(result.InstalledPackageCount))
+		a.stderrf("warning: frostroot.lock was written before frostroot 0.6 and records no instant to freeze at, so this %s\n"+
+			"is not byte-identical with other builds. Run frostroot build online once more, then frostroot vendor, and it will be.\n", noun)
 	default:
-		a.stdoutf("\nWrote %s%s\nWrote frostroot.lock (%s), frozen at %s\n", relativeTarballPath, sizeSuffix, packageCount(result.InstalledPackageCount), frozenAt)
+		a.stdoutf("\nWrote %s%s\nWrote frostroot.lock (%s), frozen at %s\n", relativeOutputPath, sizeSuffix, packageCount(result.InstalledPackageCount), frozenAt)
 	}
 	if result.PythonPackageCount > 0 {
 		a.stdoutf("The image's virtual environment holds %s, on PATH for every login shell: %s\n",
@@ -385,11 +399,16 @@ func (a *App) reportBuildSuccess(imageRecipe recipe.Recipe, result builder.Resul
 	if result.Offline && a.Getenv(builder.SourceDateEpochVariable) != "" {
 		a.stderrf("note: %s is set, but an offline build freezes at the lock's instant and ignores it\n", builder.SourceDateEpochVariable)
 	}
-	a.stdoutf("\nImport it on Windows:\n  wsl --import %s <install-dir> %s\n", imageName, relativeTarballPath)
-	if windowsPath, err := a.WSLPath(result.TarballPath); err == nil && windowsPath != "" {
-		// PowerShell single quotes are literal; an embedded quote is doubled.
-		a.stdoutf("or from any directory in PowerShell:\n  wsl --import %s <install-dir> '%s'\n",
-			imageName, strings.ReplaceAll(windowsPath, "'", "''"))
+	if result.ImagePath != "" {
+		a.stdoutf("\nWrite it to a disk, or attach it to a VM, and boot with Secure Boot on:\n  sudo dd if=%s of=/dev/sdX bs=4M conv=fsync status=progress\n", relativeOutputPath)
+		a.stdoutf("The first boot asks for the password of %s on the screen, then grows the root to fill the disk.\n", imageRecipe.User.Name)
+	} else {
+		a.stdoutf("\nImport it on Windows:\n  wsl --import %s <install-dir> %s\n", imageName, relativeOutputPath)
+		if windowsPath, err := a.WSLPath(outputPath); err == nil && windowsPath != "" {
+			// PowerShell single quotes are literal; an embedded quote is doubled.
+			a.stdoutf("or from any directory in PowerShell:\n  wsl --import %s <install-dir> '%s'\n",
+				imageName, strings.ReplaceAll(windowsPath, "'", "''"))
+		}
 	}
 	if !result.Offline {
 		a.stdoutf("\nTo be able to rebuild this exact image later, offline:\n  frostroot vendor\n")

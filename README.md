@@ -307,9 +307,9 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 | `frostroot edit [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back; fetches any missing source keys. The full-screen form can move the recipe to the other distribution. The file is regenerated from the template, so your own comments in it do not survive. |
 | `frostroot capture [--root DIR] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, starting with a page of what it found and what a recipe cannot carry, writes `frostroot.toml`, the signing keys of the third-party sources it could carry and the certificate authorities the machine added under `/usr/local/share/ca-certificates`, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys and certificates; needs no root. |
 | `frostroot validate` | Checks `frostroot.toml`, including that every source's key file is there and is a key, and prints every problem. No network, no root. |
-| `frostroot build [--mirror URL] [--ca-bundle FILE \| --insecure] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-<distro>-<release>-amd64.tar.gz`, such as `dist/lab-ubuntu-24.04-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. Refuses a disk recipe for now (exit 1). |
+| `frostroot build [--mirror URL] [--ca-bundle FILE \| --insecure] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-<distro>-<release>-amd64.tar.gz`, such as `dist/lab-ubuntu-24.04-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. A disk recipe gets `dist/<name>-<distro>-<release>-amd64.img` instead, a raw GPT image that boots with Secure Boot on (see [Disk images](#disk-images)). |
 | `frostroot vendor [--mirror URL] [--ca-bundle FILE \| --insecure] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, a disk image's tools tree's included, or `vendor/rpms/` for Fedora, and every wheel it names into `vendor/wheels/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name, including the partial download an abandoned run leaves behind. |
-| `frostroot build --offline [--keep-work] [--plain]` | Rebuilds the image from `frostroot.lock` and `vendor/debs/` or `vendor/rpms/`, without the network. Fails unless the result has exactly the lock's packages. The lock is read, not written. |
+| `frostroot build --offline [--keep-work] [--plain]` | Rebuilds the image from `frostroot.lock` and `vendor/debs/` or `vendor/rpms/`, without the network. Fails unless the result has exactly the lock's packages. The lock is read, not written. A disk recipe's rebuild makes the same image, byte for byte. |
 | `frostroot version` | Prints the version and the commit it was built from. |
 
 All of them work on the recipe in the current directory. `--plain` asks for
@@ -369,29 +369,45 @@ byte order mark are both accepted.
 ### Disk images
 
 `target = "disk"` in `[image]` asks for a disk image that boots a PC or a VM
-with Secure Boot on, instead of a tarball for WSL. **This version writes and
-checks disk recipes, and `build` refuses them (exit 1): building a disk image
-comes in a later version.** What is settled so far is the recipe: a disk
-recipe has no `[wsl]`, which is `wsl.conf`'s, and may have a `[disk]` table
-with the image file's size and the formats written beside the raw image. Its
-user's password is set at the first boot, so none is in the recipe. `init
+with Secure Boot on, instead of a tarball for WSL: `build` writes
+`dist/<name>-ubuntu-<release>-amd64.img`, a raw GPT image with an EFI system
+partition and an ext4 root, for Ubuntu 24.04 and 26.04. A disk recipe has no
+`[wsl]`, which is `wsl.conf`'s, and may have a `[disk]` table with the image
+file's size, by default the content with room to spare, and the formats to
+write beside the raw image, of which qcow2 comes in a later version. `init
 --target disk` writes one, the full-screen form asks the target after the
 release, and `edit` moves a recipe between the two targets, carrying every
-answer. The design is in the
-[bare-metal spec](docs/superpowers/specs/2026-10-09-frostroot-bare-metal.md).
+answer.
 
-This version also carries what a disk build will assemble the disk with,
-reached only by its tests until `build` makes disks: a **disk tools tree**,
-a small Ubuntu 26.04 tree of e2fsprogs, dosfstools, mtools, fdisk and
-qemu-utils that mmdebstrap makes in the build's work directory before the
-image, whose programs run through bubblewrap with an environment of
-frostroot's own, and which goes when the build is done. The lock records its
-packages as `disk_tools`; `vendor` fetches them into `vendor/debs/` beside
-the image's, and an offline build makes the tree from them and refuses one
-that is not the lock's. It is 26.04's tree whatever the recipe's release,
-because its e2fsprogs reads a tarball and dates what it writes by the frozen
-instant, and 24.04's does neither. A disk build will need `bubblewrap` and,
-unprivileged, `uidmap`, on top of mmdebstrap.
+Beyond a WSL image, the disk holds the kernel with its modules and
+firmware, the signed shim and GRUB that boot under Secure Boot with
+Microsoft's keys, one GRUB entry for the kernel the image was built with,
+netplan asking DHCP of every wired interface, and the image's name as its
+host name. Nothing per machine ships: the machine id reads `uninitialized`,
+there are no SSH host keys (a 24.04 image makes them at its first boot;
+26.04 does on its own), and no password is in the recipe, the lock or the
+image. The first boot asks for the user's password on the screen before any
+login, and systemd-repart grows the root partition to the end of whatever
+disk the image was written to. A hypervisor can pass the password's hash as
+the credential `passwd.hashed-password.<user>`, over SMBIOS or fw_cfg, to
+provision a headless VM. Write the image to a disk with `dd`, or attach it
+to a VM with OVMF.
+
+The disk is assembled by a **disk tools tree**: a small Ubuntu 26.04 tree
+of e2fsprogs, dosfstools, mtools, fdisk and qemu-utils that mmdebstrap makes
+in the build's work directory before the image, whose programs run through
+bubblewrap with an environment of frostroot's own, and which goes when the
+build is done. It is 26.04's whatever the recipe's release, because its
+e2fsprogs reads the tarball and dates what it writes by the frozen instant.
+The lock records the tree's packages as `disk_tools`, and the disk's layout
+as `[disk]`: the seed every identifier on the disk derives from, as
+systemd-repart derives them, the sizes, and the shim file copied. `vendor`
+fetches the tree's packages into `vendor/debs/` beside the image's, and
+`build --offline` makes the tree and the disk from them: two offline builds
+of one lock are the same image, byte for byte. A disk build needs
+`bubblewrap` and, unprivileged, `uidmap`, on top of mmdebstrap, and about
+three times the image's size in its work directory. The design is in the
+[bare-metal spec](docs/superpowers/specs/2026-10-09-frostroot-bare-metal.md).
 
 ## Finding packages
 
