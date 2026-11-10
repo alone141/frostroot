@@ -1,7 +1,11 @@
 package pool
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -51,6 +55,49 @@ func TestFedoraManifest(t *testing.T) {
 	// system, signed with the release's key.
 	if got := FallbackURL(lock)(entries[0]); got != "https://kojipkgs.fedoraproject.org/packages/git/2.55.0/1.fc44/data/signed/6d9f90a6/x86_64/git-2.55.0-1.fc44.x86_64.rpm" {
 		t.Errorf("git's fallback = %q", got)
+	}
+}
+
+// TestVerifyAndPruneRPMs: vendor/rpms is a pool like the others, and an
+// update the lock no longer names used to stay there for good, neither
+// reported nor pruned, because only .deb and .whl counted as packages.
+func TestVerifyAndPruneRPMs(t *testing.T) {
+	entries, err := Manifest(fedoraLock())
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked := entries[0]
+	dir := t.TempDir()
+	content := []byte("an rpm")
+	digest := sha256.Sum256(content)
+	locked.Size, locked.SHA256 = int64(len(content)), hex.EncodeToString(digest[:])
+	if err := os.WriteFile(filepath.Join(dir, locked.FileName), content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const superseded = "git-2.54.0-1.fc44.x86_64.rpm"
+	for _, name := range []string{superseded, "README"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status, err := Verify(dir, []Entry{locked}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Complete() || !slices.Equal(status.Extra, []string{superseded}) {
+		t.Fatalf("Verify = %+v, want the locked rpm present and the superseded one extra", status)
+	}
+	pruned, err := Prune(dir, []Entry{locked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(pruned, []string{superseded}) {
+		t.Errorf("Prune = %v, want only the rpm the lock does not name", pruned)
+	}
+	for name, wantThere := range map[string]bool{superseded: false, "README": true, locked.FileName: true} {
+		if _, err := os.Stat(filepath.Join(dir, name)); (err == nil) != wantThere {
+			t.Errorf("%s: there = %v, want %v", name, err == nil, wantThere)
+		}
 	}
 }
 
