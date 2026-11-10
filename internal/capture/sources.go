@@ -342,7 +342,7 @@ func (root systemRoot) sourceKey(signedBy string) (armored []byte, origin string
 		if !inside {
 			return nil, "", fmt.Errorf("the signed-by key %s is outside %s, so it belongs to this machine rather than the one being captured", keyringPath, root)
 		}
-		data, err := os.ReadFile(keyPath)
+		data, err := readRegular(keyPath)
 		if err != nil {
 			return nil, "", fmt.Errorf("the signed-by key %s could not be read: %w", keyringPath, err)
 		}

@@ -3,6 +3,7 @@ package capture
 import (
 	"crypto/md5" // dpkg records conffile checksums as MD5; this only compares against them
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -50,9 +51,12 @@ type installedPackage struct {
 // status word is "installed", sorted by name. found is false when there is
 // no status to read; a status that cannot be read to its end is an error.
 func (root systemRoot) installedPackages() (packages []installedPackage, found bool, err error) {
-	file, err := os.Open(root.path(dpkgStatusPath))
-	if err != nil {
+	file, err := root.openInRoot(dpkgStatusPath)
+	if errors.Is(err, os.ErrNotExist) {
 		return nil, false, nil
+	}
+	if err != nil {
+		return nil, true, fmt.Errorf("reading /%s: %w", dpkgStatusPath, err)
 	}
 	defer func() { _ = file.Close() }() // read-only
 	entries, err := readStanzas(file)
@@ -82,9 +86,12 @@ func (root systemRoot) installedPackages() (packages []installedPackage, found b
 // that cannot be read to its end is an error: the marks it lost would list
 // automatic packages as asked for.
 func (root systemRoot) autoInstalled() (auto map[string]bool, found bool, err error) {
-	file, err := os.Open(root.path(extendedStatesPath))
-	if err != nil {
+	file, err := root.openInRoot(extendedStatesPath)
+	if errors.Is(err, os.ErrNotExist) {
 		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("reading /%s: %w", extendedStatesPath, err)
 	}
 	defer func() { _ = file.Close() }() // read-only
 	entries, err := readStanzas(file)
@@ -220,9 +227,9 @@ func (root systemRoot) modifiedConffiles(installed []installedPackage) []string 
 			if !inside {
 				continue
 			}
-			content, err := os.ReadFile(path)
+			content, err := readRegular(path)
 			if err != nil {
-				continue // deleted or unreadable: nothing to compare
+				continue // deleted, unreadable or no file: nothing to compare
 			}
 			sum := md5.Sum(content)
 			if hex.EncodeToString(sum[:]) != file.md5 {
@@ -310,7 +317,7 @@ func (root systemRoot) packageOrigins() packageOrigins {
 		if !named {
 			continue // not a dists index: nothing to attribute it to
 		}
-		file, err := os.Open(root.path(aptListsDir + "/" + entry.Name()))
+		file, err := root.openInRoot(aptListsDir + "/" + entry.Name())
 		if err != nil {
 			continue
 		}
