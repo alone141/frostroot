@@ -26,7 +26,10 @@ if [ "$#" -eq 0 ]; then
 	sed -n '2,10s/^# \{0,1\}//p' "$0"
 	exit 2
 fi
-root=$(cd "$(dirname "$0")/.." && pwd -W 2> /dev/null || pwd)
+# WSL starts in the directory it is started from, so the checkout is made
+# the current directory here rather than named with --cd, which the wsl.exe
+# of Windows 10 1809 (build 17763) does not have.
+cd "$(dirname "$0")/.."
 distro=()
 if [ -n "${FROSTROOT_WSL_DISTRO:-}" ]; then
 	distro=(-d "$FROSTROOT_WSL_DISTRO")
@@ -36,4 +39,4 @@ while IFS= read -r name; do
 done < <(compgen -e | grep -E '^(FROSTROOT_|E2E_)|^SOURCE_DATE_EPOCH$' || true)
 export WSLENV="${WSLENV:-}"
 export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
-exec wsl.exe "${distro[@]}" --cd "$root" -e bash -l scripts/wsl-exec.sh "$@"
+exec wsl.exe "${distro[@]}" -e bash -l scripts/wsl-exec.sh "$@"

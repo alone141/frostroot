@@ -34,11 +34,15 @@ $wslArgs = @()
 if ($env:FROSTROOT_WSL_DISTRO) {
     $wslArgs += @('-d', $env:FROSTROOT_WSL_DISTRO)
 }
-$wslArgs += @('--cd', $root, '-e', 'bash', '-l', 'scripts/wsl-exec.sh')
+# WSL starts in the directory it is started from, so the checkout is made the
+# current directory for the call rather than named with --cd, which the
+# wsl.exe of Windows 10 1809 (build 17763) does not have.
+$wslArgs += @('-e', 'bash', '-l', 'scripts/wsl-exec.sh')
 $forwarded = Get-ChildItem Env: |
     Where-Object { $_.Name -match '^(FROSTROOT_|E2E_)' -or $_.Name -eq 'SOURCE_DATE_EPOCH' } |
     ForEach-Object { $_.Name }
 $savedWslEnv = $env:WSLENV
+Push-Location -LiteralPath $root
 try {
     if ($forwarded) {
         $env:WSLENV = (@($savedWslEnv) + @($forwarded) | Where-Object { $_ }) -join ':'
@@ -47,5 +51,6 @@ try {
     $status = $LASTEXITCODE
 } finally {
     $env:WSLENV = $savedWslEnv
+    Pop-Location
 }
 exit $status

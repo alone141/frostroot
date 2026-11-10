@@ -44,6 +44,11 @@ your shell:
 - Git Bash: `scripts/wsl.sh scripts/check.sh`
 - PowerShell: `.\scripts\wsl.ps1 scripts/check.sh`
 
+They start WSL in the checkout rather than naming it with `--cd`, so they
+work with the `wsl.exe` of Windows 10 1809 too, which has no `--cd`; on a
+machine whose default distribution does not start, `FROSTROOT_WSL_DISTRO`
+names another.
+
 Hand-typed alternatives break in ways that are easy to miss:
 
 - `wsl -- bash -lc '...'` goes through WSL's default shell, which expands
