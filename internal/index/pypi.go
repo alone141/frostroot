@@ -269,9 +269,12 @@ func fetchPyPI(ctx context.Context, options Options) ([]Project, error) {
 		ceiling = total
 	}
 	bounded := &boundedReader{reader: response.Body, limit: ceiling + 1}
+	// onRead is handed one read's size; the bar wants the bytes so far.
+	var doneBytes int64
 	counted := &countingReader{reader: bounded, onRead: func(count int64) {
+		doneBytes += count
 		if options.Progress != nil {
-			options.Progress(count, total)
+			options.Progress(doneBytes, total)
 		}
 	}}
 	var body io.Reader = bufio.NewReaderSize(counted, 256<<10)
