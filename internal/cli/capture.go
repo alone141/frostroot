@@ -1,13 +1,16 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"frostroot/internal/capture"
 	"frostroot/internal/export"
@@ -57,6 +60,17 @@ func (a *App) runCapture(args []string) int {
 	// that was not already there: the files this run created go again
 	// unless the recipe that names them was written, and a file that was
 	// already there is never touched.
+	// From here until the form is over, an interrupt at a question of the
+	// plain interface ends the question instead of the process, so that
+	// what follows can remove these files again. The full-screen form
+	// handles Ctrl-C itself, and a signal must still end it.
+	if !a.useFullScreen(*plain) {
+		interrupted, stopSignalHandling := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+		defer stopSignalHandling()
+		if prompt, isLinePrompt := a.Prompt.(*linePrompt); isLinePrompt {
+			prompt.interrupted = interrupted.Done()
+		}
+	}
 	writtenCertificates, err := a.writeCapturedCertificates(snapshot.Certificates)
 	if err != nil {
 		a.stderrf("frostroot capture: %v\n", err)

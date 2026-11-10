@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -9,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"io"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -254,6 +256,68 @@ func TestCaptureCarriesCertificateAuthorities(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "certs/corp-root.pem") && !strings.Contains(stderr, "certs/corp-root.pem") {
 		t.Log("stdout:", stdout)
+	}
+}
+
+// interruptedPrompt answers with the defaults, then is interrupted at its
+// question number at: what the line prompt does when Ctrl-C arrives while
+// it waits for an answer.
+type interruptedPrompt struct {
+	at    int
+	asked int
+}
+
+func (p *interruptedPrompt) Ask(_, defaultAnswer string) (string, error) {
+	p.asked++
+	if p.asked >= p.at {
+		return "", context.Canceled
+	}
+	return defaultAnswer, nil
+}
+
+// TestCaptureInterruptedLeavesNoCertificates: the certificates are written
+// before the form, and the plain interface had no signal handling, so
+// Ctrl-C at one of its questions ended the process with them beside no
+// recipe. An interrupted form now runs the same cleanup a declined one
+// does, and exits 130.
+func TestCaptureInterruptedLeavesNoCertificates(t *testing.T) {
+	recipeDir := t.TempDir()
+	root := fakeUbuntuRoot(t, "24.04")
+	withLocalAuthority(t, root, corpCertificatePEM(t))
+	var stdout, stderr bytes.Buffer
+	app := App{Stdout: &stdout, Stderr: &stderr, RecipeDir: recipeDir, Prompt: &interruptedPrompt{at: answerUserName + 1}, ReadFile: noHostFile}
+	if exitCode := app.Run([]string{"capture", "--root", root, "--plain"}); exitCode != exitInterrupted {
+		t.Fatalf("exit code = %d, want %d; stderr %s", exitCode, exitInterrupted, stderr.String())
+	}
+	if entries, _ := os.ReadDir(recipeDir); len(entries) != 0 {
+		t.Errorf("an interrupted capture left %v beside no recipe", entries)
+	}
+}
+
+// TestLinePromptEndsAQuestionWhenInterrupted: the read of an answer waits
+// for a line that may never come; an interrupt ends the question, and the
+// prompt, with context.Canceled.
+func TestLinePromptEndsAQuestionWhenInterrupted(t *testing.T) {
+	input, _ := io.Pipe() // nothing is ever written: the question waits
+	interrupt := make(chan struct{})
+	prompt := newLinePrompt(input, io.Discard)
+	prompt.interrupted = interrupt
+	answered := make(chan error, 1)
+	go func() {
+		_, err := prompt.Ask("User name", "student")
+		answered <- err
+	}()
+	close(interrupt)
+	select {
+	case err := <-answered:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Ask = %v, want context.Canceled", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the question is still waiting after the interrupt")
+	}
+	if _, err := prompt.Ask("Locale", "en_US.UTF-8"); !errors.Is(err, context.Canceled) {
+		t.Errorf("a question after the interrupt = %v, want context.Canceled", err)
 	}
 }
 

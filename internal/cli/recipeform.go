@@ -82,6 +82,10 @@ func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath 
 		a.stderrf("frostroot %s: canceled; nothing written\n", commandName)
 		return exitUserError
 	}
+	if errors.Is(err, context.Canceled) {
+		a.stderrf("frostroot %s: interrupted; nothing written\n", commandName)
+		return exitInterrupted
+	}
 	if err != nil {
 		a.stderrf("frostroot %s: %v\n", commandName, err)
 		return exitUserError
