@@ -394,10 +394,17 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		temporaryLockPath, lockPlaced = "", true
 	}
 	if err := os.Rename(stagedOutputPath, outputPath); err != nil {
+		placingErr := fmt.Errorf("placing %s: %w", outputNoun, err)
 		if lockPlaced {
-			restoreLock(lockPath, previousLock, hadPreviousLock)
+			if restoreErr := restoreLock(lockPath, previousLock, hadPreviousLock); restoreErr != nil {
+				// The lock in dist/'s place now describes an image that is
+				// not there, which is what the order of the renames is
+				// for; the person has to know it, or vendor and an offline
+				// build would work from it.
+				return failBuild(errors.Join(placingErr, fmt.Errorf("putting the previous %s back: %w; %s now describes an image that was not placed: build again, or restore %s from version control", LockFileName, restoreErr, LockFileName, LockFileName)))
+			}
 		}
-		return failBuild(fmt.Errorf("placing %s: %w", outputNoun, err))
+		return failBuild(placingErr)
 	}
 	stagedOutputPath = ""
 	// A copy across filesystems left the source in the work directory, a
@@ -557,16 +564,16 @@ func writeTemporaryLock(directory string, lock recipe.Lockfile) (string, error) 
 
 // restoreLock undoes the lock's rename after the tarball it describes did
 // not land: the previous lock's bytes go back through a temporary file, or
-// the new lock is removed when there was none. Best effort: the build is
-// failing, and that error is the one returned.
-func restoreLock(lockPath string, previous []byte, hadPrevious bool) {
+// the new lock is removed when there was none. Its error is the caller's to
+// report beside the failed placement: a lock left in place then describes
+// an image that is not there.
+func restoreLock(lockPath string, previous []byte, hadPrevious bool) error {
 	if !hadPrevious {
-		_ = os.Remove(lockPath)
-		return
+		return os.Remove(lockPath)
 	}
 	temporary, err := export.CreateTemp(filepath.Dir(lockPath), ".frostroot.lock.*.tmp")
 	if err != nil {
-		return
+		return err
 	}
 	path := temporary.Name()
 	_, err = temporary.Write(previous)
@@ -577,8 +584,9 @@ func restoreLock(lockPath string, previous []byte, hadPrevious bool) {
 		err = os.Rename(path, lockPath)
 	}
 	if err != nil {
-		_ = os.Remove(path)
+		_ = os.Remove(path) // the restore failed already, and says so
 	}
+	return err
 }
 
 // makeDirectoriesWithMode is os.MkdirAll, except that every directory it

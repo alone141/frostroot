@@ -1534,6 +1534,32 @@ func TestBuildLeavesThePreviousPairWhenTheLockRenameFails(t *testing.T) {
 // here by a directory where the tarball goes. dist/ must end as it began:
 // the previous lock byte for byte, or no lock when there was none, and no
 // image of this build.
+// TestRestoreLockSaysWhenItCannot: restoreLock was best effort and said
+// nothing when it failed, so a build whose tarball could not be placed,
+// and whose previous lock could not be put back, left the new lock beside
+// the old tarball and reported only the tarball. A directory where the
+// lock goes makes both of its ways fail.
+func TestRestoreLockSaysWhenItCannot(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, LockFileName)
+	if err := os.MkdirAll(filepath.Join(lockPath, "in-the-way"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreLock(lockPath, []byte("previous lock"), true); err == nil {
+		t.Error("putting a previous lock back over a directory reported no error")
+	}
+	if err := restoreLock(lockPath, nil, false); err == nil {
+		t.Error("removing a new lock that is a non-empty directory reported no error")
+	}
+	assertNoTemporaryFiles(t, dir)
+	if err := os.RemoveAll(lockPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreLock(lockPath, []byte("previous lock"), true); err != nil {
+		t.Errorf("a restore that can succeed failed: %v", err)
+	}
+}
+
 func TestBuildRestoresThePreviousLockWhenTheTarballCannotBePlaced(t *testing.T) {
 	options, _ := newTestOptions(t)
 	lockPath := filepath.Join(options.RecipeDir, LockFileName)
