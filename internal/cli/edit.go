@@ -26,6 +26,7 @@ func (a *App) runEdit(args []string) int {
 	if !ok {
 		return exitUserError
 	}
+	indexOptions.pythonIndex = pythonIndexFor(indexOptions.pythonIndex, imageRecipe)
 	indexes, ok := a.packageIndexes(indexOptions)
 	if !ok {
 		return exitUserError
