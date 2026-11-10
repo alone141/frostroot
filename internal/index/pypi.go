@@ -241,7 +241,9 @@ func fetchPyPI(ctx context.Context, options Options) ([]Project, error) {
 		client = &http.Client{Transport: transport}
 	}
 	url := pypiIndexURL(options)
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	requestCtx, cancelRequest := context.WithCancelCause(ctx)
+	defer cancelRequest(nil)
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +253,9 @@ func fetchPyPI(ctx context.Context, options Options) ([]Project, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = response.Body.Close() }() // read, or the fetch failed
+	// The body fails a read once it has sent nothing for the stall timeout.
+	guarded := guardStall(requestCtx, response.Body, cancelRequest, options.StallTimeout)
+	defer func() { _ = guarded.Close() }() // read, or the fetch failed
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s: %s", url, response.Status)
 	}
@@ -268,7 +272,7 @@ func fetchPyPI(ctx context.Context, options Options) ([]Project, error) {
 	if total >= 0 {
 		ceiling = total
 	}
-	bounded := &boundedReader{reader: response.Body, limit: ceiling + 1}
+	bounded := &boundedReader{reader: guarded, limit: ceiling + 1}
 	// onRead is handed one read's size; the bar wants the bytes so far.
 	var doneBytes int64
 	counted := &countingReader{reader: bounded, onRead: func(count int64) {

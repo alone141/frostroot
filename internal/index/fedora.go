@@ -248,6 +248,10 @@ func (f *fetcher) primary(plan rpmPlan) ([]Entry, error) {
 		if errors.Is(err, errTooLarge) || counted.count > plan.primary.size {
 			return nil, fmt.Errorf("%s: %w", url, errTooLarge)
 		}
+		// A server that went quiet is not one that published anew.
+		if errors.Is(err, errStalled) {
+			return nil, fmt.Errorf("%s: %w", url, err)
+		}
 		// A cut download fails in the decompressor or the parser before
 		// the digest is ever compared.
 		return nil, fmt.Errorf("%s: %w: %w", url, errChanged, err)

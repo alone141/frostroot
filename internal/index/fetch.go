@@ -110,7 +110,7 @@ func fetch(ctx context.Context, options Options, what target) ([]Entry, error) {
 	if maxBodyBytes <= 0 {
 		maxBodyBytes = DefaultMaxBodyBytes
 	}
-	fetcher := &fetcher{ctx: ctx, client: client, baseURL: what.baseURL, components: what.components, progress: options.Progress, maxBodyBytes: maxBodyBytes}
+	fetcher := &fetcher{ctx: ctx, client: client, baseURL: what.baseURL, components: what.components, progress: options.Progress, maxBodyBytes: maxBodyBytes, stallTimeout: options.StallTimeout}
 	if len(what.rpmRepositories) > 0 {
 		return fetcher.fedora(what.rpmRepositories)
 	}
@@ -176,27 +176,85 @@ type fetcher struct {
 	// maxBodyBytes bounds what a file declares no size for: Fedora's
 	// primary metadata when repomd.xml gives no open-size.
 	maxBodyBytes int64
+	stallTimeout time.Duration // Options.StallTimeout
 }
 
-// get opens url. The caller closes the body.
+// get opens url. The caller closes the body, which fails a read once it
+// has sent nothing for the stall timeout.
 func (f *fetcher) get(url string) (io.ReadCloser, error) {
-	request, err := http.NewRequestWithContext(f.ctx, http.MethodGet, url, nil)
+	ctx, cancel := context.WithCancelCause(f.ctx)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
+		cancel(nil)
 		return nil, err
 	}
 	response, err := f.client.Do(request)
 	if err != nil {
+		cancel(nil)
 		return nil, err
 	}
 	if response.StatusCode == http.StatusNotFound {
 		_ = response.Body.Close()
+		cancel(nil)
 		return nil, fmt.Errorf("%s: %w", url, errNotFound)
 	}
 	if response.StatusCode != http.StatusOK {
 		_ = response.Body.Close()
+		cancel(nil)
 		return nil, fmt.Errorf("%s: %s", url, response.Status)
 	}
-	return response.Body, nil
+	return guardStall(ctx, response.Body, cancel, f.stallTimeout), nil
+}
+
+// DefaultStallTimeout is how long a download of an index may receive
+// nothing before it fails. The client's own timeout covers the headers
+// only, and a server can send part of a body and then nothing, holding the
+// field for as long as the person waits.
+const DefaultStallTimeout = time.Minute
+
+// errStalled means a download received nothing for the stall timeout.
+var errStalled = errors.New("the download stalled")
+
+// stalledBody is a response body whose request is canceled, with
+// errStalled as the cause, once it has sent nothing for timeout.
+type stalledBody struct {
+	body    io.ReadCloser
+	stalled func() bool // whether the request ended for a stall, not a cancel
+	cancel  context.CancelCauseFunc
+	timer   *time.Timer
+	timeout time.Duration
+}
+
+// guardStall wraps body, whose request runs under ctx, which cancel ends.
+func guardStall(ctx context.Context, body io.ReadCloser, cancel context.CancelCauseFunc, timeout time.Duration) io.ReadCloser {
+	if timeout <= 0 {
+		timeout = DefaultStallTimeout
+	}
+	return &stalledBody{
+		body:    body,
+		stalled: func() bool { return errors.Is(context.Cause(ctx), errStalled) },
+		cancel:  cancel,
+		timeout: timeout,
+		timer:   time.AfterFunc(timeout, func() { cancel(errStalled) }),
+	}
+}
+
+func (s *stalledBody) Read(buffer []byte) (int, error) {
+	count, err := s.body.Read(buffer)
+	if count > 0 {
+		s.timer.Reset(s.timeout)
+	}
+	if err != nil && s.stalled() {
+		err = fmt.Errorf("%w: nothing received for %s", errStalled, s.timeout)
+	}
+	return count, err
+}
+
+func (s *stalledBody) Close() error {
+	s.timer.Stop()
+	err := s.body.Close()
+	s.cancel(nil)
+	return err
 }
 
 // plan reads a pocket's Release file and picks, for every component, the
@@ -347,6 +405,11 @@ func (f *fetcher) file(pocket, component string, file listedFile) ([]Entry, erro
 		}
 		if errors.Is(err, errTooLarge) || counted.count > file.size {
 			return nil, fmt.Errorf("%s: %w", url, errTooLarge)
+		}
+		// A server that went quiet is not one that published anew, and
+		// asking it again would only wait as long once more.
+		if errors.Is(err, errStalled) {
+			return nil, fmt.Errorf("%s: %w", url, err)
 		}
 		// A cut download fails in the decompressor before the digest is
 		// ever compared.

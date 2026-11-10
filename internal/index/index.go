@@ -91,6 +91,9 @@ type Options struct {
 	// that, and never past MaxBodyBytes either, since the same unsigned
 	// metadata declares both.
 	MaxBodyBytes int64
+	// StallTimeout fails a download that receives nothing for this long,
+	// after its headers; 0 means DefaultStallTimeout.
+	StallTimeout time.Duration
 }
 
 // DefaultMaxBodyBytes is the most a download whose size nothing declares

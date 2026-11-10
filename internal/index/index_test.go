@@ -507,6 +507,50 @@ func TestOpenRefusesAnIndexLongerThanReleaseDeclares(t *testing.T) {
 	}
 }
 
+// TestOpenFailsAnIndexThatStalls: the client's timeout covers the headers
+// only, so an archive that sent half an index and then nothing, with the
+// connection open, held the form's field for as long as the person waited.
+func TestOpenFailsAnIndexThatStalls(t *testing.T) {
+	served := newArchive(t, ".gz")
+	universe := "/dists/noble/universe/binary-amd64/Packages.gz"
+	// Closed before the server's own cleanup, which waits for the handler:
+	// if the client never gives up, the test still ends.
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) })
+	served.intercept = func(writer http.ResponseWriter, request *http.Request) bool {
+		if request.URL.Path != universe {
+			return false
+		}
+		served.mutex.Lock()
+		content := served.files[universe]
+		served.mutex.Unlock()
+		_, _ = writer.Write(content[:len(content)/2])
+		if flusher, canFlush := writer.(http.Flusher); canFlush {
+			flusher.Flush()
+		}
+		select { // then nothing, until the client gives up
+		case <-request.Context().Done():
+		case <-done:
+		}
+		return true
+	}
+	options := optionsFor(t, served)
+	options.StallTimeout = 200 * time.Millisecond
+	result := make(chan error, 1)
+	go func() {
+		_, err := Open(context.Background(), options)
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		if !errors.Is(err, ErrUnavailable) || !errors.Is(err, errStalled) {
+			t.Errorf("Open = %v, want ErrUnavailable wrapping errStalled", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("Open is still waiting on an index that stalled")
+	}
+}
+
 // TestOpenRefusesAnEndlessRelease: nothing declares the size of an
 // InRelease, and one that kept sending well-formed checksum lines was read
 // to its end, every line kept, until the form ran out of memory. The

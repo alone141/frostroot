@@ -168,6 +168,33 @@ func TestOpenPyPIReportsTheBytesSoFar(t *testing.T) {
 	}
 }
 
+// TestOpenPyPIFailsAnIndexThatStalls: the PyPI download, 9.7 MB the first
+// time, had a timeout for its headers and none for its body.
+func TestOpenPyPIFailsAnIndexThatStalls(t *testing.T) {
+	served := newSimpleIndex(t)
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) }) // before the server's own, which waits for this handler
+	served.answer = func(writer http.ResponseWriter) bool {
+		writer.Header().Set("Content-Type", pypiSimpleJSON)
+		_, _ = writer.Write([]byte(`{"meta":{"api-version":"1.0"},"projects":[{"name":"requests"},`))
+		if flusher, canFlush := writer.(http.Flusher); canFlush {
+			flusher.Flush()
+		}
+		<-done // nothing more, for longer than the stall timeout
+		return true
+	}
+	options := pypiOptionsFor(t, served)
+	options.StallTimeout = 200 * time.Millisecond
+	started := time.Now()
+	_, err := OpenPyPI(context.Background(), options)
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, errStalled) {
+		t.Errorf("OpenPyPI = %v, want ErrUnavailable wrapping errStalled", err)
+	}
+	if waited := time.Since(started); waited > 4*time.Second {
+		t.Errorf("OpenPyPI waited %s for a body that stalled after 200ms", waited)
+	}
+}
+
 func TestPyPILookupNormalizes(t *testing.T) {
 	opened := openPyPIExcerpt(t)
 	// PEP 503: these are all one project, and a recipe may spell it any way.
