@@ -54,6 +54,30 @@ const (
 	fingerprintV6Lead  = 0x9B
 )
 
+// publicKeyPacketTags are the packets a file of public keys is made of
+// (RFC 9580 10.1): the key, its signatures, user IDs and attributes, its
+// subkeys, and the trust, marker and padding packets an exporter may add.
+// Anything else, a secret key above all, belongs in no keyring apt is
+// given, and nothing would pin it: only public keys have a fingerprint
+// checked against the pin.
+var publicKeyPacketTags = map[int]string{
+	2:  "signature",
+	6:  "public key",
+	10: "marker",
+	12: "trust",
+	13: "user ID",
+	14: "public subkey",
+	17: "user attribute",
+	21: "padding",
+}
+
+// packetNames names the packets a public key file must not hold, for the
+// refusal; any other tag is named by its number.
+var packetNames = map[int]string{
+	5: "secret key",
+	7: "secret subkey",
+}
+
 // ParsePublicKey parses data, armored or binary. A file may hold several
 // keys, as some vendors' keyrings do: Fingerprints names every one of them,
 // and Fingerprint is the first.
@@ -155,7 +179,10 @@ func crc24(data []byte) uint32 {
 //
 // Reading only the first packet would be enough to name a file, and not
 // enough to trust one: whoever serves the key could append a second primary
-// key after the expected one and have it accepted with it.
+// key after the expected one and have it accepted with it. For the same
+// reason a packet that is not part of a public key is refused, wherever it
+// is: a secret key appended to the expected one has no fingerprint here to
+// be pinned, and a verifier that reads it as a certificate would trust it.
 func primaryFingerprints(data []byte) ([]string, error) {
 	var fingerprints []string
 	for offset := 0; offset < len(data); {
@@ -165,6 +192,13 @@ func primaryFingerprints(data []byte) ([]string, error) {
 		}
 		if offset == 0 && tag != packetTagPublicKey {
 			return nil, fmt.Errorf("%w: the first packet is tag %d, not a public key", ErrNotPublicKey, tag)
+		}
+		if _, isPublic := publicKeyPacketTags[tag]; !isPublic {
+			name := packetNames[tag]
+			if name == "" {
+				name = fmt.Sprintf("tag %d", tag)
+			}
+			return nil, fmt.Errorf("%w: it holds a %s packet, which is no part of a public key", ErrNotPublicKey, name)
 		}
 		if tag == packetTagPublicKey {
 			fingerprint, err := fingerprintOfKeyPacket(body)

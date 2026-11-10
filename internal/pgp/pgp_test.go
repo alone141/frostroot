@@ -179,6 +179,47 @@ func TestParseRejectsAMalformedPacketAfterTheFirst(t *testing.T) {
 	}
 }
 
+// TestParseRejectsAPacketNoPublicKeyHas: the pin checks the fingerprint of
+// every public key in a file, and a secret key appended to the expected
+// one has none to check, so it used to pass, and reach the keyring the
+// image trusts. Only the packets a public key file is made of are read.
+func TestParseRejectsAPacketNoPublicKeyHas(t *testing.T) {
+	docker, err := ParsePublicKey(readFixture(t, "docker.asc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	testCases := map[string]struct {
+		packet   []byte
+		wantName string
+	}{
+		"a secret key, new format":    {[]byte{0xC5, 0x03, 0x04, 0x01, 0x02}, "secret key"},
+		"a secret subkey, old format": {[]byte{0x9C, 0x03, 0x04, 0x01, 0x02}, "secret subkey"},
+		"literal data":                {[]byte{0xCB, 0x02, 0x62, 0x00}, "tag 11"},
+		"compressed data":             {[]byte{0xC8, 0x01, 0x00}, "tag 8"},
+	}
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			data := append(append([]byte(nil), docker.Binary...), testCase.packet...)
+			_, err := ParsePublicKey(data)
+			if !errors.Is(err, ErrNotPublicKey) || !strings.Contains(err.Error(), testCase.wantName) {
+				t.Errorf("err = %v, want ErrNotPublicKey naming the %s packet", err, testCase.wantName)
+			}
+		})
+	}
+	// What an exporter may add to a public key stays readable: a trust
+	// packet, a marker and a padding packet.
+	for name, packet := range map[string][]byte{
+		"trust":   {0xCC, 0x02, 0x00, 0x00},
+		"marker":  {0xCA, 0x03, 'P', 'G', 'P'},
+		"padding": {0xD5, 0x04, 0x00, 0x00, 0x00, 0x00},
+	} {
+		data := append(append([]byte(nil), docker.Binary...), packet...)
+		if key, err := ParsePublicKey(data); err != nil || !slices.Equal(key.Fingerprints, []string{dockerFingerprint}) {
+			t.Errorf("%s packet appended: ParsePublicKey = %v, %v; want the docker key alone", name, key.Fingerprints, err)
+		}
+	}
+}
+
 func TestParseNewFormatHeaderAndVersion6(t *testing.T) {
 	// A new-format header (0xC6 = tag 6) with a two-octet length, wrapping a
 	// version 6 key body: the fingerprint is SHA-256 over 0x9B, a four-byte
