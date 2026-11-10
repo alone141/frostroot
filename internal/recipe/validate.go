@@ -171,8 +171,10 @@ func CheckSource(source Source) []error {
 	if err := CheckSourceURL(source.URL); err != nil {
 		problems = append(problems, err)
 	}
-	if source.Suite != "" && !suitePattern.MatchString(source.Suite) {
-		problems = append(problems, fmt.Errorf("invalid suite %q (letters, digits, dot, dash, underscore)", source.Suite))
+	if source.Suite != "" {
+		if err := CheckSuite(source.Suite); err != nil {
+			problems = append(problems, err)
+		}
 	}
 	for _, component := range source.Components {
 		if err := CheckComponent(component); err != nil {
@@ -289,6 +291,15 @@ func unparsedUserinfo(rawURL string) (start, end int, found bool) {
 func CheckComponent(component string) error {
 	if !componentPattern.MatchString(component) {
 		return fmt.Errorf("invalid component %q (lowercase letters, digits, dot, plus, dash)", component)
+	}
+	return nil
+}
+
+// CheckSuite reports why suite cannot be an apt suite, or nil. An offline
+// build needs it for the suites of the deb lines a lock records.
+func CheckSuite(suite string) error {
+	if !suitePattern.MatchString(suite) {
+		return fmt.Errorf("invalid suite %q (letters, digits, dot, dash, underscore)", suite)
 	}
 	return nil
 }
