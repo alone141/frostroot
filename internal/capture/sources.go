@@ -102,7 +102,14 @@ func parseOneLineSources(file, content string) []aptSource {
 // parseDeb822Sources reads the stanzas of a .sources file.
 func parseDeb822Sources(file, content string) []aptSource {
 	var entries []aptSource
-	for _, stanza := range readStanzas(strings.NewReader(content)) {
+	// content is already in memory, so the only error is a line past the
+	// scanner's limit, which no sources file has; such a file holds no
+	// source capture could carry.
+	stanzas, err := readStanzas(strings.NewReader(content))
+	if err != nil {
+		return nil
+	}
+	for _, stanza := range stanzas {
 		if !slices.Contains(strings.Fields(stanza["Types"]), "deb") || deb822Disabled(stanza["Enabled"]) {
 			continue
 		}

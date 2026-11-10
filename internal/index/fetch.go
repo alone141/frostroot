@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/ulikunitz/xz"
 
@@ -376,10 +377,34 @@ func decompress(path string, reader io.Reader) (io.Reader, error) {
 	}
 }
 
+// What an index keeps of one package is cut to these lengths. A real name
+// is tens of bytes and a one-line description under a hundred; a stanza a
+// server chose could make a field megabytes long, and the cache line that
+// held it one longer than the cache reader takes, so that the cache was
+// deleted and the repository fetched again on every run. A name past its
+// limit names no real package and is not kept at all.
+const (
+	maxNameBytes        = 256
+	maxFieldBytes       = 256
+	maxDescriptionBytes = 512
+)
+
+// cutField returns text cut to at most limit bytes, at a rune boundary.
+func cutField(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut]
+}
+
 // reduce keeps what the picker shows of a Packages paragraph.
 func reduce(stanza deb.Stanza, component string) (Entry, bool) {
-	name := stanza["Package"]
-	if name == "" {
+	name := oneLine(stanza["Package"])
+	if name == "" || len(name) > maxNameBytes {
 		return Entry{}, false
 	}
 	section := stanza["Section"]
@@ -392,11 +417,11 @@ func reduce(stanza deb.Stanza, component string) (Entry, bool) {
 	// write a line the next run cannot parse, which deletes the cache and
 	// fetches that repository again for ever.
 	return Entry{
-		Name:        oneLine(name),
-		Version:     oneLine(stanza["Version"]),
+		Name:        name,
+		Version:     cutField(oneLine(stanza["Version"]), maxFieldBytes),
 		Component:   component,
-		Section:     oneLine(section),
-		Description: oneLine(description),
+		Section:     cutField(oneLine(section), maxFieldBytes),
+		Description: cutField(oneLine(description), maxDescriptionBytes),
 	}, true
 }
 

@@ -3,6 +3,7 @@ package capture
 import (
 	"crypto/md5" // dpkg records conffile checksums as MD5; this only compares against them
 	"encoding/hex"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -46,15 +47,19 @@ type installedPackage struct {
 }
 
 // installedPackages reads the dpkg status and returns the packages whose
-// status word is "installed", sorted by name.
-func (root systemRoot) installedPackages() ([]installedPackage, bool) {
+// status word is "installed", sorted by name. found is false when there is
+// no status to read; a status that cannot be read to its end is an error.
+func (root systemRoot) installedPackages() (packages []installedPackage, found bool, err error) {
 	file, err := os.Open(root.path(dpkgStatusPath))
 	if err != nil {
-		return nil, false
+		return nil, false, nil
 	}
 	defer func() { _ = file.Close() }() // read-only
-	var packages []installedPackage
-	for _, entry := range readStanzas(file) {
+	entries, err := readStanzas(file)
+	if err != nil {
+		return nil, true, fmt.Errorf("reading /%s: %w", dpkgStatusPath, err)
+	}
+	for _, entry := range entries {
 		statusWords := strings.Fields(entry["Status"])
 		if len(statusWords) != 3 || statusWords[2] != "installed" {
 			continue
@@ -69,24 +74,30 @@ func (root systemRoot) installedPackages() ([]installedPackage, bool) {
 		packages = append(packages, installed)
 	}
 	slices.SortFunc(packages, func(a, b installedPackage) int { return strings.Compare(a.name, b.name) })
-	return packages, true
+	return packages, true, nil
 }
 
 // autoInstalled returns the packages apt marked as installed automatically,
-// to satisfy a dependency. found is false when apt kept no record.
-func (root systemRoot) autoInstalled() (auto map[string]bool, found bool) {
+// to satisfy a dependency. found is false when apt kept no record. A record
+// that cannot be read to its end is an error: the marks it lost would list
+// automatic packages as asked for.
+func (root systemRoot) autoInstalled() (auto map[string]bool, found bool, err error) {
 	file, err := os.Open(root.path(extendedStatesPath))
 	if err != nil {
-		return nil, false
+		return nil, false, nil
 	}
 	defer func() { _ = file.Close() }() // read-only
+	entries, err := readStanzas(file)
+	if err != nil {
+		return nil, false, fmt.Errorf("reading /%s: %w", extendedStatesPath, err)
+	}
 	auto = map[string]bool{}
-	for _, entry := range readStanzas(file) {
+	for _, entry := range entries {
 		if entry["Auto-Installed"] == "1" {
 			auto[entry["Package"]] = true
 		}
 	}
-	return auto, len(auto) > 0
+	return auto, len(auto) > 0, nil
 }
 
 // Packages that belong to the machine rather than to the image: a kernel, a
@@ -303,9 +314,17 @@ func (root systemRoot) packageOrigins() packageOrigins {
 		if err != nil {
 			continue
 		}
+		stanzas, err := readStanzas(file)
+		_ = file.Close() // read-only
+		if err != nil {
+			// The lists only attribute packages to repositories, for the
+			// report; one that cannot be read attributes nothing rather
+			// than half of what it lists.
+			continue
+		}
 		origins.hasIndexes = true
 		fromUbuntu := isUbuntuArchive(entry.Name())
-		for _, stanza := range readStanzas(file) {
+		for _, stanza := range stanzas {
 			name := stanza["Package"]
 			if name == "" {
 				continue
@@ -316,7 +335,6 @@ func (root systemRoot) packageOrigins() packageOrigins {
 				origins.thirdParty[name] = append(origins.thirdParty[name], index)
 			}
 		}
-		_ = file.Close() // read-only
 	}
 	return origins
 }

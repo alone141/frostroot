@@ -99,6 +99,8 @@ func parseCache(file *os.File) (cacheHeader, []Entry, error) {
 		return cacheHeader{}, nil, err
 	}
 	scanner := bufio.NewScanner(text)
+	// Far above the longest line writeCache writes, its fields being cut
+	// to maxNameBytes, maxFieldBytes and maxDescriptionBytes.
 	scanner.Buffer(make([]byte, 0, 64<<10), 1<<20)
 	if !scanner.Scan() {
 		return cacheHeader{}, nil, errors.New("empty index file")

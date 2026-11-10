@@ -363,8 +363,8 @@ func reducePrimary(reader io.Reader) ([]Entry, error) {
 	for _, kept := range byName {
 		entries = append(entries, Entry{
 			Name:        kept.name,
-			Version:     displayEVR(kept.epoch, kept.version, kept.rel),
-			Description: oneLine(kept.summary),
+			Version:     cutField(displayEVR(kept.epoch, kept.version, kept.rel), maxFieldBytes),
+			Description: cutField(oneLine(kept.summary), maxDescriptionBytes),
 		})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
@@ -376,7 +376,7 @@ func reducePrimary(reader io.Reader) ([]Entry, error) {
 // already kept.
 func keepNewest(byName map[string]rpmPackage, read rpmPackage) {
 	read.name, read.arch = oneLine(read.name), strings.TrimSpace(read.arch)
-	if !read.isRPM || !read.hasVersion || read.name == "" {
+	if !read.isRPM || !read.hasVersion || read.name == "" || len(read.name) > maxNameBytes {
 		return
 	}
 	if read.arch != distro.FedoraArch && read.arch != "noarch" {
