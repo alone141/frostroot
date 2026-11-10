@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -71,24 +73,44 @@ func newArchive(t *testing.T, extension string) *archive {
 	return served
 }
 
-// publish puts a pocket's indexes and the InRelease that lists them in place.
+// publish puts a pocket's indexes and the InRelease that lists them in place,
+// with the size of each uncompressed, as Ubuntu's InRelease lists them.
 func (a *archive) publish(pocket, extension string, excerptByComponent map[string]string) {
 	a.t.Helper()
-	var release strings.Builder
-	release.WriteString("-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nOrigin: Ubuntu\nSuite: " + pocket + "\nMD5Sum:\n 00000000000000000000000000000000 1 main/binary-amd64/Packages.xz\nSHA256:\n")
+	textByComponent := map[string][]byte{}
 	for component, excerpt := range excerptByComponent {
 		text, err := os.ReadFile(filepath.Join("testdata", excerpt))
 		if err != nil {
 			a.t.Fatal(err)
 		}
+		textByComponent[component] = text
+	}
+	a.publishTexts(pocket, extension, textByComponent, func(text []byte) int64 { return int64(len(text)) })
+}
+
+// publishTexts is publish of texts given as they are. openSize says what
+// InRelease lists as each one's uncompressed size, or -1 for it to list none.
+func (a *archive) publishTexts(pocket, extension string, textByComponent map[string][]byte, openSize func(text []byte) int64) {
+	a.t.Helper()
+	var release strings.Builder
+	release.WriteString("-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nOrigin: Ubuntu\nSuite: " + pocket + "\nMD5Sum:\n 00000000000000000000000000000000 1 main/binary-amd64/Packages.xz\nSHA256:\n")
+	files := map[string][]byte{}
+	for component, text := range textByComponent {
 		content := compress(a.t, extension, text)
 		path := component + "/binary-amd64/Packages" + extension
-		a.files["/dists/"+pocket+"/"+path] = content
+		files["/dists/"+pocket+"/"+path] = content
 		digest := sha256.Sum256(content)
 		fmt.Fprintf(&release, " %s %d %s\n", hex.EncodeToString(digest[:]), len(content), path)
+		if size := openSize(text); extension != "" && size >= 0 {
+			openDigest := sha256.Sum256(text)
+			fmt.Fprintf(&release, " %s %d %s\n", hex.EncodeToString(openDigest[:]), size, component+"/binary-amd64/Packages")
+		}
 	}
 	release.WriteString("-----BEGIN PGP SIGNATURE-----\n\niQIzBAEBCgAdFiEE\n-----END PGP SIGNATURE-----\n")
-	a.files["/dists/"+pocket+"/InRelease"] = []byte(release.String())
+	files["/dists/"+pocket+"/InRelease"] = []byte(release.String())
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+	maps.Copy(a.files, files)
 }
 
 func compress(t *testing.T, extension string, text []byte) []byte {
@@ -482,6 +504,83 @@ func TestOpenRefusesAnIndexLongerThanReleaseDeclares(t *testing.T) {
 	}
 	if _, err := os.Stat(cachePath(options, archiveTarget(options))); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("an index that was too long was cached: %v", err)
+	}
+}
+
+// TestOpenRefusesAnEndlessRelease: nothing declares the size of an
+// InRelease, and one that kept sending well-formed checksum lines was read
+// to its end, every line kept, until the form ran out of memory. The
+// server here stops at four times the ceiling, so that a reader with no
+// ceiling ends too, with no packages, instead of hanging the test.
+func TestOpenRefusesAnEndlessRelease(t *testing.T) {
+	served := newArchive(t, ".gz")
+	options := optionsFor(t, served)
+	served.intercept = func(writer http.ResponseWriter, request *http.Request) bool {
+		if request.URL.Path != "/dists/noble/InRelease" {
+			return false
+		}
+		written, err := io.WriteString(writer, "Origin: Ubuntu\nSuite: noble\nSHA256:\n")
+		for line := 0; err == nil && written < 4*maxReleaseBytes; line++ {
+			var count int
+			count, err = fmt.Fprintf(writer, " %064x %d main/binary-amd64/Packages.%d\n", line, line, line)
+			written += count
+		}
+		return true
+	}
+	_, err := Open(context.Background(), options)
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, errTooLarge) {
+		t.Fatalf("Open = %v, want ErrUnavailable wrapping errTooLarge", err)
+	}
+	if !strings.Contains(err.Error(), "InRelease") {
+		t.Errorf("err = %v, want it to name the InRelease", err)
+	}
+}
+
+// TestOpenRefusesAnIndexThatExpandsPastItsSize: the size Release declares
+// bounds a compressed index on the wire, and nothing bounded what it
+// expanded to. It is bounded by the uncompressed size Release lists, or,
+// when it lists none, by maxExpansion times the compressed size.
+func TestOpenRefusesAnIndexThatExpandsPastItsSize(t *testing.T) {
+	universe, err := os.ReadFile(filepath.Join("testdata", "noble.universe.Packages"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One stanza a hundred thousand times compresses hundreds of times
+	// over, as nothing real does.
+	repetitive := []byte(strings.Repeat("Package: filler\nVersion: 1\n\n", 100_000))
+	tests := map[string]struct {
+		extension string
+		text      []byte
+		openSize  func(text []byte) int64
+	}{
+		"longer than the uncompressed size listed": {".xz", universe, func(text []byte) int64 { return int64(len(text)) / 2 }},
+		"no uncompressed size listed, gzip":        {".gz", repetitive, func([]byte) int64 { return -1 }},
+		"no uncompressed size listed, xz":          {".xz", repetitive, func([]byte) int64 { return -1 }},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			served := newArchive(t, test.extension)
+			served.publishTexts("noble", test.extension, map[string][]byte{"universe": test.text}, test.openSize)
+			_, err := Open(context.Background(), optionsFor(t, served))
+			if !errors.Is(err, ErrUnavailable) || !errors.Is(err, errTooLarge) {
+				t.Fatalf("Open = %v, want ErrUnavailable wrapping errTooLarge", err)
+			}
+			if errors.Is(err, errChanged) {
+				t.Errorf("err = %v; an index that expands too far is not one that changed", err)
+			}
+		})
+	}
+	// The same index, its true size listed or none, opens: the bound is of
+	// what the archive says, and a real index compresses far less.
+	for name, openSize := range map[string]func([]byte) int64{
+		"its true size":  func(text []byte) int64 { return int64(len(text)) },
+		"no size at all": func([]byte) int64 { return -1 },
+	} {
+		served := newArchive(t, ".xz")
+		served.publishTexts("noble", ".xz", map[string][]byte{"universe": universe}, openSize)
+		if _, err := Open(context.Background(), optionsFor(t, served)); err != nil {
+			t.Errorf("%s listed: Open = %v, want the index", name, err)
+		}
 	}
 }
 

@@ -283,7 +283,11 @@ func fetchPyPI(ctx context.Context, options Options) ([]Project, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", url, err)
 		}
-		body = unzipped
+		// The ceiling above counts bytes on the wire, and a few megabytes
+		// of gzip can expand to anything. PyPI declares no uncompressed
+		// size, so what they expand to is bounded by maxExpansion times
+		// the body, and never past DefaultMaxBodyBytes.
+		body = &boundedReader{reader: unzipped, limit: expandedLimit(ceiling, DefaultMaxBodyBytes) + 1}
 	}
 	projects, err := readSimpleIndex(body)
 	if err != nil {

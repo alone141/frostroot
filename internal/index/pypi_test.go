@@ -401,6 +401,22 @@ func TestOpenPyPIRefusesABodyPastTheCeiling(t *testing.T) {
 		t.Errorf("the client read %d bytes of a body it should have stopped reading at %d", read.Load(), options.MaxBodyBytes+1)
 	}
 
+	// A small gzip body that expands without end: within its
+	// Content-Length, and a few kilobytes on the wire, but its projects
+	// would fill memory. What it expands to is bounded by maxExpansion
+	// times its size.
+	repetitive := gzipped(t, `{"meta":{"api-version":"1.0"},"projects":[`+strings.Repeat(`{"name":"filler"},`, 200_000)+`{"name":"last"}]}`)
+	served.answer = func(response http.ResponseWriter) bool {
+		response.Header().Set("Content-Type", pypiSimpleJSON)
+		response.Header().Set("Content-Encoding", "gzip")
+		response.Header().Set("Content-Length", strconv.Itoa(len(repetitive)))
+		_, _ = response.Write(repetitive)
+		return true
+	}
+	if _, err := OpenPyPI(context.Background(), options); !errors.Is(err, ErrUnavailable) || !errors.Is(err, errTooLarge) {
+		t.Fatalf("OpenPyPI of %d gzipped bytes that expand to 3.6 MB = %v, want ErrUnavailable wrapping errTooLarge", len(repetitive), err)
+	}
+
 	// The same document, whole, with a Content-Length: a body of exactly
 	// its declared length is what every index is, and the ceiling does not
 	// apply to it.
