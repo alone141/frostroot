@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -360,17 +359,13 @@ func TestPythonIndexForKeepsARecipesOwnIndex(t *testing.T) {
 	}
 }
 
-// redirectTransport sends every request to target's host, keeping the path:
-// an https index address that the test serves over plain http.
-type redirectTransport struct{ target string }
+// redirectTransport sends every request to host over plain http, keeping
+// the path: an https index address that the test serves itself.
+type redirectTransport struct{ host string }
 
 func (r redirectTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	redirected := request.Clone(request.Context())
-	target, err := url.Parse(r.target)
-	if err != nil {
-		return nil, err
-	}
-	redirected.URL.Scheme, redirected.URL.Host = target.Scheme, target.Host
+	redirected.URL.Scheme, redirected.URL.Host = "http", r.host
 	return http.DefaultTransport.RoundTrip(redirected)
 }
 
@@ -385,7 +380,7 @@ func TestEditChecksPythonNamesAgainstTheRecipesOwnIndex(t *testing.T) {
 	cacheHome := t.TempDir()
 	if _, err := index.OpenPyPI(context.Background(), index.Options{
 		Mirror:   own,
-		Client:   &http.Client{Transport: redirectTransport{target: private.URL}},
+		Client:   &http.Client{Transport: redirectTransport{host: strings.TrimPrefix(private.URL, "http://")}},
 		CacheDir: index.CacheDir(environmentWith(map[string]string{"XDG_CACHE_HOME": cacheHome})),
 	}); err != nil {
 		t.Fatal(err)
