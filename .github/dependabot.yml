@@ -1,0 +1,14 @@
+# Weekly pull requests for the Go modules and for the actions the workflows
+# use. The actions are pinned by commit with their tag in a comment, and
+# dependabot keeps both. The Go toolchain itself is the go line of go.mod,
+# which govulncheck, weekly and on every pull request, says when to raise.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
