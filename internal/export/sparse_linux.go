@@ -24,6 +24,7 @@ const (
 // data is copied whole. report is told how far the copy has got, holes
 // included.
 func copyKeepingHoles(source, destination *os.File, size int64, report func(copied int64)) error {
+	buffer := make([]byte, copyChunkBytes)
 	offset := int64(0)
 	for offset < size {
 		dataStart, err := source.Seek(offset, seekData)
@@ -46,10 +47,13 @@ func copyKeepingHoles(source, destination *os.File, size int64, report func(copi
 		if _, err := destination.Seek(dataStart, io.SeekStart); err != nil {
 			return err
 		}
-		if _, err := io.CopyN(destination, source, dataEnd-dataStart); err != nil {
+		// Through the progress writer, chunk by chunk: a tarball is one run
+		// of data, and a report at its end alone left the bar at 0 for the
+		// whole copy onto a Windows drive.
+		run := &progressWriter{writer: destination, writtenByte: dataStart, report: report}
+		if err := copyChunks(run, io.LimitReader(source, dataEnd-dataStart), dataEnd-dataStart, buffer); err != nil {
 			return err
 		}
-		report(dataEnd)
 		offset = dataEnd
 	}
 	if err := destination.Truncate(size); err != nil {
