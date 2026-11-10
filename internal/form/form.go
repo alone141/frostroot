@@ -129,6 +129,39 @@ func FieldsFor(fields []Field, chosen Variant, fixed Fixed) []Field {
 	return asked
 }
 
+// currentChoiceRules are the select fields whose answer a recipe may hold
+// without the form offering it, each with the recipe's rule for it. The
+// form offers the zones of zone1970.tab and twenty locales; a recipe may
+// name any zone tzdata has, Etc/UTC or a link such as Europe/Amsterdam,
+// and any locale glibc builds, and capture reads them off a machine.
+var currentChoiceRules = map[string]func(string) error{
+	KeyTimezone: recipe.CheckTimezone,
+	KeyLocale:   recipe.CheckLocale,
+}
+
+// KeepCurrentChoices returns fields with the answer initial holds for a
+// timezone or locale offered first among its options, marked as the
+// current one, when the options lack it and the recipe's rule accepts it.
+// Without it, edit and capture could not keep such a value: the plain
+// interface refused it as unknown, and the full-screen select had no
+// option to show it by and answered its first instead. fields is not
+// changed.
+func KeepCurrentChoices(fields []Field, initial Values) []Field {
+	kept := slices.Clone(fields)
+	for index, field := range kept {
+		rule, isRuled := currentChoiceRules[field.Key]
+		current := initial.String(field.Key)
+		if field.Kind != KindSelect || !isRuled || current == "" || rule(current) != nil {
+			continue
+		}
+		if slices.ContainsFunc(field.Options, func(option Option) bool { return option.Value == current }) {
+			continue
+		}
+		kept[index].Options = slices.Concat([]Option{{Value: current, Label: current + " (current)"}}, field.Options)
+	}
+	return kept
+}
+
 // DisplayLabel returns the option's display text: Label, or Value when there
 // is none.
 func (o Option) DisplayLabel() string {
