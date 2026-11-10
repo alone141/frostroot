@@ -130,17 +130,10 @@ func (s *Summaries) lookUp(ctx context.Context, name string) string {
 }
 
 // cleanSummary makes a summary one short line: PyPI does not stop anyone
-// writing a paragraph, a tab or a control character into it.
+// writing a paragraph, a tab or a control character into it, DEL and the
+// C1 controls included, which a check for runes below a space let through.
 func cleanSummary(summary string) string {
-	summary = strings.Map(func(character rune) rune {
-		if character == '\n' || character == '\r' || character == '\t' {
-			return ' '
-		}
-		if character < ' ' {
-			return -1
-		}
-		return character
-	}, summary)
+	summary = strings.Map(lineSafeRune, summary)
 	summary = strings.Join(strings.Fields(summary), " ")
 	if runes := []rune(summary); len(runes) > summaryLimit {
 		summary = strings.TrimRight(string(runes[:summaryLimit]), " ") + "…"

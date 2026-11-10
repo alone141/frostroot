@@ -507,6 +507,31 @@ func TestOpenSourceThatOverrunsItsSizeFailsAlone(t *testing.T) {
 // fold Section or Version that way. The cache is a line per package, so a
 // newline inside a field wrote a line the next run could not parse, which
 // deleted the cache and fetched the repository again, for ever.
+// TestOpenDropsControlCharacters: an index is read unsigned, often over
+// plain http, and the picker draws its fields on the terminal, where an
+// escape sequence is a command. Only tab, CR and LF used to be handled.
+func TestOpenDropsControlCharacters(t *testing.T) {
+	served := indextest.Serve(t, "noble", []indextest.Package{
+		{Name: "evil", Version: "1.0\x1b[2J", Section: "admin\x7f", Description: "writes \x1b]52;c;aGk=\x07 the clipboard\u009b"},
+	})
+	options := Options{
+		Release:  distro.Release{Suite: "noble", ArchiveURL: served.URL, Components: []string{"main"}},
+		CacheDir: t.TempDir(),
+		Now:      func() time.Time { return testNow },
+	}
+	want := Entry{Name: "evil", Version: "1.0[2J", Component: "main", Section: "admin", Description: "writes ]52;c;aGk= the clipboard"}
+	for _, when := range []string{"fetched", "from the cache"} {
+		opened, err := Open(context.Background(), options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, found := opened.Lookup("evil")
+		if !found || entry != want {
+			t.Errorf("%s: Lookup = %+v, %v; want %+v", when, entry, found, want)
+		}
+	}
+}
+
 func TestOpenKeepsAFoldedFieldOnOneCacheLine(t *testing.T) {
 	served := indextest.Serve(t, "noble", []indextest.Package{
 		{Name: "folded", Version: "1.0", Section: "admin\n extra", Description: "a stanza whose section runs over two lines"},

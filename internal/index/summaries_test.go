@@ -144,8 +144,13 @@ func TestCleanSummary(t *testing.T) {
 		"  spaces   everywhere\t":   "spaces everywhere",
 		"two\nlines":                "two lines",
 		"a\x00control\x07character": "acontrolcharacter",
-		"":                          "",
-		strings.Repeat("x", 250):    strings.Repeat("x", 200) + "…",
+		// An escape sequence loses its ESC and is text; DEL and the C1
+		// controls, CSI among them, go as the C0 ones do.
+		"\x1b]52;c;aGk=\x07copied": "]52;c;aGk=copied",
+		"del\x7fhere":              "delhere",
+		"csi\u009b2Jhere":          "csi2Jhere",
+		"":                         "",
+		strings.Repeat("x", 250):   strings.Repeat("x", 200) + "…",
 	}
 	for summary, want := range tests {
 		if got := cleanSummary(summary); got != want {

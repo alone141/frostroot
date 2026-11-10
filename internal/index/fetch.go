@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/ulikunitz/xz"
 
@@ -360,12 +361,29 @@ func reduce(stanza deb.Stanza, component string) (Entry, bool) {
 	}, true
 }
 
-// oneLine makes text safe for a tab-separated line: a tab would split the
-// line and a newline would end it. deb.ReadStanzas joins a continuation
-// line to its field with a newline, and a vendor's stanza may fold any
-// field that way, not only the description.
+// oneLine makes text safe for a tab-separated line and for a terminal: a
+// tab would split the line and a newline would end it, and deb.ReadStanzas
+// joins a continuation line to its field with a newline, as a vendor's
+// stanza may fold any field that way, not only the description.
 func oneLine(text string) string {
-	return strings.TrimSpace(strings.NewReplacer("\t", " ", "\r", " ", "\n", " ").Replace(text))
+	return strings.TrimSpace(strings.Map(lineSafeRune, text))
+}
+
+// lineSafeRune turns a tab, a carriage return or a line feed into a space
+// and drops every other control character, C0, DEL and C1 alike. An index
+// is read without verifying its signature, often over plain http, so these
+// bytes are whoever is on the path's to choose; the picker draws them, and
+// an escape sequence on a terminal is a command to it: moving the cursor,
+// retitling the window, writing the clipboard. strings.Map has already
+// turned a byte that is not UTF-8, a lone 0x9B among them, into U+FFFD.
+func lineSafeRune(character rune) rune {
+	switch {
+	case character == '\t' || character == '\r' || character == '\n':
+		return ' '
+	case unicode.IsControl(character):
+		return -1
+	}
+	return character
 }
 
 // countingReader reports every read.
