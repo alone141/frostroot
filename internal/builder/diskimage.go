@@ -340,5 +340,5 @@ func diskHooks(stage Stage) []string {
 		hooks = append(hooks, `mkdir -p "$1`+filepath.Dir(file.imagePath)+`"`)
 		hooks = append(hooks, "upload "+shellQuote(file.hostPath)+" "+file.imagePath)
 	}
-	return append(hooks, `chroot "$1" /bin/sh -c "$(cat `+shellQuote(stage.DiskScriptPath)+`)" `+diskScriptName)
+	return append(hooks, runStagedScriptHook(stage.DiskScriptPath, diskScriptName))
 }

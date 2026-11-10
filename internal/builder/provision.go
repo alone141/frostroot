@@ -430,6 +430,16 @@ func WriteStage(stageDir string, imageRecipe recipe.Recipe, options StageOptions
 	return stage, nil
 }
 
+// runStagedScriptHook is the hook that runs the script staged at scriptPath
+// inside the image, as name for its messages. The script is read before
+// chroot runs, and the hook fails when it cannot be: a command substitution
+// that fails inside an argument does not fail the command, so the hook this
+// replaced, sh -c "$(cat FILE)", ran an empty script, and succeeded, when
+// FILE could not be read, and the image was packed unprovisioned.
+func runStagedScriptHook(scriptPath, name string) string {
+	return `script=$(cat ` + shellQuote(scriptPath) + `) && chroot "$1" /bin/sh -c "$script" ` + name
+}
+
 // pythonHooks place what the Python step needs, run it after the user and
 // the locale exist, and take back what the lock is written from or checked
 // against. Nothing the step used stays in the image: the script deletes the
@@ -451,7 +461,7 @@ func pythonHooks(stage Stage) []string {
 		// gets /<base name>, which is what PythonWheelsPath is.
 		hooks = append(hooks, "copy-in "+shellQuote(stage.WheelsDir)+" /")
 	}
-	hooks = append(hooks, `chroot "$1" /bin/sh -c "$(cat `+shellQuote(stage.PythonScriptPath)+`)" `+pythonScriptName)
+	hooks = append(hooks, runStagedScriptHook(stage.PythonScriptPath, pythonScriptName))
 	if stage.PipReportPath != "" {
 		hooks = append(hooks, "download "+PythonReportPath+" "+shellQuote(stage.PipReportPath))
 	}
@@ -512,7 +522,7 @@ func CustomizeHooks(stage Stage) []string {
 	if stage.SourcesListPath != "" {
 		hooks = append(hooks, "upload "+shellQuote(stage.SourcesListPath)+" /etc/apt/sources.list")
 	}
-	hooks = append(hooks, `chroot "$1" /bin/sh -c "$(cat `+shellQuote(stage.ProvisionScriptPath)+`)" `+provisionScriptName)
+	hooks = append(hooks, runStagedScriptHook(stage.ProvisionScriptPath, provisionScriptName))
 	hooks = append(hooks, pythonHooks(stage)...)
 	// mmdebstrap copies these from the build host and leaves them behind.
 	// They go last, because they are also how anything running in the chroot
