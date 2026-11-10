@@ -15,6 +15,7 @@ import (
 	"frostroot/internal/builder"
 	"frostroot/internal/deb"
 	"frostroot/internal/deb/debtest"
+	"frostroot/internal/pool"
 	"frostroot/internal/recipe"
 )
 
@@ -553,6 +554,40 @@ func TestBuildOfflineFromAnOldLockWarns(t *testing.T) {
 	}
 }
 
+// TestReportBuildFailureExitCodes: two errors a person can fix exited
+// wrong. A certificate that could not be read was missing from the list
+// and exited 2, as a failed build; a disk.size too small for the image
+// exited 1 but, found after the whole bootstrap, did not say the work
+// directory with gigabytes in it was kept.
+func TestReportBuildFailureExitCodes(t *testing.T) {
+	tests := map[string]struct {
+		err          error
+		wantExit     int
+		wantWorkDir  bool
+		wantInStderr string
+	}{
+		"a certificate that cannot be read": {fmt.Errorf("%w: open certs/corp.pem: permission denied", builder.ErrCertificate), exitUserError, false, "certs/corp.pem"},
+		"a disk too small for the image":    {fmt.Errorf("%w: 2G holds less than the image needs", builder.ErrDiskTooSmall), exitUserError, true, "2G holds less"},
+		"a host that cannot mount":          {fmt.Errorf("%w: mount: permission denied", builder.ErrCannotMount), exitUserError, true, "mount"},
+		"a lock that does not parse":        {fmt.Errorf("%w: toml: strict mode: fields in the document are missing in the target struct", pool.ErrBadLock), exitUserError, false, "unusable"},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			app := &App{Stdout: &bytes.Buffer{}, Stderr: &stderr}
+			if exitCode := app.reportBuildFailure(test.err, false, "", "/var/tmp/frostroot-1000/build-1"); exitCode != test.wantExit {
+				t.Errorf("exit code = %d, want %d", exitCode, test.wantExit)
+			}
+			if got := strings.Contains(stderr.String(), "/var/tmp/frostroot-1000/build-1"); got != test.wantWorkDir {
+				t.Errorf("stderr names the kept work directory: %v, want %v:\n%s", got, test.wantWorkDir, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), test.wantInStderr) {
+				t.Errorf("stderr = %q, want it to say %q", stderr.String(), test.wantInStderr)
+			}
+		})
+	}
+}
+
 func TestBuildOfflineRefusals(t *testing.T) {
 	testCases := []struct {
 		name         string
@@ -574,6 +609,20 @@ func TestBuildOfflineRefusals(t *testing.T) {
 			args:         []string{"build", "--offline"},
 			wantExit:     exitUserError,
 			wantInStderr: "no frostroot.lock",
+		},
+		{
+			// A lock written by a newer frostroot, or edited by hand: vendor
+			// says the person can fix it, and build said the build failed.
+			name: "a lock that does not parse",
+			prepare: func(t *testing.T, recipeDir string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(recipeDir, "frostroot.lock"), []byte("version = 1\nfield_from_the_future = true\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			args:         []string{"build", "--offline"},
+			wantExit:     exitUserError,
+			wantInStderr: "unusable frostroot.lock",
 		},
 		{
 			name: "pool missing",

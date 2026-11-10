@@ -330,20 +330,21 @@ func (a *App) reportBuildFailure(err error, interrupted bool, archiveURL, keptWo
 		a.stderrf("frostroot: build interrupted; no lock or tarball was written\n")
 		a.reportKeptWorkDir(keptWorkDir)
 		return exitInterrupted
-	case errors.Is(err, builder.ErrCannotMount):
-		// A host the user can fix, found once mmdebstrap was running, so
-		// there is a work directory, with mmdebstrap's log, to point at.
+	case errors.Is(err, builder.ErrCannotMount), errors.Is(err, builder.ErrDiskTooSmall):
+		// Something the user can fix, found once the bootstrap had run, so
+		// there is a work directory, with its log and gigabytes of image,
+		// to point at.
 		a.stderrf("frostroot: %v\n", err)
 		a.reportKeptWorkDir(keptWorkDir)
 		return exitUserError
 	case errors.Is(err, builder.ErrNotLinux), errors.Is(err, builder.ErrNoMmdebstrap),
 		errors.Is(err, builder.ErrNoMount), errors.Is(err, builder.ErrNoFedoraTool), errors.Is(err, builder.ErrMkosiVersion),
 		errors.Is(err, builder.ErrFedoraOption), errors.Is(err, builder.ErrUserNamespacesRestricted),
-		errors.Is(err, builder.ErrNoDiskTool), errors.Is(err, builder.ErrDiskTooSmall),
+		errors.Is(err, builder.ErrNoDiskTool),
 		errors.Is(err, builder.ErrNoKeyring), errors.Is(err, builder.ErrBadWorkRoot),
 		errors.Is(err, builder.ErrUnwritableOutput), errors.Is(err, builder.ErrNoLock),
 		errors.Is(err, builder.ErrLockMismatch), errors.Is(err, builder.ErrPoolIncomplete),
-		errors.Is(err, builder.ErrSourceKey), errors.Is(err, builder.ErrBadSourceDateEpoch),
+		errors.Is(err, builder.ErrSourceKey), errors.Is(err, builder.ErrCertificate), errors.Is(err, builder.ErrBadSourceDateEpoch),
 		errors.Is(err, pool.ErrNoChecksums), errors.Is(err, pool.ErrBadLock):
 		a.stderrf("frostroot: %v\n", err)
 		return exitUserError

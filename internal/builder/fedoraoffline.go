@@ -51,7 +51,9 @@ func planFedoraOffline(recipeDir string, imageRecipe recipe.Recipe, release dist
 		return nil, fmt.Errorf("%w in %s; run frostroot build online first, then frostroot vendor", ErrNoLock, recipeDir)
 	}
 	if err != nil {
-		return nil, err
+		// A lock that does not parse, written by a newer frostroot or
+		// edited by hand, is the person's to fix, as vendor says it is.
+		return nil, fmt.Errorf("%w: %w", pool.ErrBadLock, err)
 	}
 	// As on Ubuntu: a lock of another family is read no further.
 	if lockFamily, err := distro.FamilyOf(lock.Distro); err != nil || lockFamily != distro.Fedora {
