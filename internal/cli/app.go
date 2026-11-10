@@ -172,8 +172,10 @@ Commands:
   edit       change an existing frostroot.toml with the same questions
   capture    describe this installed Ubuntu system as a recipe, with a report of the gaps
   validate   check frostroot.toml (no network, no root)
-  build      build frostroot.lock and dist/<name>-ubuntu-<release>-amd64.tar.gz
-  vendor     download the lock's packages into vendor/debs, for build --offline
+  build      build frostroot.lock and dist/<name>-<distro>-<release>-amd64.tar.gz,
+             or a disk recipe's .img
+  vendor     download what the lock names into vendor/debs, vendor/rpms and
+             vendor/wheels, for build --offline
   version    print the version
 
 init, edit, capture, build and vendor show a full-screen interface in a terminal
