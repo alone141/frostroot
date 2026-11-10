@@ -202,18 +202,22 @@ const sourceURLMetacharacters = " \t\r\n\v\f[]#"
 // must be http or https with a host, none of the characters that would
 // break the "deb" line it lands in, and no credentials.
 func CheckSourceURL(sourceURL string) error {
-	parsed, err := url.Parse(sourceURL)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || strings.ContainsAny(sourceURL, sourceURLMetacharacters) {
-		return fmt.Errorf("invalid source url %q (expected http or https with no space, bracket or #, such as https://download.docker.com/linux/ubuntu)", sourceURL)
-	}
 	// The same rule as [python] index_url, for a stronger reason: a source
 	// URL is written into the recipe, twice into the lock, and into
 	// /etc/apt/sources.list inside the tarball everyone the image is handed
 	// can read. Apt also clears the userinfo before it names its list
 	// files, while AptListPrefix does not, so a URL carrying credentials
 	// matches no index and the build fails after mmdebstrap has run.
-	if parsed.User != nil {
+	//
+	// Credentials are looked for first: a URL that carries them and is
+	// wrong in another way as well would otherwise be refused for the other
+	// reason, quoting itself whole.
+	if hasURLCredentials(sourceURL) {
 		return fmt.Errorf("invalid source url %q (it carries credentials, which must not be committed in a recipe or shipped in the image)", RedactURLCredentials(sourceURL))
+	}
+	parsed, err := url.Parse(sourceURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || strings.ContainsAny(sourceURL, sourceURLMetacharacters) {
+		return fmt.Errorf("invalid source url %q (expected http or https with no space, bracket or #, such as https://download.docker.com/linux/ubuntu)", sourceURL)
 	}
 	return nil
 }
@@ -222,15 +226,60 @@ func CheckSourceURL(sourceURL string) error {
 // "REDACTED", for messages and reports: a refusal that quoted the password
 // would put it in a terminal, a CI log, or capture's report, which sits
 // beside a recipe people commit. The whole userinfo goes, not only the
-// password, because a token is as often the user name. A URL that does not
-// parse, or carries no userinfo, is returned as it is.
+// password, because a token is as often the user name. A URL that carries
+// no userinfo is returned as it is.
+//
+// A URL that does not parse is redacted too, by its text: a password with a
+// stray "%" or "/" in it is exactly what makes url.Parse fail, and that URL
+// is then refused, quoting itself.
 func RedactURLCredentials(rawURL string) string {
 	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed.User == nil {
+	if err != nil {
+		start, end, found := unparsedUserinfo(rawURL)
+		if !found {
+			return rawURL
+		}
+		return rawURL[:start] + "REDACTED" + rawURL[end:]
+	}
+	if parsed.User == nil {
 		return rawURL
 	}
 	parsed.User = url.User("REDACTED")
 	return parsed.String()
+}
+
+// hasURLCredentials reports whether rawURL carries a userinfo, a parsed
+// one or one that keeps url.Parse from reading the URL at all.
+func hasURLCredentials(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		_, _, found := unparsedUserinfo(rawURL)
+		return found
+	}
+	return parsed.User != nil
+}
+
+// unparsedUserinfo finds, by its text, the userinfo of a URL url.Parse
+// could not read: what lies between "://" and the last "@" before any
+// query or fragment, as rawURL[start:end]. Without the structure a parse
+// gives, the last "@" is the one that ends a userinfo whose password holds
+// "/" or "@" itself; for a URL that is refused anyway, hiding a host along
+// with the secret is the better mistake. Text with no "://" is not a URL.
+func unparsedUserinfo(rawURL string) (start, end int, found bool) {
+	schemeEnd := strings.Index(rawURL, "://")
+	if schemeEnd < 0 {
+		return 0, 0, false
+	}
+	start = schemeEnd + len("://")
+	authorityAndPath := rawURL[start:]
+	if queryStart := strings.IndexAny(authorityAndPath, "?#"); queryStart >= 0 {
+		authorityAndPath = authorityAndPath[:queryStart]
+	}
+	at := strings.LastIndex(authorityAndPath, "@")
+	if at < 0 {
+		return 0, 0, false
+	}
+	return start, start + at, true
 }
 
 // CheckComponent reports why component cannot be an apt component, or nil.
@@ -251,12 +300,13 @@ func CheckComponent(component string) error {
 // forever. It must carry no credentials either, because a recipe is a file
 // people commit and review.
 func CheckPythonIndexURL(indexURL string) error {
+	// Credentials first, for the reason CheckSourceURL gives.
+	if hasURLCredentials(indexURL) {
+		return fmt.Errorf("invalid python index_url %q (it carries credentials, which must not be committed in a recipe)", RedactURLCredentials(indexURL))
+	}
 	parsed, err := url.Parse(indexURL)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || strings.ContainsAny(indexURL, sourceURLMetacharacters) {
 		return fmt.Errorf("invalid python index_url %q (expected https with no space or #, such as https://nexus.example.com/repository/pypi/simple)", indexURL)
-	}
-	if parsed.User != nil {
-		return fmt.Errorf("invalid python index_url %q (it carries credentials, which must not be committed in a recipe)", RedactURLCredentials(indexURL))
 	}
 	return nil
 }

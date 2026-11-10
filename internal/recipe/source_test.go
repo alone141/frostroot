@@ -189,10 +189,56 @@ func TestCredentialRefusalsDoNotQuoteTheSecret(t *testing.T) {
 			t.Errorf("%s: the refusal should still name the host and path: %v", name, err)
 		}
 	}
-	for _, unchanged := range []string{"https://download.docker.com/linux/ubuntu", "not a url at all", "https://x/a%23b", ""} {
+	for _, unchanged := range []string{"https://download.docker.com/linux/ubuntu", "not a url at all", "https://x/a%23b", "", "https://x/%zz", "https://x/%zz?mail=a@b.example"} {
 		if got := RedactURLCredentials(unchanged); got != unchanged {
 			t.Errorf("RedactURLCredentials(%q) = %q, want it unchanged", unchanged, got)
 		}
+	}
+}
+
+// TestCredentialRefusalsOfOtherwiseBadURLsDoNotQuoteTheSecret is the case
+// the rule above missed: a URL that carries credentials and is wrong in
+// another way too, the scheme, a character apt reads, or a password that
+// keeps url.Parse from reading it at all, was refused for the other reason
+// and quoted whole.
+func TestCredentialRefusalsOfOtherwiseBadURLsDoNotQuoteTheSecret(t *testing.T) {
+	refusals := map[string]error{
+		"source url, ftp":           CheckSourceURL("ftp://buildbot:s3cret@mirror.example/ubuntu"),
+		"source url, #":             CheckSourceURL("https://buildbot:s3cret@apt.example/ubuntu#"),
+		"source url, bad escape":    CheckSourceURL("https://deploy:s3cret%t@apt.example/ubuntu"),
+		"source url, slash in pass": CheckSourceURL("https://deploy:s3/cret@apt.example/ubuntu"),
+		"python index_url, http":    CheckPythonIndexURL("http://ci:s3cret@nexus.example/simple"),
+		"python index_url, escape":  CheckPythonIndexURL("https://ci:s3cret%zz@nexus.example/simple"),
+		"source url, REDACTED user": CheckSourceURL("https://REDACTED@apt.example/ubuntu"),
+	}
+	for name, err := range refusals {
+		if err == nil {
+			t.Errorf("%s: no refusal", name)
+			continue
+		}
+		if strings.Contains(err.Error(), "s3cret") || strings.Contains(err.Error(), "s3/cret") {
+			t.Errorf("%s: the refusal quotes the secret: %v", name, err)
+		}
+		if !strings.Contains(err.Error(), "REDACTED@") || !strings.Contains(err.Error(), "credentials") {
+			t.Errorf("%s: the refusal should say the URL carries credentials, and show where they were: %v", name, err)
+		}
+	}
+	redactions := map[string]string{
+		"https://deploy:S3cr%t@apt.example/ubuntu":    "https://REDACTED@apt.example/ubuntu",
+		"https://u:pa/ss@host.example/x?q=1":          "https://REDACTED@host.example/x?q=1",
+		"ftp://u:p@mirror.example/ubuntu":             "ftp://REDACTED@mirror.example/ubuntu",
+		"https://deploy:S3cr%t@apt.example/a?b=c@d#e": "https://REDACTED@apt.example/a?b=c@d#e",
+	}
+	for raw, want := range redactions {
+		if got := RedactURLCredentials(raw); got != want {
+			t.Errorf("RedactURLCredentials(%q) = %q, want %q", raw, got, want)
+		}
+	}
+	if err := CheckSourceURL("https://download.docker.com/linux/ubuntu"); err != nil {
+		t.Errorf("a plain source URL is refused: %v", err)
+	}
+	if err := CheckPythonIndexURL("https://nexus.example/repository/pypi/simple"); err != nil {
+		t.Errorf("a plain index URL is refused: %v", err)
 	}
 }
 

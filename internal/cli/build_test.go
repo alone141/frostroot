@@ -890,6 +890,9 @@ func TestBuildRejectsInvalidMirror(t *testing.T) {
 	invalidMirrorURLs := []string{
 		"ftp://mirror.example/ubuntu", "mirror.example/ubuntu", "http://", "http://mirror.example/ubu ntu",
 		"http://mirror.example/ubuntu#", "http://mirror.example/[ubuntu]", "http://user:secret-token@mirror.example/ubuntu",
+		// Credentials in a URL that is wrong in another way as well were
+		// refused for the other reason, and quoted whole.
+		"ftp://user:secret-token@mirror.example/ubuntu", "http://user:secret-token%zz@mirror.example/ubuntu",
 	}
 	for _, mirrorURL := range invalidMirrorURLs {
 		t.Run(mirrorURL, func(t *testing.T) {
