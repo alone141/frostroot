@@ -52,12 +52,23 @@ func (a *App) showNotePlain(field form.Field) {
 	}
 }
 
+// clearAnswer is the plain interface's answer for "none", to a question
+// whose answer may be empty: the other packages, PPAs, Python packages,
+// certificates, a disk's size, and the lists. An empty answer keeps the
+// current value, which scripts that pipe answers rely on, so emptying one
+// takes a word of its own; no package, project, PPA, path or size can be
+// "-" alone. The questions read as they always have.
+const clearAnswer = "-"
+
 func (a *App) askInputPlain(field form.Field, values form.Values, problems *[]string) error {
 	answer, err := a.Prompt.Ask(field.Title, values.String(field.Key))
 	if err != nil {
 		return err
 	}
 	answer = strings.TrimSpace(answer)
+	if answer == clearAnswer && (field.Validate == nil || field.Validate("") == nil) {
+		answer = ""
+	}
 	values[field.Key] = answer
 	if field.Validate != nil {
 		if err := field.Validate(answer); err != nil {
@@ -127,6 +138,10 @@ func (a *App) askMultiSelectPlain(field form.Field, values form.Values, problems
 		return err
 	}
 	var selected []string
+	if strings.TrimSpace(answer) == clearAnswer {
+		values[field.Key] = selected
+		return nil
+	}
 	for _, token := range splitAnswers(answer) {
 		value, found := resolveOption(field.Options, token)
 		if !found {

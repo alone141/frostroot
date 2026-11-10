@@ -280,7 +280,9 @@ and `edit` ask the same questions one line at a time, and `build` and
 The distribution is not one of those questions: `init --distro fedora`
 answers it, a plain `init` without it writes an Ubuntu recipe, and `edit`
 keeps the recipe's, so a script that pipes answers in answers the same
-questions it always did.
+questions it always did. An empty answer keeps the value shown in
+brackets; `-` empties a question that may be empty, such as the other
+packages, the Python packages or a list.
 
 **The order of those questions changed in v0.12**, because the sources are
 now asked before the packages. A script that answers them by position — a
