@@ -31,8 +31,9 @@ func (a *App) useFullScreen(plainRequested bool) bool {
 	return a.IsTerminal(a.Stdin) && a.IsTerminal(a.Stdout)
 }
 
-// isCharacterDevice is the default terminal check: an *os.File on a character
-// device, which is what a terminal is and a pipe or a regular file is not.
+// isCharacterDevice reports whether stream is an *os.File on a character
+// device, which a terminal is and a pipe or a regular file is not, and
+// which /dev/null is as well; isTerminal is the check.
 func isCharacterDevice(stream any) bool {
 	file, isFile := stream.(*os.File)
 	if !isFile {

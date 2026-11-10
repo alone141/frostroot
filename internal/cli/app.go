@@ -151,7 +151,7 @@ func (a *App) withDefaults() *App {
 		a.WSLPath = windowsPathOf
 	}
 	if a.IsTerminal == nil {
-		a.IsTerminal = isCharacterDevice
+		a.IsTerminal = isTerminal
 	}
 	if a.ReadFile == nil {
 		a.ReadFile = os.ReadFile
