@@ -2,6 +2,7 @@ package builder
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +38,39 @@ func TestChooseFrozenInstant(t *testing.T) {
 				t.Errorf("instant = %+v, want %+v", instant, testCase.want)
 			}
 		})
+	}
+}
+
+// TestChooseFrozenInstantRefusesAnInstantStillToCome: mmdebstrap dates no
+// file later than the frozen instant and leaves an earlier date alone, so
+// an instant still ahead of the clock leaves the build's own files dated by
+// the clock, and two rebuilds differ while the summary says they cannot. A
+// SOURCE_DATE_EPOCH in milliseconds, a common slip, is fifty thousand
+// years ahead, and was recorded in the lock as it was.
+func TestChooseFrozenInstantRefusesAnInstantStillToCome(t *testing.T) {
+	now := time.Date(2026, time.November, 10, 12, 0, 0, 0, time.UTC)
+	ahead := strconv.FormatInt(now.Add(time.Hour).Unix(), 10)
+	milliseconds := strconv.FormatInt(now.Add(-time.Hour).UnixMilli(), 10)
+	for name, test := range map[string]struct {
+		environment string
+		offline     *offlinePlan
+		wantText    string
+	}{
+		"online, an hour ahead":       {environment: ahead, wantText: "later than this machine's clock"},
+		"online, in milliseconds":     {environment: milliseconds, wantText: "milliseconds"},
+		"offline, a lock a day ahead": {offline: &offlinePlan{lock: recipe.Lockfile{SourceDateEpoch: now.Add(24 * time.Hour).Unix()}}, wantText: "set the clock right"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := chooseFrozenInstant(fakeEnvironment(map[string]string{SourceDateEpochVariable: test.environment}), test.offline, now)
+			if !errors.Is(err, ErrBadSourceDateEpoch) || !strings.Contains(err.Error(), test.wantText) {
+				t.Errorf("error = %v, want ErrBadSourceDateEpoch saying %q", err, test.wantText)
+			}
+		})
+	}
+	// Clocks disagree by seconds: an instant a minute ahead is taken.
+	aMinuteAhead := now.Add(time.Minute).Unix()
+	if instant, err := chooseFrozenInstant(fakeEnvironment(map[string]string{SourceDateEpochVariable: strconv.FormatInt(aMinuteAhead, 10)}), nil, now); err != nil || instant.epoch != aMinuteAhead {
+		t.Errorf("a minute ahead: instant %+v, error %v; want it taken", instant, err)
 	}
 }
 
