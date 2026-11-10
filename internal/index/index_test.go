@@ -507,6 +507,26 @@ func TestOpenRefusesAnIndexLongerThanReleaseDeclares(t *testing.T) {
 	}
 }
 
+// TestOpenKeepsTheNewestVersionOfAName: a vendor's repository lists every
+// version of a package in one Packages file, in whatever order it likes,
+// and the entry kept was the last stanza of the name, not the newest.
+func TestOpenKeepsTheNewestVersionOfAName(t *testing.T) {
+	served := newArchive(t, ".xz")
+	versions := []string{"5:29.10.0-1~ubuntu.24.04~noble", "5:29.8.1-1~ubuntu.24.04~noble", "5:27.0.0-1~ubuntu.24.04~noble"}
+	var text strings.Builder
+	for _, version := range versions {
+		fmt.Fprintf(&text, "Package: docker-ce\nVersion: %s\nArchitecture: amd64\nSection: admin\nDescription: Docker: the open-source application container engine\n\n", version)
+	}
+	served.publishTexts("noble", ".xz", map[string][]byte{"universe": []byte(text.String())}, func(text []byte) int64 { return int64(len(text)) })
+	opened, err := Open(context.Background(), optionsFor(t, served))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry, found := opened.Lookup("docker-ce"); !found || entry.Version != versions[0] {
+		t.Errorf("Lookup = %+v, %v; want version %s, the newest", entry, found, versions[0])
+	}
+}
+
 // TestOpenFailsAnIndexThatStalls: the client's timeout covers the headers
 // only, so an archive that sent half an index and then nothing, with the
 // connection open, held the form's field for as long as the person waited.

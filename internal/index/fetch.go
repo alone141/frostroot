@@ -146,8 +146,15 @@ func fetch(ctx context.Context, options Options, what target) ([]Entry, error) {
 		if err != nil {
 			return nil, err
 		}
+		// The newest version of each name, as apt would choose among them:
+		// a vendor's repository lists every version of a package in one
+		// file, in whatever order it likes. Between pockets of one version,
+		// the later one's stanza stands.
 		for _, entry := range entries {
-			byName[entry.Name] = entry // the later pocket's version wins
+			if kept, isKept := byName[entry.Name]; isKept && deb.CompareVersions(kept.Version, entry.Version) > 0 {
+				continue
+			}
+			byName[entry.Name] = entry
 		}
 	}
 	if len(byName) == 0 {
