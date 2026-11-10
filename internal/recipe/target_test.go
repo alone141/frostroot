@@ -145,6 +145,39 @@ func TestValidateRefusesADiskRecipeOfAReleaseWithoutDisks(t *testing.T) {
 	}
 }
 
+// TestValidateRefusesNamesABuildCannotUse: names that validated and then
+// failed minutes into a build, or booted under another name. useradd
+// refuses a user or group the base system has; a name longer than 64
+// characters failed only when the image was placed; and a disk's host name
+// is its image's name, which systemd takes only with letters, digits,
+// dashes and single dots.
+func TestValidateRefusesNamesABuildCannotUse(t *testing.T) {
+	for _, userName := range []string{"games", "staff", "users", "sudo", "wheel", "nobody", "_apt"} {
+		imageRecipe := diskRecipe(t)
+		imageRecipe.User.Name = userName
+		if problems := Validate(imageRecipe); len(problems) != 1 || !strings.Contains(problems[0], "already has a user or group") {
+			t.Errorf("user %q: Validate = %q, want the one refusal", userName, problems)
+		}
+	}
+	tooLong := strings.Repeat("a", maxImageNameLength+1)
+	for name, wantRefused := range map[string]bool{
+		"pc-lab": false, "lab.example": false, "Lab-2": false,
+		"cpp_lab": true, "a..b": true, "lab.": true, "-lab": true, "lab-": true, tooLong: true,
+	} {
+		imageRecipe := diskRecipe(t)
+		imageRecipe.Image.Name = name
+		if refused := len(Validate(imageRecipe)) > 0; refused != wantRefused {
+			t.Errorf("disk image name %q: refused = %v, want %v", name, refused, wantRefused)
+		}
+	}
+	// A WSL image's name is no host name: an underscore stays fine there.
+	imageRecipe := diskRecipe(t)
+	imageRecipe.Image.Target, imageRecipe.Disk, imageRecipe.Image.Name = "", nil, "cpp_lab"
+	if problems := Validate(imageRecipe); len(problems) != 0 {
+		t.Errorf("a WSL image named cpp_lab: Validate = %q", problems)
+	}
+}
+
 // TestADiskRecipeIsNotAskedForADefaultUser: the rule that [wsl]
 // default_user equals the user is WSL's; a disk recipe has no [wsl] to
 // break it with, and is told about the table rather than the field.
