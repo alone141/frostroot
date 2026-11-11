@@ -265,7 +265,7 @@ func TestWriteFlatRepository(t *testing.T) {
 	buildDeb(t, dir, "adduser_3.137ubuntu1_all.deb", ".xz", "Package: adduser\nVersion: 3.137ubuntu1\nArchitecture: all\nPriority: important\nDescription: add users\n")
 	release := FlatRelease{Suite: "noble", Arch: "amd64", Date: time.Date(2026, 9, 17, 7, 49, 42, 0, time.UTC)}
 	// Given out of order: the output must not depend on it.
-	if err := WriteFlatRepository(dir, release, []string{"hello_2.10-3build1_amd64.deb", "adduser_3.137ubuntu1_all.deb"}); err != nil {
+	if err := WriteFlatRepository(dir, release, []string{"hello_2.10-3build1_amd64.deb", "adduser_3.137ubuntu1_all.deb"}, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -317,7 +317,7 @@ func TestWriteFlatRepository(t *testing.T) {
 	}
 
 	// Deterministic: a second write produces the same bytes.
-	if err := WriteFlatRepository(dir, release, []string{"adduser_3.137ubuntu1_all.deb", "hello_2.10-3build1_amd64.deb"}); err != nil {
+	if err := WriteFlatRepository(dir, release, []string{"adduser_3.137ubuntu1_all.deb", "hello_2.10-3build1_amd64.deb"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	secondPackages, err := os.ReadFile(filepath.Join(dir, "Packages"))
@@ -329,12 +329,41 @@ func TestWriteFlatRepository(t *testing.T) {
 	}
 }
 
+// apt trusts a flat repository's index, and the index is what the files
+// hashed to when it was written; a digest given for a file is checked first,
+// and nothing is written when one differs.
+func TestWriteFlatRepositoryChecksTheDigestsItIsGiven(t *testing.T) {
+	dir := t.TempDir()
+	helloPath := buildDeb(t, dir, "hello_2.10-3build1_amd64.deb", ".zst", sampleControl)
+	buildDeb(t, dir, "adduser_3.137ubuntu1_all.deb", ".xz", "Package: adduser\nVersion: 3.137ubuntu1\nArchitecture: all\nPriority: important\nDescription: add users\n")
+	helloContent, err := os.ReadFile(helloPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	helloDigest := sha256.Sum256(helloContent)
+	names := []string{"hello_2.10-3build1_amd64.deb", "adduser_3.137ubuntu1_all.deb"}
+	release := FlatRelease{Suite: "noble", Arch: "amd64"}
+	if err := WriteFlatRepository(dir, release, names, map[string]string{"hello_2.10-3build1_amd64.deb": hex.EncodeToString(helloDigest[:])}); err != nil {
+		t.Fatalf("the digest the file has: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, "Packages")); err != nil {
+		t.Fatal(err)
+	}
+	err = WriteFlatRepository(dir, release, names, map[string]string{"hello_2.10-3build1_amd64.deb": strings.Repeat("0", 64)})
+	if !errors.Is(err, ErrDigestMismatch) || !strings.Contains(err.Error(), "hello_2.10-3build1_amd64.deb") {
+		t.Fatalf("err = %v, want ErrDigestMismatch naming the file", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "Packages")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("an index was written for a file that is not the one expected: Stat error = %v", err)
+	}
+}
+
 func TestWriteFlatRepositoryFailsOnBadPackage(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "broken.deb"), []byte("nope"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := WriteFlatRepository(dir, FlatRelease{Suite: "noble", Arch: "amd64"}, []string{"broken.deb"})
+	err := WriteFlatRepository(dir, FlatRelease{Suite: "noble", Arch: "amd64"}, []string{"broken.deb"}, nil)
 	if !errors.Is(err, ErrNotDeb) {
 		t.Fatalf("err = %v, want ErrNotDeb", err)
 	}

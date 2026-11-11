@@ -541,10 +541,20 @@ func stageRepository(offline *offlinePlan, repositoryDir string, progress Progre
 		progress.Report(ProgressEvent{Phase: PhasePrepareRepository, Kind: EventProgress, Done: doneBytes, Total: totalBytes, Unit: UnitBytes})
 	})
 	if err != nil {
-		return fmt.Errorf("preparing the local repository: %w", err)
+		return fmt.Errorf("preparing the local repository: %w", stagingError(err, offline))
 	}
 	progress.Report(ProgressEvent{Phase: PhasePrepareRepository, Kind: EventPhaseFinished})
 	return nil
+}
+
+// stagingError is err, from staging the pool into a local repository, as
+// a pool problem the person can fix when a file was replaced after the pool
+// was checked.
+func stagingError(err error, offline *offlinePlan) error {
+	if errors.Is(err, deb.ErrDigestMismatch) {
+		return fmt.Errorf("%w: %w; a file in %s changed while the build ran, run frostroot vendor", ErrPoolIncomplete, err, pool.DirName(offline.lock))
+	}
+	return err
 }
 
 // createBuildDir creates a new, uniquely named build directory under workRoot.

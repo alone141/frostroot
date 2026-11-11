@@ -395,7 +395,7 @@ func (d *diskToolsTree) stageRepository(repositoryDir string) error {
 		d.progress.Report(ProgressEvent{Phase: PhaseMakeToolsTree, Kind: EventProgress, Done: doneBytes, Total: totalBytes, Unit: UnitBytes})
 	})
 	if err != nil {
-		return fmt.Errorf("preparing the disk tools' local repository: %w", err)
+		return fmt.Errorf("preparing the disk tools' local repository: %w", stagingError(err, d.offline))
 	}
 	return nil
 }
