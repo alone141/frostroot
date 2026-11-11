@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path"
@@ -422,15 +423,54 @@ func (f *fedoraBuild) cachedRepository(packageManager, fileName string) (string,
 
 // cachedPackage returns the digest and size of fileName as the package
 // manager downloaded it from repository into mkosi's cache: the very file
-// that was installed.
+// that was installed. The cache names each repository's directory by its ID
+// and a hash of its configuration, which frostroot does not reproduce, so
+// the directories are listed and matched here: a pattern over the cache's
+// path would read the work root's brackets or stars as a pattern too, and
+// "updates-*" would match "updates-testing-...". The cache is shared
+// between builds, and should two of a repository's directories hold the
+// file with different contents, it is not known which was installed.
 func (f *fedoraBuild) cachedPackage(packageManager, repository, fileName string) (string, int64, error) {
-	// The cache names each repository's directory by a hash of its
-	// configuration, which frostroot does not reproduce.
-	matches, err := filepath.Glob(filepath.Join(f.cacheDir, "cache", packageManager, repository+"-*", "packages", fileName))
-	if err != nil || len(matches) == 0 {
+	cacheRoot := filepath.Join(f.cacheDir, "cache", packageManager)
+	entries, err := os.ReadDir(cacheRoot)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", 0, err
+	}
+	type cachedFile struct {
+		path, digest string
+		size         int64
+	}
+	var found []cachedFile
+	for _, entry := range entries {
+		configHash, isRepository := strings.CutPrefix(entry.Name(), repository+"-")
+		if !isRepository || configHash == "" || strings.Trim(configHash, "0123456789abcdef") != "" || !entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(cacheRoot, entry.Name(), "packages", fileName)
+		digest, size, err := sha256OfFile(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", 0, err
+		}
+		found = append(found, cachedFile{path: path, digest: digest, size: size})
+	}
+	if len(found) == 0 {
 		return "", 0, fmt.Errorf("%s from %s is not in %s", fileName, repository, f.cacheDir)
 	}
-	file, err := os.Open(matches[0])
+	for _, other := range found[1:] {
+		if other.digest != found[0].digest {
+			return "", 0, fmt.Errorf("%s from %s is in the package cache twice, with different contents: %s and %s; remove %s and build again", fileName, repository, found[0].path, other.path, f.cacheDir)
+		}
+	}
+	return found[0].digest, found[0].size, nil
+}
+
+// sha256OfFile returns the SHA-256, as lowercase hex, and the size of the
+// file at path.
+func sha256OfFile(path string) (string, int64, error) {
+	file, err := os.Open(path)
 	if err != nil {
 		return "", 0, err
 	}
@@ -438,7 +478,7 @@ func (f *fedoraBuild) cachedPackage(packageManager, repository, fileName string)
 	digest := sha256.New()
 	size, err := io.Copy(digest, file)
 	if err != nil {
-		return "", 0, fmt.Errorf("reading %s: %w", matches[0], err)
+		return "", 0, fmt.Errorf("reading %s: %w", path, err)
 	}
 	return hex.EncodeToString(digest.Sum(nil)), size, nil
 }
