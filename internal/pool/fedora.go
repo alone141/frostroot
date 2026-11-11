@@ -44,7 +44,7 @@ func fedoraManifest(lock recipe.Lockfile) ([]Entry, error) {
 	for _, repository := range lock.Repositories {
 		parsed, err := url.Parse(repository.URL)
 		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
-			return nil, fmt.Errorf("%w: repository %s has url %q, which is not a plain https URL", ErrBadLock, repository.Name, repository.URL)
+			return nil, fmt.Errorf("%w: repository %s has url %q, which is not a plain https URL", ErrBadLock, repository.Name, recipe.RedactURLCredentials(repository.URL))
 		}
 	}
 	var entries []Entry

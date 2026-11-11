@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"frostroot/internal/recipe"
@@ -123,6 +124,23 @@ func TestFedoraManifestRefusesAHostileLock(t *testing.T) {
 				t.Errorf("Manifest = %v, want %v", err, testCase.want)
 			}
 		})
+	}
+}
+
+// TestFedoraManifestDoesNotQuoteCredentials: the error that refuses a
+// repository URL with credentials names the URL, and must not repeat them.
+func TestFedoraManifestDoesNotQuoteCredentials(t *testing.T) {
+	lock := fedoraLock()
+	lock.Repositories[1].URL = "https://user:s3cret@dl.fedoraproject.org/x"
+	_, err := Manifest(lock)
+	if !errors.Is(err, ErrBadLock) {
+		t.Fatalf("Manifest = %v, want %v", err, ErrBadLock)
+	}
+	if strings.Contains(err.Error(), "s3cret") {
+		t.Errorf("the error quotes the password: %v", err)
+	}
+	if !strings.Contains(err.Error(), "REDACTED@") {
+		t.Errorf("the error does not show the URL redacted: %v", err)
 	}
 }
 

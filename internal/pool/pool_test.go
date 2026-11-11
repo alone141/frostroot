@@ -311,6 +311,70 @@ func TestManifestRefusals(t *testing.T) {
 	}
 }
 
+// TestManifestsRefuseCredentials: an edited Ubuntu lock whose mirror, source
+// or wheel URL carried a user and password was fetched with them, and vendor
+// printed the password in its subtitle and in the error of a failed
+// download. A refusal names the URL, never the secret.
+func TestManifestsRefuseCredentials(t *testing.T) {
+	withRepository := func(repositoryURL string) recipe.Lockfile {
+		fromDocker := entryFor("docker-ce", "3")
+		fromDocker.Source = "docker"
+		lock := lockFor(entryFor("curl", "1"), fromDocker)
+		lock.Repositories = []recipe.LockRepository{{Name: "docker", URL: repositoryURL, Suite: "noble", Components: []string{"stable"}}}
+		return lock
+	}
+	withMirror := func(mirrorURL string) recipe.Lockfile {
+		lock := lockFor(entryFor("curl", "1"))
+		lock.Mirror = mirrorURL
+		return lock
+	}
+	withWheelURL := func(wheelURL string) recipe.Lockfile {
+		numpy := wheelEntry("https://files.pythonhosted.org", "numpy", "2.5.3")
+		numpy.URL = wheelURL
+		return wheelLock(numpy)
+	}
+	refusals := map[string]func() error{
+		"mirror": func() error {
+			_, err := Manifest(withMirror("http://buildbot:s3cret@archive.example/ubuntu"))
+			return err
+		},
+		"mirror url.Parse refuses": func() error {
+			_, err := Manifest(withMirror("http://deploy:s3cret%t@archive.example/ubuntu"))
+			return err
+		},
+		"repository url": func() error {
+			_, err := Manifest(withRepository("https://s3cret@download.example/linux/ubuntu"))
+			return err
+		},
+		"wheel url": func() error {
+			_, err := WheelManifest(withWheelURL("https://ci:s3cret@files.example/packages/numpy-2.5.3-py3-none-any.whl"))
+			return err
+		},
+		"wheel url, not https either": func() error {
+			_, err := WheelManifest(withWheelURL("http://ci:s3cret@files.example/packages/numpy-2.5.3-py3-none-any.whl"))
+			return err
+		},
+	}
+	for name, refusal := range refusals {
+		t.Run(name, func(t *testing.T) {
+			err := refusal()
+			if !errors.Is(err, ErrBadLock) {
+				t.Fatalf("error = %v, want ErrBadLock", err)
+			}
+			if strings.Contains(err.Error(), "s3cret") {
+				t.Errorf("the refusal quotes the secret: %v", err)
+			}
+			if !strings.Contains(err.Error(), "REDACTED@") || !strings.Contains(err.Error(), "credentials") {
+				t.Errorf("the refusal should name the URL, redacted, and say why: %v", err)
+			}
+		})
+	}
+	// A plain http mirror is common and stays allowed, as does a source.
+	if _, err := Manifest(withRepository("http://download.example/linux/ubuntu")); err != nil {
+		t.Errorf("a plain http source is refused: %v", err)
+	}
+}
+
 func TestVerify(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "debs")
 	present, missing, wrongContent, wrongSize := entryFor("present", "1"), entryFor("missing", "1"), entryFor("content", "1"), entryFor("size", "1")

@@ -70,7 +70,8 @@ func (e Entry) DownloadURL() string {
 // the image's packages, then the disk tools tree's for a disk image, once
 // each. It refuses locks of another format version or of a family it cannot
 // vendor, locks without checksums, packages from a repository the lock does
-// not describe, and file names that could escape the pool directory.
+// not describe, file names that could escape the pool directory, and URLs
+// that carry credentials.
 func Manifest(lock recipe.Lockfile) ([]Entry, error) {
 	if lock.Version != 1 {
 		return nil, fmt.Errorf("%w: format version %d, want 1", ErrBadLock, lock.Version)
@@ -83,6 +84,14 @@ func Manifest(lock recipe.Lockfile) ([]Entry, error) {
 	}
 	if family == distro.Fedora {
 		return fedoraManifest(lock)
+	}
+	if err := refuseCredentials("mirror", lock.Mirror); err != nil {
+		return nil, err
+	}
+	for _, repository := range lock.Repositories {
+		if err := refuseCredentials("repository "+repository.Name, repository.URL); err != nil {
+			return nil, err
+		}
 	}
 	if !lock.HasChecksums() {
 		return nil, ErrNoChecksums
@@ -155,7 +164,8 @@ func ubuntuEntry(lock recipe.Lockfile, locked recipe.LockPackage) (Entry, error)
 // lock's order: every Python package the image's virtual environment was
 // installed from. It refuses locks of another format version, wheels without
 // what vendoring needs, file names that could escape the pool directory, and
-// anything but an https URL, since the whole address comes from the lock.
+// anything but an https URL without credentials, since the whole address
+// comes from the lock.
 func WheelManifest(lock recipe.Lockfile) ([]Entry, error) {
 	if lock.Version != 1 {
 		return nil, fmt.Errorf("%w: format version %d, want 1", ErrBadLock, lock.Version)
@@ -177,6 +187,11 @@ func WheelManifest(lock recipe.Lockfile) ([]Entry, error) {
 			return nil, fmt.Errorf("%w: packages %s and %s share the file name %s", ErrBadLock, other, wheel.Name, fileName)
 		}
 		seenFileNames[fileName] = wheel.Name
+		// Credentials first, so that a URL wrong in both ways is not quoted
+		// whole by the https refusal.
+		if err := refuseCredentials("package "+wheel.Name, wheel.URL); err != nil {
+			return nil, err
+		}
 		if !strings.HasPrefix(wheel.URL, "https://") {
 			return nil, fmt.Errorf("%w: package %s has url %q, which is not https", ErrBadLock, wheel.Name, wheel.URL)
 		}
@@ -190,6 +205,21 @@ func WheelManifest(lock recipe.Lockfile) ([]Entry, error) {
 		})
 	}
 	return entries, nil
+}
+
+// refuseCredentials returns ErrBadLock when rawURL, which the lock gives for
+// what, carries a userinfo, naming it redacted. A lock frostroot writes
+// never has one, since the recipe and --mirror refuse them, but an edited
+// lock would have vendor send the secret to the server and print it in its
+// subtitle and its errors. A URL url.Parse refuses is redacted by its text,
+// so it counts as well. A userinfo that is already the word REDACTED reads
+// as none, and holds no secret.
+func refuseCredentials(what, rawURL string) error {
+	redacted := recipe.RedactURLCredentials(rawURL)
+	if redacted == rawURL {
+		return nil
+	}
+	return fmt.Errorf("%w: %s has url %q, which carries credentials; a lock never records them", ErrBadLock, what, redacted)
 }
 
 // FallbackURL returns the Fetch fallback for lock: Launchpad's librarian for
