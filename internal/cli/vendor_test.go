@@ -379,6 +379,26 @@ func TestVendorThatCannotWriteItsPoolIsAUserError(t *testing.T) {
 	}
 }
 
+// TestVendorThatCannotWriteADownloadIsAUserError: a pool that fails while
+// files arrive, as a full disk does, failed after a retry with exit 2, the
+// code for a download that failed. A directory where a package file
+// belongs fails its rename the same way.
+func TestVendorThatCannotWriteADownloadIsAUserError(t *testing.T) {
+	fixture := newVendorFixture(t)
+	inTheWay := filepath.Join(fixture.poolDir(), "curl_1_amd64.deb")
+	if err := os.MkdirAll(inTheWay, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(inTheWay, "keep"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor"})
+	if exitCode != exitUserError || !strings.Contains(stderr.String(), "cannot write the pool") {
+		t.Fatalf("exit code = %d, stderr %s; want %d saying the pool cannot be written", exitCode, stderr.String(), exitUserError)
+	}
+}
+
 // A build in the same directory may place a new lock at any moment, and
 // vendor reads it once: it waits for nothing and fetches nothing.
 func TestVendorRefusesWhileABuildHoldsTheRecipeDir(t *testing.T) {

@@ -331,7 +331,7 @@ func (a *App) reportBuildFailure(err error, interrupted bool, archiveURL, keptWo
 		a.stderrf("frostroot: build interrupted; no lock or tarball was written\n")
 		a.reportKeptWorkDir(keptWorkDir)
 		return exitInterrupted
-	case errors.Is(err, builder.ErrCannotMount), errors.Is(err, builder.ErrDiskTooSmall):
+	case errors.Is(err, builder.ErrCannotMount), errors.Is(err, builder.ErrDiskTooSmall), errors.Is(err, builder.ErrPackageCacheConflict):
 		// Something the user can fix, found once the bootstrap had run, so
 		// there is a work directory, with its log and gigabytes of image,
 		// to point at.

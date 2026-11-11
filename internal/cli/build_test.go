@@ -569,6 +569,7 @@ func TestReportBuildFailureExitCodes(t *testing.T) {
 		"a certificate that cannot be read": {fmt.Errorf("%w: open certs/corp.pem: permission denied", builder.ErrCertificate), exitUserError, false, "certs/corp.pem"},
 		"a disk too small for the image":    {fmt.Errorf("%w: 2G holds less than the image needs", builder.ErrDiskTooSmall), exitUserError, true, "2G holds less"},
 		"a host that cannot mount":          {fmt.Errorf("%w: mount: permission denied", builder.ErrCannotMount), exitUserError, true, "mount"},
+		"a package cached twice":            {fmt.Errorf("%w: git.rpm from updates is in it twice; remove /c and build again", builder.ErrPackageCacheConflict), exitUserError, true, "remove /c"},
 		"a lock that does not parse":        {fmt.Errorf("%w: toml: strict mode: fields in the document are missing in the target struct", pool.ErrBadLock), exitUserError, false, "unusable"},
 	}
 	for name, test := range tests {

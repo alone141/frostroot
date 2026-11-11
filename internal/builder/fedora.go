@@ -461,7 +461,7 @@ func (f *fedoraBuild) cachedPackage(packageManager, repository, fileName string)
 	}
 	for _, other := range found[1:] {
 		if other.digest != found[0].digest {
-			return "", 0, fmt.Errorf("%s from %s is in the package cache twice, with different contents: %s and %s; remove %s and build again", fileName, repository, found[0].path, other.path, f.cacheDir)
+			return "", 0, fmt.Errorf("%w: %s from %s is in it twice, with different contents: %s and %s; remove %s and build again", ErrPackageCacheConflict, fileName, repository, found[0].path, other.path, f.cacheDir)
 		}
 	}
 	return found[0].digest, found[0].size, nil

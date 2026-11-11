@@ -30,6 +30,10 @@ var (
 	// ErrUserNamespacesRestricted means the host keeps an unprivileged
 	// mkosi out of the user namespace it makes.
 	ErrUserNamespacesRestricted = errors.New("this host keeps mkosi out of its user namespace")
+	// ErrPackageCacheConflict means mkosi's package cache, kept between
+	// online builds, holds two different files of one name, and the lock
+	// cannot say which one the image installed.
+	ErrPackageCacheConflict = errors.New("the package cache holds two different copies of one package")
 )
 
 // userNamespaceRestriction is where Ubuntu's kernels say whether AppArmor

@@ -46,6 +46,10 @@ var (
 	ErrMismatch = errors.New("size or checksum differs from the lock")
 	// ErrStalled means a download received nothing for the stall timeout.
 	ErrStalled = errors.New("the download stalled")
+	// ErrPoolWrite means a download could not be written into the pool: a
+	// full disk, or a directory its owner cannot write to. Trying again
+	// would fail the same way, so it is not retried.
+	ErrPoolWrite = errors.New("cannot write the pool")
 )
 
 // FetchError says which file could not be fetched, from where, and why.
@@ -257,11 +261,11 @@ func (f *fetcher) fetchOne(ctx context.Context, entry Entry) error {
 }
 
 // downloadWithRetry downloads entry from url, trying once more after a
-// failure that may be transient: a network error or a server error. A 404
-// and a mismatch are final.
+// failure that may be transient: a network error or a server error. A 404,
+// a mismatch and a pool that cannot be written are final.
 func (f *fetcher) downloadWithRetry(ctx context.Context, entry Entry, url string) error {
 	err := f.download(ctx, entry, url)
-	if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrMismatch) || ctx.Err() != nil {
+	if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrMismatch) || errors.Is(err, ErrPoolWrite) || ctx.Err() != nil {
 		return err
 	}
 	if !f.options.Sleep(ctx, retryDelay) {
@@ -300,7 +304,7 @@ func (f *fetcher) download(ctx context.Context, entry Entry, url string) (err er
 
 	temporary, err := export.CreateTemp(f.options.Dir, "."+entry.FileName+".*.tmp")
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrPoolWrite, err)
 	}
 	temporaryPath := temporary.Name()
 	defer func() {
@@ -324,7 +328,7 @@ func (f *fetcher) download(ctx context.Context, entry Entry, url string) (err er
 	watchdog := time.AfterFunc(stallTimeout, func() { cancelRequest(ErrStalled) })
 	defer watchdog.Stop()
 	body := &stallReader{reader: io.LimitReader(response.Body, readLimit), received: func() { watchdog.Reset(stallTimeout) }}
-	written, err := io.CopyBuffer(&progressWriter{writer: io.MultiWriter(temporary, digest), report: f.addProgress}, body, make([]byte, copyBufferBytes))
+	written, err := io.CopyBuffer(&progressWriter{writer: io.MultiWriter(poolFileWriter{temporary}, digest), report: f.addProgress}, body, make([]byte, copyBufferBytes))
 	if err != nil {
 		if errors.Is(context.Cause(requestCtx), ErrStalled) && ctx.Err() == nil {
 			return fmt.Errorf("%w: nothing received for %s", ErrStalled, stallTimeout)
@@ -341,12 +345,29 @@ func (f *fetcher) download(ctx context.Context, entry Entry, url string) (err er
 		return fmt.Errorf("%w: SHA-256 %s, the lock says %s", ErrMismatch, got, entry.SHA256)
 	}
 	if err = temporary.Sync(); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrPoolWrite, err)
 	}
 	if err = temporary.Close(); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrPoolWrite, err)
 	}
-	return os.Rename(temporaryPath, filepath.Join(f.options.Dir, entry.FileName))
+	if err = os.Rename(temporaryPath, filepath.Join(f.options.Dir, entry.FileName)); err != nil {
+		return fmt.Errorf("%w: %w", ErrPoolWrite, err)
+	}
+	return nil
+}
+
+// poolFileWriter writes a download into its temporary file, and says that
+// a failure is the pool's, not the server's: a full disk is not retried.
+type poolFileWriter struct {
+	file *os.File
+}
+
+func (w poolFileWriter) Write(data []byte) (int, error) {
+	count, err := w.file.Write(data)
+	if err != nil {
+		err = fmt.Errorf("%w: %w", ErrPoolWrite, err)
+	}
+	return count, err
 }
 
 // stallReader tells received about every read that brought bytes, which
