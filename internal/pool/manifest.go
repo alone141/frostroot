@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"unicode"
 
 	"frostroot/internal/distro"
 	"frostroot/internal/recipe"
@@ -255,6 +256,9 @@ func FallbackURL(lock recipe.Lockfile) func(Entry) string {
 // that is not a plain relative path to a .deb file. The lock is written by
 // frostroot, but it is also a text file anyone can edit.
 func poolFileName(indexFileName string) (string, error) {
+	if err := checkFileNameCharacters(indexFileName); err != nil {
+		return "", err
+	}
 	cleaned := path.Clean(indexFileName)
 	if indexFileName == "" || strings.HasPrefix(indexFileName, "/") || cleaned != indexFileName || strings.HasPrefix(cleaned, "../") || cleaned == ".." {
 		return "", fmt.Errorf("filename %q is not a plain relative path", indexFileName)
@@ -270,6 +274,9 @@ func poolFileName(indexFileName string) (string, error) {
 // refusing anything that is not a plain .whl file name. The lock is written
 // by frostroot, but it is also a text file anyone can edit.
 func wheelPoolFileName(lockFileName string) (string, error) {
+	if err := checkFileNameCharacters(lockFileName); err != nil {
+		return "", err
+	}
 	cleaned := path.Clean(lockFileName)
 	if lockFileName == "" || cleaned != lockFileName || strings.ContainsAny(lockFileName, `/\`+"\x00") {
 		return "", fmt.Errorf("filename %q is not a plain file name", lockFileName)
@@ -278,6 +285,19 @@ func wheelPoolFileName(lockFileName string) (string, error) {
 		return "", fmt.Errorf("filename %q does not name a .whl file", lockFileName)
 	}
 	return cleaned, nil
+}
+
+// checkFileNameCharacters refuses a lock's file name that holds a control
+// character or whitespace anywhere. No package file is named so, and the name
+// is written as it is into lines of text: the local Packages index an
+// offline build installs from, and a URL.
+func checkFileNameCharacters(lockFileName string) error {
+	for _, character := range lockFileName {
+		if unicode.IsControl(character) || unicode.IsSpace(character) {
+			return fmt.Errorf("filename %q holds a control character or whitespace", lockFileName)
+		}
+	}
+	return nil
 }
 
 // TotalSize returns the size of every entry added up.

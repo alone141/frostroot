@@ -311,6 +311,60 @@ func TestManifestRefusals(t *testing.T) {
 	}
 }
 
+// TestPoolFileNamesRefuseControlCharactersAndWhitespace: a lock's filename
+// with a newline in it was accepted and written as it is into the local
+// Packages index an offline build installs from. Real names, with their
+// "+", "~" and "%3a", still pass.
+func TestPoolFileNamesRefuseControlCharactersAndWhitespace(t *testing.T) {
+	kinds := map[string]struct {
+		poolFileName func(string) (string, error)
+		good         []string
+		suffix       string
+	}{
+		"deb": {poolFileName, []string{
+			"pool/main/g/glibc/libc6_2.39-0ubuntu8.4_amd64.deb",
+			"pool/main/g/git/git_1%3a2.43.0-1ubuntu7.3_amd64.deb",
+			"pool/main/g/gcc-14/libstdc++6_14.2.0-4ubuntu2~24.04_amd64.deb",
+		}, ".deb"},
+		"wheel": {wheelPoolFileName, []string{
+			"numpy-2.5.3-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+			"six-1.17.0-py2.py3-none-any.whl",
+		}, ".whl"},
+		"rpm": {rpmPoolFileName, []string{
+			"Packages/g/glibc-2.43-2.fc44.x86_64.rpm",
+			"Packages/l/libstdc++-15.2.1-1.fc44.x86_64.rpm",
+			"Packages/v/vim-enhanced-9.1.1000-1.fc44.x86_64.rpm",
+		}, ".rpm"},
+	}
+	for kind, test := range kinds {
+		t.Run(kind, func(t *testing.T) {
+			for _, good := range test.good {
+				if _, err := test.poolFileName(good); err != nil {
+					t.Errorf("a real name is refused: %v", err)
+				}
+			}
+			for _, hidden := range []string{"\n", "\r", "\t", " ", "\x7f", "\x1b", "\u0085", " ", " "} {
+				for _, bad := range []string{"x" + hidden + "y" + test.suffix, hidden + "x" + test.suffix} {
+					if _, err := test.poolFileName(bad); err == nil || !strings.Contains(err.Error(), "control character or whitespace") {
+						t.Errorf("filename %q: error = %v, want a refusal of the character", bad, err)
+					}
+				}
+			}
+		})
+	}
+	// The directory a deb or an rpm lives in is checked as well: the whole
+	// filename is joined to the URL the file is fetched from.
+	for _, bad := range []string{"pool/main\n/x.deb", "Packages/g\t/x.rpm"} {
+		check := poolFileName
+		if strings.HasSuffix(bad, ".rpm") {
+			check = rpmPoolFileName
+		}
+		if _, err := check(bad); err == nil {
+			t.Errorf("filename %q is accepted", bad)
+		}
+	}
+}
+
 // TestManifestsRefuseCredentials: an edited Ubuntu lock whose mirror, source
 // or wheel URL carried a user and password was fetched with them, and vendor
 // printed the password in its subtitle and in the error of a failed

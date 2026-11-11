@@ -92,6 +92,9 @@ func fedoraManifest(lock recipe.Lockfile) ([]Entry, error) {
 // rpmPoolFileName returns the base name of a Fedora lock's filename,
 // refusing anything that is not a plain relative path to an .rpm file.
 func rpmPoolFileName(lockFileName string) (string, error) {
+	if err := checkFileNameCharacters(lockFileName); err != nil {
+		return "", err
+	}
 	cleaned := path.Clean(lockFileName)
 	if lockFileName == "" || strings.HasPrefix(lockFileName, "/") || cleaned != lockFileName || strings.HasPrefix(cleaned, "../") || cleaned == ".." {
 		return "", fmt.Errorf("filename %q is not a plain relative path", lockFileName)
