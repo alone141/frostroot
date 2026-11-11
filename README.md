@@ -1248,7 +1248,11 @@ entries, every refusal (a source distribution, a missing checksum, a report
 version frostroot does not know, a requested package the report never
 mentions), the two rendered scripts through a real shell with a hostile
 package name, the hook order online and offline, and the comparison of an
-image's environment with the lock.
+image's environment with the lock. Every parser of what the network, a lock
+or a captured machine hands over, from signing keys and `.deb` files to
+indexes, recipes and what a build reads back out of its image, has a fuzz
+target whose seeds run with the tests; `scripts/check.sh --only fuzz`
+fuzzes each for a while, and CI does so every week.
 
 ```sh
 scripts/integration.sh
