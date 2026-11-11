@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"frostroot/internal/form"
 	"frostroot/internal/recipe"
+	"frostroot/internal/tui"
 )
 
 // TestADiskRecipeIsWrittenAsADisksAndReadsBack: no [wsl], a [disk] that
@@ -113,6 +115,45 @@ func TestInitRefusesAnUnknownTarget(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(recipeDir, recipeFileName)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("a recipe was written: %v", err)
+	}
+}
+
+// TestInitRefusesAFedoraDiskBeforeAsking: no page can change the family or
+// the target the flags answered, so the full-screen form sent every Write
+// back to answers nothing could fix, and the plain one asked them all to
+// refuse them after.
+func TestInitRefusesAFedoraDiskBeforeAsking(t *testing.T) {
+	for _, plain := range []bool{true, false} {
+		recipeDir := t.TempDir()
+		prompt := &scriptedPrompt{}
+		var stderr bytes.Buffer
+		app := App{Stdout: io.Discard, Stderr: &stderr, RecipeDir: recipeDir, Prompt: prompt, ReadFile: noHostFile}
+		formShown := false
+		app.runForm = func(context.Context, []form.Field, form.Values, tui.PreviewFunc, io.Reader, io.Writer) (form.Values, error) {
+			formShown = true
+			return nil, tui.ErrCanceled
+		}
+		app.IsTerminal = func(any) bool { return !plain }
+		args := []string{"init", "--distro", "fedora", "--target", "disk"}
+		if plain {
+			args = append(args, "--plain")
+		}
+		if exitCode := app.Run(args); exitCode != exitUserError {
+			t.Errorf("plain %v: exit code = %d, want a user error", plain, exitCode)
+		}
+		if !strings.Contains(stderr.String(), "a Fedora disk image comes in a later version") || len(prompt.questionsAsked) != 0 || formShown {
+			t.Errorf("plain %v: stderr %q after %d questions, form shown %v; want the refusal, and nothing asked", plain, stderr.String(), len(prompt.questionsAsked), formShown)
+		}
+		if _, err := os.Stat(filepath.Join(recipeDir, recipeFileName)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("plain %v: a recipe was written: %v", plain, err)
+		}
+	}
+	// An Ubuntu disk is built, and asked for.
+	prompt := &scriptedPrompt{}
+	app := App{Stdout: io.Discard, Stderr: io.Discard, RecipeDir: t.TempDir(), Prompt: prompt, ReadFile: noHostFile}
+	app.Run([]string{"init", "--distro", "ubuntu", "--target", "disk", "--plain"})
+	if len(prompt.questionsAsked) == 0 {
+		t.Error("init --distro ubuntu --target disk asked nothing")
 	}
 }
 
