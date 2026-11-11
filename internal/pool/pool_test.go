@@ -311,6 +311,124 @@ func TestManifestRefusals(t *testing.T) {
 	}
 }
 
+// TestPoolFileNamesRefuseControlCharactersAndWhitespace: a lock's filename
+// with a newline in it was accepted and written as it is into the local
+// Packages index an offline build installs from. Real names, with their
+// "+", "~" and "%3a", still pass.
+func TestPoolFileNamesRefuseControlCharactersAndWhitespace(t *testing.T) {
+	kinds := map[string]struct {
+		poolFileName func(string) (string, error)
+		good         []string
+		suffix       string
+	}{
+		"deb": {poolFileName, []string{
+			"pool/main/g/glibc/libc6_2.39-0ubuntu8.4_amd64.deb",
+			"pool/main/g/git/git_1%3a2.43.0-1ubuntu7.3_amd64.deb",
+			"pool/main/g/gcc-14/libstdc++6_14.2.0-4ubuntu2~24.04_amd64.deb",
+		}, ".deb"},
+		"wheel": {wheelPoolFileName, []string{
+			"numpy-2.5.3-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+			"six-1.17.0-py2.py3-none-any.whl",
+		}, ".whl"},
+		"rpm": {rpmPoolFileName, []string{
+			"Packages/g/glibc-2.43-2.fc44.x86_64.rpm",
+			"Packages/l/libstdc++-15.2.1-1.fc44.x86_64.rpm",
+			"Packages/v/vim-enhanced-9.1.1000-1.fc44.x86_64.rpm",
+		}, ".rpm"},
+	}
+	for kind, test := range kinds {
+		t.Run(kind, func(t *testing.T) {
+			for _, good := range test.good {
+				if _, err := test.poolFileName(good); err != nil {
+					t.Errorf("a real name is refused: %v", err)
+				}
+			}
+			for _, hidden := range []string{"\n", "\r", "\t", " ", "\x7f", "\x1b", "\u0085", " ", " "} {
+				for _, bad := range []string{"x" + hidden + "y" + test.suffix, hidden + "x" + test.suffix} {
+					if _, err := test.poolFileName(bad); err == nil || !strings.Contains(err.Error(), "control character or whitespace") {
+						t.Errorf("filename %q: error = %v, want a refusal of the character", bad, err)
+					}
+				}
+			}
+		})
+	}
+	// The directory a deb or an rpm lives in is checked as well: the whole
+	// filename is joined to the URL the file is fetched from.
+	for _, bad := range []string{"pool/main\n/x.deb", "Packages/g\t/x.rpm"} {
+		check := poolFileName
+		if strings.HasSuffix(bad, ".rpm") {
+			check = rpmPoolFileName
+		}
+		if _, err := check(bad); err == nil {
+			t.Errorf("filename %q is accepted", bad)
+		}
+	}
+}
+
+// TestManifestsRefuseCredentials: an edited Ubuntu lock whose mirror, source
+// or wheel URL carried a user and password was fetched with them, and vendor
+// printed the password in its subtitle and in the error of a failed
+// download. A refusal names the URL, never the secret.
+func TestManifestsRefuseCredentials(t *testing.T) {
+	withRepository := func(repositoryURL string) recipe.Lockfile {
+		fromDocker := entryFor("docker-ce", "3")
+		fromDocker.Source = "docker"
+		lock := lockFor(entryFor("curl", "1"), fromDocker)
+		lock.Repositories = []recipe.LockRepository{{Name: "docker", URL: repositoryURL, Suite: "noble", Components: []string{"stable"}}}
+		return lock
+	}
+	withMirror := func(mirrorURL string) recipe.Lockfile {
+		lock := lockFor(entryFor("curl", "1"))
+		lock.Mirror = mirrorURL
+		return lock
+	}
+	withWheelURL := func(wheelURL string) recipe.Lockfile {
+		numpy := wheelEntry("https://files.pythonhosted.org", "numpy", "2.5.3")
+		numpy.URL = wheelURL
+		return wheelLock(numpy)
+	}
+	refusals := map[string]func() error{
+		"mirror": func() error {
+			_, err := Manifest(withMirror("http://buildbot:s3cret@archive.example/ubuntu"))
+			return err
+		},
+		"mirror url.Parse refuses": func() error {
+			_, err := Manifest(withMirror("http://deploy:s3cret%t@archive.example/ubuntu"))
+			return err
+		},
+		"repository url": func() error {
+			_, err := Manifest(withRepository("https://s3cret@download.example/linux/ubuntu"))
+			return err
+		},
+		"wheel url": func() error {
+			_, err := WheelManifest(withWheelURL("https://ci:s3cret@files.example/packages/numpy-2.5.3-py3-none-any.whl"))
+			return err
+		},
+		"wheel url, not https either": func() error {
+			_, err := WheelManifest(withWheelURL("http://ci:s3cret@files.example/packages/numpy-2.5.3-py3-none-any.whl"))
+			return err
+		},
+	}
+	for name, refusal := range refusals {
+		t.Run(name, func(t *testing.T) {
+			err := refusal()
+			if !errors.Is(err, ErrBadLock) {
+				t.Fatalf("error = %v, want ErrBadLock", err)
+			}
+			if strings.Contains(err.Error(), "s3cret") {
+				t.Errorf("the refusal quotes the secret: %v", err)
+			}
+			if !strings.Contains(err.Error(), "REDACTED@") || !strings.Contains(err.Error(), "credentials") {
+				t.Errorf("the refusal should name the URL, redacted, and say why: %v", err)
+			}
+		})
+	}
+	// A plain http mirror is common and stays allowed, as does a source.
+	if _, err := Manifest(withRepository("http://download.example/linux/ubuntu")); err != nil {
+		t.Errorf("a plain http source is refused: %v", err)
+	}
+}
+
 func TestVerify(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "debs")
 	present, missing, wrongContent, wrongSize := entryFor("present", "1"), entryFor("missing", "1"), entryFor("content", "1"), entryFor("size", "1")
@@ -396,6 +514,82 @@ func TestVerifyStopsWhenCanceled(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, entry.FileName)); err != nil {
 			t.Errorf("a canceled prune removed %s: %v", entry.FileName, err)
 		}
+	}
+}
+
+// TestAPoolThatCannotBeReadSaysSo: a pool file the check could not read
+// came back as the bare error of the file system, which vendor and build
+// took for a failed download or build and exited 2. A pool directory that
+// is a file stands in for an unreadable one on Unix, where looking a file
+// up in it fails with ENOTDIR; on Windows it does not fail, so that part
+// runs on Unix only. A directory where a file belongs stands in at
+// staging, on both.
+func TestAPoolThatCannotBeReadSaysSo(t *testing.T) {
+	entry := entryFor("curl", "1")
+	if runtime.GOOS != "windows" {
+		notADirectory := filepath.Join(t.TempDir(), "debs")
+		if err := os.WriteFile(notADirectory, []byte("not a directory"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Verify(context.Background(), notADirectory, []Entry{entry}, nil); !errors.Is(err, ErrPoolRead) {
+			t.Errorf("Verify error = %v, want ErrPoolRead", err)
+		}
+		if _, err := Prune(context.Background(), notADirectory, nil); !errors.Is(err, ErrPoolRead) {
+			t.Errorf("Prune error = %v, want ErrPoolRead", err)
+		}
+	}
+
+	// Staging: a file gone since the check, and a directory where it
+	// belongs, which no system reads as a file.
+	dir := t.TempDir()
+	err := StageFiles(dir, []Entry{entry}, t.TempDir(), nil)
+	if !errors.Is(err, ErrPoolRead) || !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("staging a file gone: error = %v, want ErrPoolRead and os.ErrNotExist", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, entry.FileName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err = Stage(dir, []Entry{entry}, t.TempDir(), deb.FlatRelease{Suite: "noble", Arch: "amd64"}, nil)
+	if !errors.Is(err, ErrPoolRead) {
+		t.Errorf("staging a directory: error = %v, want ErrPoolRead", err)
+	}
+	// A destination that cannot be written is not the pool's.
+	if err := os.Remove(filepath.Join(dir, entry.FileName)); err != nil {
+		t.Fatal(err)
+	}
+	writeEntry(t, dir, entry)
+	destination := filepath.Join(t.TempDir(), "staged")
+	if err := os.WriteFile(destination, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := StageFiles(dir, []Entry{entry}, destination, nil); err == nil || errors.Is(err, ErrPoolRead) {
+		t.Errorf("staging into a file: error = %v, want an error that is not ErrPoolRead", err)
+	}
+}
+
+// TestAPoolFileThatCannotBeReadSaysSo is the case the test above stands in
+// for: a file left readable by root only, by a sudo vendor, say. Neither
+// Windows nor root can make one.
+func TestAPoolFileThatCannotBeReadSaysSo(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a file this user cannot read: chmod does that only on Unix, and not to root")
+	}
+	dir := t.TempDir()
+	entry := entryFor("curl", "1")
+	writeEntry(t, dir, entry)
+	unreadable := filepath.Join(dir, entry.FileName)
+	if err := os.Chmod(unreadable, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o644) }) // so that TempDir can remove it
+	if _, err := Verify(context.Background(), dir, []Entry{entry}, nil); !errors.Is(err, ErrPoolRead) {
+		t.Errorf("Verify error = %v, want ErrPoolRead", err)
+	}
+	if _, err := Fetch(context.Background(), FetchOptions{Dir: dir, Entries: []Entry{entry}, Sleep: noSleep}); !errors.Is(err, ErrPoolRead) {
+		t.Errorf("Fetch error = %v, want ErrPoolRead", err)
+	}
+	if err := StageFiles(dir, []Entry{entry}, t.TempDir(), nil); !errors.Is(err, ErrPoolRead) {
+		t.Errorf("StageFiles error = %v, want ErrPoolRead", err)
 	}
 }
 

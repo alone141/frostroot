@@ -852,6 +852,48 @@ func TestCaptureLeavesASymlinkedCertificateOutsideTheRoot(t *testing.T) {
 	}
 }
 
+// TestCaptureLeavesACertificateDirectoryBehindASymlinkOutOfTheRoot: only a
+// link that was itself the certificate was checked, so with usr/local a link
+// to a directory on this machine, every .crt there was carried as the
+// captured machine's authority. The directory is reported once instead.
+func TestCaptureLeavesACertificateDirectoryBehindASymlinkOutOfTheRoot(t *testing.T) {
+	host := t.TempDir()
+	hostAuthority := filepath.Join(host, "share", "ca-certificates", "host-root.crt")
+	if err := os.MkdirAll(filepath.Dir(hostAuthority), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hostAuthority, selfSignedPEM(t, "host-root"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := systemRoot(buildRoot(t, map[string]string{
+		"usr/local": "-> " + host,
+	}))
+	carried, left := root.certificatesForRecipe()
+	if len(carried) != 0 {
+		t.Errorf("carried %+v, want nothing from this machine", carried)
+	}
+	if len(left) != 1 || left[0].description != "/usr/local/share/ca-certificates" || !strings.Contains(left[0].reason, "symlink out of") {
+		t.Errorf("left = %+v, want the directory reported once", left)
+	}
+}
+
+// TestCaptureCarriesACertificateDirectoryBehindASymlinkInsideTheRoot: a link
+// above the directory that stays in the tree is an ordinary layout, and the
+// certificates are carried and named as if it were not there.
+func TestCaptureCarriesACertificateDirectoryBehindASymlinkInsideTheRoot(t *testing.T) {
+	root := systemRoot(buildRoot(t, map[string]string{
+		"usr/local": "-> ../opt/local",
+		"opt/local/share/ca-certificates/corp.crt": string(selfSignedPEM(t, "corp-root")),
+	}))
+	carried, left := root.certificatesForRecipe()
+	if len(carried) != 1 || carried[0].path != "certs/corp.pem" || carried[0].from != "/usr/local/share/ca-certificates/corp.crt" {
+		t.Errorf("carried %+v, want corp.crt read through the link", carried)
+	}
+	if len(left) != 0 {
+		t.Errorf("left = %+v, want nothing", left)
+	}
+}
+
 // TestCaptureCarriesCertificatesInSubdirectories: update-ca-certificates
 // trusts every .crt below /usr/local/share/ca-certificates, and a machine
 // keeping its authority at corp/root.crt used to yield nothing carried and

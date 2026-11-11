@@ -50,6 +50,12 @@ var (
 	// full disk, or a directory its owner cannot write to. Trying again
 	// would fail the same way, so it is not retried.
 	ErrPoolWrite = errors.New("cannot write the pool")
+	// ErrPoolRead means a file of the pool, or the pool directory, is there
+	// but cannot be read: a file a sudo run left readable by root only, or
+	// a directory where a file belongs. Verify, Prune and staging return it;
+	// a file that is not there is missing instead, except at staging, which
+	// the caller verified the pool for.
+	ErrPoolRead = errors.New("cannot read the pool")
 )
 
 // FetchError says which file could not be fetched, from where, and why.

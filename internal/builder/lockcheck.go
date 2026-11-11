@@ -67,6 +67,11 @@ type offlinePlan struct {
 	// with no Python packages.
 	wheelEntries []pool.Entry
 	wheelPoolDir string
+	// sourceKeys and certificates are what was compared with the lock, kept
+	// so that the build installs those bytes and not a later read of files
+	// that may have changed since. Fedora's plan has neither.
+	sourceKeys   map[string]sourceKey
+	certificates CertificateSet
 }
 
 // packageNames returns every locked package name, sorted, for --include.
@@ -352,6 +357,8 @@ func planOffline(recipeDir string, imageRecipe recipe.Recipe, release distro.Rel
 		poolDir:      filepath.Join(recipeDir, filepath.FromSlash(pool.DebsDirName)),
 		wheelEntries: wheelEntries,
 		wheelPoolDir: filepath.Join(recipeDir, filepath.FromSlash(pool.WheelsDirName)),
+		sourceKeys:   sourceKeys,
+		certificates: certificates,
 	}, nil
 }
 

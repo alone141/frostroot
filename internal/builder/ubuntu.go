@@ -50,6 +50,8 @@ func newUbuntuBuild(bootstrapper Bootstrapper, imageRecipe recipe.Recipe, option
 		archiveURL = options.MirrorURL
 	}
 	var offline *offlinePlan
+	var sourceKeys map[string]sourceKey
+	var certificates CertificateSet
 	if options.Offline {
 		if options.MirrorURL != "" {
 			return nil, nil, errors.New("an offline build takes no mirror: it installs from vendor/debs")
@@ -57,16 +59,19 @@ func newUbuntuBuild(bootstrapper Bootstrapper, imageRecipe recipe.Recipe, option
 		if offline, err = planOffline(options.RecipeDir, imageRecipe, release); err != nil {
 			return nil, nil, err
 		}
-	}
-	// The keys a build will trust are read before anything else is done.
-	sourceKeys, err := readSourceKeys(options.RecipeDir, imageRecipe.Sources)
-	if err != nil {
-		return nil, nil, err
-	}
-	// So are the certificate authorities, for the same reason.
-	certificates, err := ReadCertificates(options.RecipeDir, imageRecipe.CertificatePaths())
-	if err != nil {
-		return nil, nil, err
+		// planOffline read the keys and the certificates to compare them with
+		// the lock. Reading them again would install whatever the files hold
+		// by now, which the comparison never saw.
+		sourceKeys, certificates = offline.sourceKeys, offline.certificates
+	} else {
+		// The keys a build will trust are read before anything else is done.
+		if sourceKeys, err = readSourceKeys(options.RecipeDir, imageRecipe.Sources); err != nil {
+			return nil, nil, err
+		}
+		// So are the certificate authorities, for the same reason.
+		if certificates, err = ReadCertificates(options.RecipeDir, imageRecipe.CertificatePaths()); err != nil {
+			return nil, nil, err
+		}
 	}
 	build := &ubuntuBuild{
 		bootstrapper: bootstrapper,

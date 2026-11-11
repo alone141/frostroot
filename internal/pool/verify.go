@@ -77,7 +77,7 @@ func Verify(ctx context.Context, dir string, entries []Entry, onChecked func(che
 	}
 	directoryEntries, err := os.ReadDir(dir)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return Status{}, err
+		return Status{}, fmt.Errorf("%w: %w", ErrPoolRead, err)
 	}
 	for _, directoryEntry := range directoryEntries {
 		name := directoryEntry.Name()
@@ -106,14 +106,14 @@ func checkFile(path string, entry Entry) (fileState, error) {
 		return fileMissing, nil
 	}
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("%w: %w", ErrPoolRead, err)
 	}
 	if !info.Mode().IsRegular() || (entry.Size > 0 && info.Size() != entry.Size) {
 		return fileCorrupt, nil
 	}
 	_, digest, err := deb.SHA256File(path)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("%w: %w", ErrPoolRead, err)
 	}
 	if digest != entry.SHA256 {
 		return fileCorrupt, nil

@@ -399,6 +399,29 @@ func TestVendorThatCannotWriteADownloadIsAUserError(t *testing.T) {
 	}
 }
 
+// TestVendorThatCannotReadItsPoolIsAUserError: a pool file a sudo vendor
+// left readable by root only failed the check with exit 2, the code for a
+// download that failed, though the person can fix it.
+func TestVendorThatCannotReadItsPoolIsAUserError(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a file this user cannot read: chmod does that only on Unix, and not to root")
+	}
+	fixture := newVendorFixture(t)
+	if err := os.MkdirAll(fixture.poolDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	unreadable := filepath.Join(fixture.poolDir(), "curl_1_amd64.deb")
+	if err := os.WriteFile(unreadable, fixture.files[fixture.lock.Packages[0].Filename], 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o644) }) // so that TempDir can remove it
+	var stdout, stderr bytes.Buffer
+	exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor"})
+	if exitCode != exitUserError || !strings.Contains(stderr.String(), "cannot read the pool") {
+		t.Fatalf("exit code = %d, stderr %s; want %d saying the pool cannot be read", exitCode, stderr.String(), exitUserError)
+	}
+}
+
 // A build in the same directory may place a new lock at any moment, and
 // vendor reads it once: it waits for nothing and fetches nothing.
 func TestVendorRefusesWhileABuildHoldsTheRecipeDir(t *testing.T) {
@@ -643,6 +666,53 @@ func TestVendorPruneRemovesADownloadCutShort(t *testing.T) {
 	}
 	if _, err := os.Stat(cutShort); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("--prune must remove the download cut short, Stat error = %v", err)
+	}
+}
+
+// TestVendorPrunesTheOtherFamilysPool: after a recipe moved from Fedora to
+// Ubuntu, vendor --prune left every file of vendor/rpms, though its help
+// promises to remove what the lock does not name there too; and the same
+// the other way.
+func TestVendorPrunesTheOtherFamilysPool(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		fedora    bool   // the lock is Fedora's
+		otherPool string // the pool of the family the recipe left
+		stale     []string
+	}{
+		{"from Fedora to Ubuntu", false, "rpms", []string{"git-2.54.0-1.fc44.x86_64.rpm", ".glibc-2.43-2.fc44.x86_64.rpm.4242.tmp"}},
+		{"from Ubuntu to Fedora", true, "debs", []string{"curl_0.9_amd64.deb"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newVendorFixture(t)
+			if test.fedora {
+				fixture.useFedoraLock(t)
+			}
+			otherPoolDir := filepath.Join(fixture.recipeDir, "vendor", test.otherPool)
+			if err := os.MkdirAll(otherPoolDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range append([]string{"README"}, test.stale...) {
+				if err := os.WriteFile(filepath.Join(otherPoolDir, name), []byte("stale"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var stdout, stderr bytes.Buffer
+			if exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor", "--prune"}); exitCode != exitSuccess {
+				t.Fatalf("exit code = %d, stderr %s", exitCode, stderr.String())
+			}
+			for _, name := range test.stale {
+				if _, err := os.Stat(filepath.Join(otherPoolDir, name)); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("%s survived --prune: Stat error = %v", name, err)
+				}
+				if !strings.Contains(stdout.String(), name) {
+					t.Errorf("stdout does not say %s was removed:\n%s", name, stdout.String())
+				}
+			}
+			if _, err := os.Stat(filepath.Join(otherPoolDir, "README")); err != nil {
+				t.Errorf("--prune removed a file that is no package: %v", err)
+			}
+		})
 	}
 }
 

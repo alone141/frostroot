@@ -52,6 +52,13 @@ func (root systemRoot) certificatesForRecipe() (carried []capturedCertificate, l
 	if _, err := os.Lstat(base); err != nil {
 		return nil, nil
 	}
+	// The walk joins paths below base without resolving them, so a symlink
+	// above the directory, such as usr/local -> /opt/local in a mounted tree,
+	// would make every file in it this machine's. The links inside are
+	// checked one by one below.
+	if _, inside := root.pathInRoot(localCertificateDir); !inside {
+		return nil, []leftSource{{"/" + localCertificateDir, "reached through a symlink out of " + string(root) + ", which belongs to this machine rather than the one being captured"}}
+	}
 	usedNames := map[string]bool{}
 	_ = filepath.WalkDir(base, func(path string, entry fs.DirEntry, err error) error {
 		from := root.relativePath(path)

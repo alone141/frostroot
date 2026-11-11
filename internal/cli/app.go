@@ -130,6 +130,10 @@ type App struct {
 	// runForm shows the full-screen form; nil means tui.RunForm. Tests
 	// answer it themselves.
 	runForm func(ctx context.Context, fields []form.Field, initial form.Values, preview tui.PreviewFunc, input io.Reader, output io.Writer) (form.Values, error)
+	// interruptContext stands in for the signal handling of capture's
+	// plain interface; nil means SIGINT, SIGTERM and SIGHUP. Tests end
+	// the context themselves instead of sending a signal.
+	interruptContext func() (context.Context, context.CancelFunc)
 }
 
 // New returns an App wired to the real process.

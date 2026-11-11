@@ -571,6 +571,7 @@ func TestReportBuildFailureExitCodes(t *testing.T) {
 		"a host that cannot mount":          {fmt.Errorf("%w: mount: permission denied", builder.ErrCannotMount), exitUserError, true, "mount"},
 		"a package cached twice":            {fmt.Errorf("%w: git.rpm from updates is in it twice; remove /c and build again", builder.ErrPackageCacheConflict), exitUserError, true, "remove /c"},
 		"a lock that does not parse":        {fmt.Errorf("%w: toml: strict mode: fields in the document are missing in the target struct", pool.ErrBadLock), exitUserError, false, "unusable"},
+		"a pool file that cannot be read":   {fmt.Errorf("checking vendor/debs: %w: open vendor/debs/curl_1_amd64.deb: permission denied", pool.ErrPoolRead), exitUserError, false, "cannot read the pool"},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {

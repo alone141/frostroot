@@ -246,7 +246,7 @@ func stageFedoraRepositories(offline *offlinePlan, release distro.FedoraRelease,
 				progress.Report(ProgressEvent{Phase: PhasePrepareRepository, Kind: EventProgress, Done: base + stagedBytes, Total: totalBytes, Unit: UnitBytes})
 			})
 			if err != nil {
-				return nil, nil, nil, fmt.Errorf("preparing the local repositories: %w", err)
+				return nil, nil, nil, fmt.Errorf("preparing the local repositories: %w", stagingError(err, offline))
 			}
 			doneBytes += pool.TotalSize(stage.entries)
 			dirs = append(dirs, stage.dir)

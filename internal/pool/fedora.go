@@ -44,7 +44,7 @@ func fedoraManifest(lock recipe.Lockfile) ([]Entry, error) {
 	for _, repository := range lock.Repositories {
 		parsed, err := url.Parse(repository.URL)
 		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
-			return nil, fmt.Errorf("%w: repository %s has url %q, which is not a plain https URL", ErrBadLock, repository.Name, repository.URL)
+			return nil, fmt.Errorf("%w: repository %s has url %q, which is not a plain https URL", ErrBadLock, repository.Name, recipe.RedactURLCredentials(repository.URL))
 		}
 	}
 	var entries []Entry
@@ -92,6 +92,9 @@ func fedoraManifest(lock recipe.Lockfile) ([]Entry, error) {
 // rpmPoolFileName returns the base name of a Fedora lock's filename,
 // refusing anything that is not a plain relative path to an .rpm file.
 func rpmPoolFileName(lockFileName string) (string, error) {
+	if err := checkFileNameCharacters(lockFileName); err != nil {
+		return "", err
+	}
 	cleaned := path.Clean(lockFileName)
 	if lockFileName == "" || strings.HasPrefix(lockFileName, "/") || cleaned != lockFileName || strings.HasPrefix(cleaned, "../") || cleaned == ".." {
 		return "", fmt.Errorf("filename %q is not a plain relative path", lockFileName)

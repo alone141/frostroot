@@ -63,10 +63,14 @@ func (a *App) runCapture(args []string) int {
 	// From here until the form is over, an interrupt at a question of the
 	// plain interface ends the question instead of the process, so that
 	// what follows can remove these files again. The full-screen form
-	// handles Ctrl-C itself, and a signal must still end it.
+	// handles Ctrl-C itself, and a signal must still end it. The signal
+	// handler is still there while the keys are fetched after the recipe
+	// is written, so the interrupt ends that fetch too.
+	ctx := context.Background()
 	if !a.useFullScreen(*plain) {
-		interrupted, stopSignalHandling := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+		interrupted, stopSignalHandling := a.notifyInterrupt()
 		defer stopSignalHandling()
+		ctx = interrupted
 		if prompt, isLinePrompt := a.Prompt.(*linePrompt); isLinePrompt {
 			prompt.interrupted = interrupted.Done()
 		}
@@ -90,7 +94,7 @@ func (a *App) runCapture(args []string) int {
 		removeCapturedCertificates(writtenCertificates)
 		return exitUserError
 	}
-	exitCode, wrote := a.runRecipeForm("capture", form.FromRecipe(snapshot.Recipe()), recipePath, *overwrite, *plain, form.Fixed{Family: true, Target: true}, snapshot.Keys, intro, indexes)
+	exitCode, wrote := a.runRecipeForm(ctx, "capture", form.FromRecipe(snapshot.Recipe()), recipePath, *overwrite, *plain, form.Fixed{Family: true, Target: true}, snapshot.Keys, intro, indexes)
 	if exitCode != exitSuccess {
 		// The form can fail after the recipe is on disk: a key it then
 		// fetches may not come. That recipe names these files, and a
@@ -117,6 +121,15 @@ func (a *App) runCapture(args []string) int {
 		a.stdoutf("  %s\n", line)
 	}
 	return exitCode
+}
+
+// notifyInterrupt returns a context that ends at SIGINT, SIGTERM or SIGHUP,
+// and the function that stops listening for them.
+func (a *App) notifyInterrupt() (context.Context, context.CancelFunc) {
+	if a.interruptContext != nil {
+		return a.interruptContext()
+	}
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 }
 
 // captureNoteText is the first page of the capture form: where the values

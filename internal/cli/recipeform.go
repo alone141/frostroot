@@ -58,8 +58,8 @@ func isCharacterDevice(stream any) bool {
 // because people pipe answers into it, and asks initial's family's and
 // target's questions. wrote says whether the recipe was written, which it
 // can be when the exit code is a failure: a key fetched afterwards may not
-// come.
-func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath string, replace, plainRequested bool, fixed form.Fixed, providedKeys map[string][]byte, intro []form.Field, indexes *packageIndexes) (exitCode int, wrote bool) {
+// come. ctx ends the fetch of those keys.
+func (a *App) runRecipeForm(ctx context.Context, commandName string, initial form.Values, recipePath string, replace, plainRequested bool, fixed form.Fixed, providedKeys map[string][]byte, intro []form.Field, indexes *packageIndexes) (exitCode int, wrote bool) {
 	host := a.host()
 	host.OpenIndex = indexes.Open
 	host.OpenPythonIndex = indexes.OpenPython
@@ -141,7 +141,7 @@ func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath 
 	}
 	a.stdoutf("\nWrote %s.\n", recipeFileName)
 	a.trustWrittenCertificates(imageRecipe.CertificatePaths(), indexes)
-	if exitCode := a.fetchMissingKeys(commandName, imageRecipe.Sources, providedKeys, indexes.insecureTLS()); exitCode != exitSuccess {
+	if exitCode := a.fetchMissingKeys(ctx, commandName, imageRecipe.Sources, providedKeys, indexes.insecureTLS()); exitCode != exitSuccess {
 		return exitCode, true
 	}
 	a.stdoutf("Next: frostroot validate, then frostroot build.\n")
@@ -277,9 +277,12 @@ func hasOwnComments(current, rendered string) bool {
 // any failure ends in exitUserError with the recipe already written, so
 // that fixing the network or saving a key by hand is all that is left to do.
 // insecure is --insecure: a key whose fingerprint was discovered over such a
-// connection is saved with a word on where to check it.
-func (a *App) fetchMissingKeys(commandName string, recipeSources []recipe.Source, providedKeys map[string][]byte, insecure bool) int {
+// connection is saved with a word on where to check it. When ctx ends, the
+// fetch in flight stops and no other key is fetched: the result is
+// exitInterrupted, with the keys still missing named.
+func (a *App) fetchMissingKeys(ctx context.Context, commandName string, recipeSources []recipe.Source, providedKeys map[string][]byte, insecure bool) int {
 	failed := false
+	var missing []string
 	for _, source := range recipeSources {
 		keyPath := recipe.KeyPath(a.RecipeDir, source)
 		if _, err := os.Stat(keyPath); err == nil {
@@ -289,10 +292,19 @@ func (a *App) fetchMissingKeys(commandName string, recipeSources []recipe.Source
 		origin := "the machine"
 		discovered := false
 		if !provided {
-			fetched, err := sources.FetchKey(context.Background(), a.KeyClient, source)
+			if ctx.Err() != nil {
+				missing = append(missing, source.Name)
+				continue
+			}
+			fetched, err := sources.FetchKey(ctx, a.KeyClient, source)
 			if err != nil {
-				a.stderrf("frostroot %s: %v\n", commandName, err)
-				failed = true
+				missing = append(missing, source.Name)
+				// A fetch the interrupt ended did not fail on its own; the
+				// line after the loop says what happened.
+				if ctx.Err() == nil {
+					a.stderrf("frostroot %s: %v\n", commandName, err)
+					failed = true
+				}
 				continue
 			}
 			armored, origin, discovered = fetched.Armored, fetched.SourceURL, fetched.Discovered
@@ -300,16 +312,19 @@ func (a *App) fetchMissingKeys(commandName string, recipeSources []recipe.Source
 		key, err := pgp.ParsePublicKey(armored)
 		if err != nil {
 			a.stderrf("frostroot %s: key of %s: %v\n", commandName, source.Name, err)
+			missing = append(missing, source.Name)
 			failed = true
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(keyPath), 0o755); err != nil {
 			a.stderrf("frostroot %s: %v\n", commandName, err)
+			missing = append(missing, source.Name)
 			failed = true
 			continue
 		}
 		if err := writeFileAtomically(keyPath, string(armored)); err != nil {
 			a.stderrf("frostroot %s: writing %s: %v\n", commandName, source.Key, err)
+			missing = append(missing, source.Name)
 			failed = true
 			continue
 		}
@@ -324,6 +339,10 @@ func (a *App) fetchMissingKeys(commandName string, recipeSources []recipe.Source
 				a.stderrf("warning: the fingerprint of %s came from Launchpad over an unverified connection, and so did the key; compare it with %s before building.\n", source.Name, sources.PPAPageURL(owner, name))
 			}
 		}
+	}
+	if ctx.Err() != nil && len(missing) > 0 {
+		a.stderrf("frostroot %s: interrupted; %s is written without the keys of %s, so frostroot validate will refuse it until every key is in place; frostroot edit fetches them again\n", commandName, recipeFileName, strings.Join(missing, ", "))
+		return exitInterrupted
 	}
 	if failed {
 		a.stderrf("frostroot %s: %s is written, but frostroot validate will refuse it until every key is in place; frostroot edit fetches them again\n", commandName, recipeFileName)

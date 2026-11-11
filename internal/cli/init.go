@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -156,7 +157,7 @@ func (a *App) runInit(args []string) int {
 	if !ok {
 		return exitUserError
 	}
-	exitCode, _ := a.runRecipeForm("init", initial, recipePath, *overwrite, *plain, fixed, nil, nil, indexes)
+	exitCode, _ := a.runRecipeForm(context.Background(), "init", initial, recipePath, *overwrite, *plain, fixed, nil, nil, indexes)
 	return exitCode
 }
 
