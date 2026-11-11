@@ -49,8 +49,6 @@ arch = {{tomlQuote .Image.Arch}}  # the only architecture in v1
 # what it holds. Either way the root grows to fill the disk it is written to,
 # at its first boot.
 {{with .Disk}}{{if .Size}}size = {{tomlQuote .Size}}
-{{end}}{{end}}# Written beside the raw .img when named here: "qcow2".
-{{with .Disk}}{{if .Formats}}formats = {{tomlQuoteList .Formats}}
 {{end}}{{end}}{{else}}
 [wsl]
 systemd = {{.WSL.Systemd}}

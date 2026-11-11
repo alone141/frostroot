@@ -219,8 +219,6 @@ const (
 	keyOriginalTarget = "original_target"
 	// KeyDiskSize is [disk] size, "" for the content and room to spare.
 	KeyDiskSize = "disk_size"
-	// KeyDiskQcow2 says whether [disk] formats names qcow2.
-	KeyDiskQcow2 = "disk_qcow2"
 )
 
 // The pages fields are grouped on, in order.
@@ -356,11 +354,6 @@ func Fields(host Host) []Field {
 			Description: "The image file's size, such as 16G; empty sizes it to fit. Either way the root grows to fill the disk at the first boot",
 			Placeholder: "to fit",
 			Validate:    checkDiskSizeAnswer,
-		},
-		{
-			Key: KeyDiskQcow2, Page: PageDisk, Kind: KindConfirm, Targets: diskOnly,
-			Title:       "Also write a qcow2",
-			Description: "For QEMU, libvirt and Proxmox; the raw .img is always written",
 		},
 		{
 			Key: KeySources, Page: PageSources, Kind: KindMultiSelect, Families: ubuntuOnly,

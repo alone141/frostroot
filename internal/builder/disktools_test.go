@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -30,7 +31,7 @@ func newFakeDiskHost() *fakeHost {
 }
 
 func (h *fakeHost) bubblewrap(uid int) *Bubblewrap {
-	return &Bubblewrap{RunCommand: h.run, LookPath: h.lookPath, CurrentUID: func() int { return uid }}
+	return &Bubblewrap{RunCommand: h.run, LookPath: h.lookPath, ReadFile: h.readFile, CurrentUID: func() int { return uid }}
 }
 
 // TestBubblewrapCommandLine: the tree's /usr and /etc read-only, the work
@@ -163,29 +164,92 @@ func TestBubblewrapPreflightNamesEveryMissingProgram(t *testing.T) {
 	for _, program := range []string{"bwrap", "unshare", "newuidmap", "newgidmap"} {
 		delete(host.installed, program)
 	}
-	err := host.bubblewrap(1000).Preflight()
+	err := host.bubblewrap(1000).Preflight(context.Background())
 	if !errors.Is(err, ErrNoDiskTool) {
 		t.Fatalf("Preflight = %v, want ErrNoDiskTool", err)
 	}
 	if want := "bwrap, unshare, newuidmap, newgidmap; install with: sudo apt install bubblewrap util-linux uidmap"; !strings.Contains(err.Error(), want) {
 		t.Errorf("Preflight = %v, want it to end %q", err, want)
 	}
-	err = host.bubblewrap(0).Preflight()
+	err = host.bubblewrap(0).Preflight(context.Background())
 	if !errors.Is(err, ErrNoDiskTool) || !strings.HasSuffix(err.Error(), "bwrap; install with: sudo apt install bubblewrap") {
 		t.Errorf("Preflight as root = %v, want only bwrap named", err)
 	}
 	host.installed["bwrap"] = true
-	if err := host.bubblewrap(0).Preflight(); err != nil {
+	if err := host.bubblewrap(0).Preflight(context.Background()); err != nil {
 		t.Errorf("Preflight as root with bwrap = %v, want nil", err)
 	}
-	if err := host.bubblewrap(1000).Preflight(); !errors.Is(err, ErrNoDiskTool) {
+	if err := host.bubblewrap(1000).Preflight(context.Background()); !errors.Is(err, ErrNoDiskTool) {
 		t.Errorf("Preflight unprivileged without unshare's helpers = %v, want ErrNoDiskTool", err)
 	}
-	if err := newFakeDiskHost().bubblewrap(1000).Preflight(); err != nil {
+	if err := newFakeDiskHost().bubblewrap(1000).Preflight(context.Background()); err != nil {
 		t.Errorf("Preflight on a ready host = %v, want nil", err)
 	}
 	if len(host.ran) != 0 {
-		t.Errorf("Preflight ran %q; it only looks programs up", host.ran)
+		t.Errorf("Preflight ran %q; a host without the programs is refused before anything runs", host.ran)
+	}
+}
+
+// TestShellCommandLineIsWhatAShellRuns: the line the removal's error gives
+// to paste is read as the arguments it names, whatever the work root's path
+// holds, and a flag is not quoted for nothing.
+func TestShellCommandLineIsWhatAShellRuns(t *testing.T) {
+	args := []string{"--map-root-user", "--", "rm", "-rf", "--", "/var/tmp/frostroot 1000/it's $(touch pwned) `touch pwned`/tree", ""}
+	line := shellCommandLine("printf", append([]string{`%s\n`}, args...))
+	if want := `printf '%s\n' --map-root-user -- rm -rf -- '/var/tmp/frostroot 1000/it'\''s $(touch pwned) `; !strings.HasPrefix(line, want) {
+		t.Errorf("line = %q, want it to begin %q", line, want)
+	}
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh here")
+	}
+	command := exec.Command(shell, "-c", line)
+	command.Dir = t.TempDir()
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("sh -c %q: %v", line, err)
+	}
+	if want := strings.Join(args, "\n") + "\n"; string(output) != want {
+		t.Errorf("sh read %q, want %q", output, want)
+	}
+	if _, err := os.Stat(filepath.Join(command.Dir, "pwned")); !errors.Is(err, os.ErrNotExist) {
+		t.Error("the shell ran what the path holds")
+	}
+}
+
+// TestBubblewrapPreflightChecksTheUserNamespaces:unprivileged, bwrap and
+// unshare run in user namespaces of their own. A kernel that keeps them out
+// of those, or an unshare without --map-auto, failed the build at its first
+// bwrap, after the image was built, and left a tree of subordinate ids that
+// could not be removed.
+func TestBubblewrapPreflightChecksTheUserNamespaces(t *testing.T) {
+	host := newFakeDiskHost()
+	host.restriction = "1"
+	err := host.bubblewrap(1000).Preflight(context.Background())
+	if !errors.Is(err, ErrUserNamespacesRestricted) || !strings.Contains(err.Error(), "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0") {
+		t.Errorf("Preflight on a restricting kernel = %v, want ErrUserNamespacesRestricted with the way out", err)
+	}
+	if err := host.bubblewrap(0).Preflight(context.Background()); err != nil {
+		t.Errorf("Preflight as root on a restricting kernel = %v, want nil: root makes no user namespace", err)
+	}
+	if len(host.ran) != 0 {
+		t.Errorf("ran %q, want nothing run on a host its kernel's setting refuses, or as root", host.ran)
+	}
+
+	host = newFakeDiskHost()
+	host.restriction = "0"
+	host.results["unshare"] = fakeResult{stderr: "unshare: unrecognized option '--map-auto'\n", err: errors.New("exit status 1")}
+	err = host.bubblewrap(1000).Preflight(context.Background())
+	if !errors.Is(err, ErrNoDiskTool) || !strings.Contains(err.Error(), "unrecognized option '--map-auto'") || !strings.Contains(err.Error(), "util-linux 2.38 or newer") {
+		t.Errorf("Preflight with an unshare that cannot map = %v, want ErrNoDiskTool with unshare's words and what it needs", err)
+	}
+
+	host = newFakeDiskHost()
+	if err := host.bubblewrap(1000).Preflight(context.Background()); err != nil {
+		t.Fatalf("Preflight on a ready host = %v, want nil", err)
+	}
+	if want := []string{"unshare --map-root-user --map-auto -- true"}; !slices.Equal(host.ran, want) {
+		t.Errorf("ran %q, want %q", host.ran, want)
 	}
 }
 
@@ -215,6 +279,13 @@ func TestBubblewrapRemovesTheTreeInTheNamespaceThatMadeIt(t *testing.T) {
 	err := host.bubblewrap(0).RemoveTree(context.Background(), tree)
 	if err == nil || !strings.Contains(err.Error(), "removing "+tree+": exit status 1: rm: cannot remove") {
 		t.Errorf("RemoveTree = %v, want rm's own words", err)
+	}
+	// The tree belongs to ids only the namespace can remove: the error
+	// says how.
+	host.results["unshare"] = fakeResult{err: errors.New("exit status 1")}
+	err = host.bubblewrap(1000).RemoveTree(context.Background(), tree)
+	if want := "remove it with: unshare --map-root-user --map-auto -- rm -rf -- '" + tree + "'"; err == nil || !strings.HasSuffix(err.Error(), want) {
+		t.Errorf("RemoveTree = %v, want it to end %q", err, want)
 	}
 
 	// Nothing frostroot did not make under a work directory: a relative
@@ -278,7 +349,7 @@ type fakeToolRunner struct {
 	runsAtRemoval        int // how many tools had run when the tree was removed
 }
 
-func (f *fakeToolRunner) Preflight() error {
+func (f *fakeToolRunner) Preflight(context.Context) error {
 	f.preflighted = true
 	return f.preflightErr
 }
@@ -524,6 +595,26 @@ func TestDiskBuildFailsWhenTheTreeCannotBeRemoved(t *testing.T) {
 	assertNoDiskBuildOutput(t, options)
 }
 
+// TestDiskBuildFailingNamesATreeItCannotRemove: a build that failed with a
+// tools tree it then could not remove discarded the removal's error, and
+// the kept work directory held gigabytes of subordinate ids nobody was told
+// about.
+func TestDiskBuildFailingNamesATreeItCannotRemove(t *testing.T) {
+	options, _ := newTestOptions(t)
+	runner := &fakeToolRunner{
+		removeErr: errors.New("removing tree: exit status 1; remove it with: unshare --map-root-user --map-auto -- rm -rf -- 'tree'"),
+		failOn:    "mke2fs",
+		runErr:    errors.New("mke2fs: exit status 1: mke2fs: Could not open image.tar"),
+	}
+	_, err := buildDiskWith(&fakeBootstrapper{}, runner, options)
+	if err == nil || !strings.Contains(err.Error(), "mke2fs: Could not open image.tar") {
+		t.Fatalf("Build = %v, want the tool's failure", err)
+	}
+	if !strings.Contains(err.Error(), "removing the disk tools tree: removing tree: exit status 1; remove it with: unshare") {
+		t.Errorf("Build = %v, want the tree it could not remove named, and how to remove it", err)
+	}
+}
+
 func TestDiskBuildPreflightsTheRunnerBeforeAnyWork(t *testing.T) {
 	options, workRoot := newTestOptions(t)
 	bootstrapper := &fakeBootstrapper{}
@@ -699,6 +790,59 @@ func TestDiskBuildOfflineMakesTheTreeFromThePool(t *testing.T) {
 	}
 	if _, err := os.Stat(expectedDiskImagePath(options)); err != nil {
 		t.Errorf("image not placed: %v", err)
+	}
+}
+
+// TestDiskBuildOfflineRefusesAnotherDiskSize: an offline build makes the
+// lock's layout, and a disk.size the recipe asked for since was dropped
+// without a word, while every other change it allows is applied.
+func TestDiskBuildOfflineRefusesAnotherDiskSize(t *testing.T) {
+	options, _ := newTestOptions(t)
+	lock := writeVendoredDiskLock(t, options)
+	if lock.Disk == nil || lock.Disk.Size == nil || *lock.Disk.Size != "" {
+		t.Fatalf("the online build's lock records [disk] %+v, want size \"\" for a disk sized to fit", lock.Disk)
+	}
+	options.Offline = true
+	imageRecipe := sampleDiskRecipe()
+	imageRecipe.Disk = &recipe.Disk{Size: "32G"}
+	bootstrapper := &diskOfflineFakeBootstrapper{}
+	_, err := (&Builder{Bootstrapper: bootstrapper, Tools: &fakeToolRunner{}}).Build(context.Background(), imageRecipe, options)
+	if !errors.Is(err, ErrLockMismatch) || !strings.Contains(err.Error(), "disk.size is 32G, the lock's disk was made sized to fit") {
+		t.Fatalf("Build = %v, want ErrLockMismatch naming disk.size", err)
+	}
+	if bootstrapper.treeRan || bootstrapper.runCount != 0 {
+		t.Error("work was done for a recipe the lock does not describe")
+	}
+}
+
+func TestDiskSizeDifference(t *testing.T) {
+	toFit, sixteen := "", "16G"
+	const sixteenGiB = 16 << 30
+	for _, testCase := range []struct {
+		name     string
+		recorded *string
+		wanted   string
+		want     string
+	}{
+		{"both sized to fit", &toFit, "", ""},
+		{"the size asked for", &sixteen, "16G", ""},
+		{"the size in other units", &sixteen, "16384M", ""},
+		{"a size where it fit", &toFit, "16G", "disk.size is 16G, the lock's disk was made sized to fit"},
+		{"to fit where it had a size", &sixteen, "", "disk.size is sized to fit, the lock's disk was made 16G"},
+		{"another size", &sixteen, "32G", "disk.size is 32G, the lock's disk was made 16G"},
+		// A lock that records nothing has its disk's size.
+		{"an older lock, its size asked for", nil, "16G", ""},
+		{"an older lock, to fit", nil, "", ""},
+		{"an older lock, another size", nil, "32G", "disk.size is 32G, the lock's disk is 16384M"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			lock := recipe.Lockfile{Target: recipe.TargetDisk, Disk: &recipe.LockDisk{Size: testCase.recorded, DiskBytes: sixteenGiB}}
+			imageRecipe := sampleDiskRecipe()
+			imageRecipe.Disk = &recipe.Disk{Size: testCase.wanted}
+			if got := diskSizeDifference(lock, imageRecipe); got != testCase.want {
+				t.Errorf("diskSizeDifference = %q, want %q", got, testCase.want)
+			}
+		})
 	}
 }
 

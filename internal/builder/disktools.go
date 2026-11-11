@@ -40,7 +40,7 @@ var unprivilegedDiskHostTools = slices.Concat([]hostTool{{"unshare", "util-linux
 // fakes.
 type ToolRunner interface {
 	// Preflight checks the host before any work is done.
-	Preflight() error
+	Preflight(ctx context.Context) error
 	// Run runs one program of the tree to completion.
 	Run(ctx context.Context, run ToolRun) error
 	// RemoveTree removes the tree at dir, whoever owns its files.
@@ -89,12 +89,17 @@ type Bubblewrap struct {
 	RunCommand CommandRunner                // defaults to runInterruptibly
 	CurrentUID func() int                   // defaults to os.Getuid
 	LookPath   func(string) (string, error) // defaults to exec.LookPath
+	ReadFile   func(string) ([]byte, error) // defaults to os.ReadFile; reads the kernel's restriction
 }
 
 // Preflight checks that every program a disk build runs on the host is
 // installed, naming all the missing ones at once with the line that
-// installs them.
-func (b *Bubblewrap) Preflight() error {
+// installs them. Unprivileged, it also checks that they can make the user
+// namespaces they run in: bwrap for every tool, and unshare to remove the
+// tree mmdebstrap made in one. Otherwise the first bwrap fails after the
+// image was built, and the tree, owned by subordinate ids, stays behind
+// where its owner cannot remove it.
+func (b *Bubblewrap) Preflight(ctx context.Context) error {
 	lookPath := b.LookPath
 	if lookPath == nil {
 		lookPath = exec.LookPath
@@ -114,6 +119,29 @@ func (b *Bubblewrap) Preflight() error {
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("%w: %s; install with: sudo apt install %s", ErrNoDiskTool, strings.Join(missing, ", "), strings.Join(aptPackages, " "))
+	}
+	if b.privileged() {
+		return nil
+	}
+	readFile := b.ReadFile
+	if readFile == nil {
+		readFile = os.ReadFile
+	}
+	// mmdebstrap has an AppArmor profile of its own and gets through; bwrap
+	// and unshare would not, as mkosi's preflight says for mkosi.
+	if restricted, err := readFile(userNamespaceRestriction); err == nil && strings.TrimSpace(string(restricted)) == "1" {
+		return fmt.Errorf("%w: AppArmor lets only a program with a profile of its own use the user namespace it makes (kernel.apparmor_restrict_unprivileged_userns = 1), and a disk build runs bwrap and unshare in theirs; build as root with sudo frostroot build, or lift the restriction: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
+			ErrUserNamespacesRestricted)
+	}
+	// --map-auto came with util-linux 2.38, and maps the subordinate ids
+	// /etc/subuid and /etc/subgid give the user: without either, the tree
+	// could not be removed.
+	tail := newTailBuffer(errorTailBytes)
+	if err := b.runCommand()(ctx, "unshare", []string{"--map-root-user", "--map-auto", "--", "true"}, nil, io.Discard, tail); err != nil {
+		if last := lastLine(strings.TrimSpace(tail.String())); last != "" {
+			err = fmt.Errorf("%w: %s", err, last)
+		}
+		return fmt.Errorf("%w: unshare --map-root-user --map-auto failed (%w); a disk build removes its tools tree with it, which needs util-linux 2.38 or newer and subordinate ids for you in /etc/subuid and /etc/subgid", ErrNoDiskTool, err)
 	}
 	return nil
 }
@@ -201,11 +229,37 @@ func (b *Bubblewrap) RemoveTree(ctx context.Context, dir string) error {
 	tail := newTailBuffer(errorTailBytes)
 	if err := b.runCommand()(ctx, program, args, nil, io.Discard, tail); err != nil {
 		if last := lastLine(strings.TrimSpace(tail.String())); last != "" {
-			return fmt.Errorf("removing %s: %w: %s", dir, err, last)
+			err = fmt.Errorf("%w: %s", err, last)
 		}
-		return fmt.Errorf("removing %s: %w", dir, err)
+		// Its files may belong to ids only that command can remove.
+		return fmt.Errorf("removing %s: %w; remove it with: %s", dir, err, shellCommandLine(program, args))
 	}
 	return nil
+}
+
+// shellCommandLine returns program and args as one line a person can paste
+// into a shell and read: an argument is quoted when it holds anything a
+// shell would read otherwise, such as the space in a work root, and left
+// as it is when it is a flag or a plain word.
+func shellCommandLine(program string, args []string) string {
+	words := []string{program}
+	for _, arg := range args {
+		if arg == "" || strings.IndexFunc(arg, needsShellQuoting) >= 0 {
+			arg = shellQuote(arg)
+		}
+		words = append(words, arg)
+	}
+	return strings.Join(words, " ")
+}
+
+// needsShellQuoting reports whether r is a character a shell reads as
+// more than itself, or one a person would not expect bare.
+func needsShellQuoting(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return false
+	}
+	return !strings.ContainsRune("-_./:=@%+,", r)
 }
 
 // removeTreeCommand returns the program and arguments that remove the tree
@@ -308,8 +362,8 @@ func newDiskToolsTree(bootstrapper Bootstrapper, runner ToolRunner, options Opti
 }
 
 // preflight checks the host for what runs the tools and removes the tree.
-func (d *diskToolsTree) preflight() error {
-	return d.runner.Preflight()
+func (d *diskToolsTree) preflight(ctx context.Context) error {
+	return d.runner.Preflight(ctx)
 }
 
 // archiveURL is where the tree's packages come from.
@@ -395,7 +449,7 @@ func (d *diskToolsTree) stageRepository(repositoryDir string) error {
 		d.progress.Report(ProgressEvent{Phase: PhaseMakeToolsTree, Kind: EventProgress, Done: doneBytes, Total: totalBytes, Unit: UnitBytes})
 	})
 	if err != nil {
-		return fmt.Errorf("preparing the disk tools' local repository: %w", err)
+		return fmt.Errorf("preparing the disk tools' local repository: %w", stagingError(err, d.offline))
 	}
 	return nil
 }

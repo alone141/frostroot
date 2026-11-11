@@ -116,13 +116,14 @@ type Disk struct {
 	// Empty means the content and room to spare; either way the root grows
 	// to fill the disk the image is written to, at its first boot.
 	Size string `toml:"size,omitempty"`
-	// Formats are what the image is written as besides the raw disk, which
-	// is always written: "qcow2".
+	// Formats are what the image is to be written as besides the raw disk,
+	// which is always written. None is built yet, and validation refuses
+	// every name: a qcow2 or a vhdx comes in a later version.
 	Formats []string `toml:"formats,omitempty"`
 }
 
-// DiskFormatQcow2 is the one format [disk] formats may name so far, besides
-// the raw image, which is always written.
+// DiskFormatQcow2 is the first format [disk] formats will name besides the
+// raw image, once a version builds it.
 const DiskFormatQcow2 = "qcow2"
 
 // DiskFormats returns the formats the recipe asks for besides the raw

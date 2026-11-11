@@ -199,6 +199,72 @@ func TestBuildFedoraWritesLockAndTarball(t *testing.T) {
 // TestBuildFedoraWritesMkosiItsConfiguration: what mkosi reads, where the
 // Mkosi bootstrapper expects it, and the repository file under the name that
 // keeps mkosi from writing its own.
+// TestBuildFedoraLocksUnderAWorkRootWithBrackets: the lock found each
+// package in dnf's cache with a pattern over the cache's path, so a work
+// root with a bracket in its name failed the whole build at its end.
+func TestBuildFedoraLocksUnderAWorkRootWithBrackets(t *testing.T) {
+	options, _ := newTestOptions(t)
+	cacheHome := filepath.Join(t.TempDir(), "cache[x]")
+	options.Getenv = fakeEnvironment(map[string]string{"XDG_CACHE_HOME": cacheHome})
+	result, err := (&Builder{Fedora: newFakeFedoraBootstrapper()}).Build(context.Background(), sampleFedoraRecipe(), options)
+	if err != nil {
+		t.Fatalf("Build under %s: %v", cacheHome, err)
+	}
+	lock, err := recipe.LoadLock(result.LockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, locked := range lock.Packages {
+		if locked.Name == "git" && locked.SHA256 != sha256Hex("git rpm") {
+			t.Errorf("git's digest = %s, want the cached file's", locked.SHA256)
+		}
+	}
+}
+
+// TestBuildFedoraLocksTheOneFileDnfCanHaveInstalled: the cache is shared
+// between builds and names a repository's directory by its configuration's
+// hash, so a repository can have several. The first match was hashed
+// whatever the others held, and "updates-*" matched "updates-testing-..."
+// as well.
+func TestBuildFedoraLocksTheOneFileDnfCanHaveInstalled(t *testing.T) {
+	options, workRoot := newTestOptions(t)
+	gitFile := "git-2.55.0-1.fc44.x86_64.rpm"
+	cacheDir := filepath.Join(workRoot, fedoraPackageCacheName, "cache", "libdnf5")
+	writeCached := func(directory, content string) {
+		t.Helper()
+		path := filepath.Join(cacheDir, directory, "packages", gitFile)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Another repository's, and an earlier configuration's copy of the
+	// same bytes: neither is in doubt.
+	writeCached("updates-testing-0123abcd", "another repository's git")
+	writeCached("updates-89abcdef", "git rpm")
+	result, err := (&Builder{Fedora: newFakeFedoraBootstrapper()}).Build(context.Background(), sampleFedoraRecipe(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := recipe.LoadLock(result.LockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, locked := range lock.Packages {
+		if locked.Name == "git" && locked.SHA256 != sha256Hex("git rpm") {
+			t.Errorf("git's digest = %s, want updates' file's, not updates-testing's", locked.SHA256)
+		}
+	}
+
+	writeCached("updates-89abcdef", "an earlier configuration's other git")
+	_, err = (&Builder{Fedora: newFakeFedoraBootstrapper()}).Build(context.Background(), sampleFedoraRecipe(), options)
+	if err == nil || !strings.Contains(err.Error(), "twice, with different contents") || !strings.Contains(err.Error(), "updates-89abcdef") {
+		t.Fatalf("Build error = %v, want both of the cache's different copies named", err)
+	}
+}
+
 func TestBuildFedoraWritesMkosiItsConfiguration(t *testing.T) {
 	options, _ := newTestOptions(t)
 	options.KeepWork = true

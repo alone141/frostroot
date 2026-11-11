@@ -6,6 +6,7 @@ import (
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -29,14 +30,21 @@ const (
 	ReleaseFileName  = "Release"
 )
 
+// ErrDigestMismatch is returned by WriteFlatRepository for a file whose
+// SHA-256 is not the one it was told to expect.
+var ErrDigestMismatch = errors.New("SHA-256 differs from the expected one")
+
 // WriteFlatRepository turns dir, holding the .deb files named in
 // debFileNames, into a flat apt repository: it writes Packages, one paragraph
 // per file made of the package's own control file plus Filename, Size,
 // MD5sum and SHA256, and Release, which names the suite and carries the
 // hashes of Packages. Files are listed in name order, so the output depends
 // only on the inputs. A "deb [trusted=yes] copy://<dir> ./" source line
-// installs from the result.
-func WriteFlatRepository(dir string, release FlatRelease, debFileNames []string) error {
+// installs from the result, and apt checks each file against the index, not
+// against anything else: wantSHA256, which may be nil, names the SHA-256 a
+// file must have, and a file of another fails with ErrDigestMismatch before
+// anything is written.
+func WriteFlatRepository(dir string, release FlatRelease, debFileNames []string, wantSHA256 map[string]string) error {
 	var packages strings.Builder
 	for _, debFileName := range slices.Sorted(slices.Values(debFileNames)) {
 		debPath := filepath.Join(dir, debFileName)
@@ -47,6 +55,9 @@ func WriteFlatRepository(dir string, release FlatRelease, debFileNames []string)
 		size, digests, err := hashFile(debPath, md5.New(), sha256.New())
 		if err != nil {
 			return err
+		}
+		if want, named := wantSHA256[debFileName]; named && digests[1] != want {
+			return fmt.Errorf("%s: %w", debFileName, ErrDigestMismatch)
 		}
 		fmt.Fprintf(&packages, "%s\nFilename: ./%s\nSize: %d\nMD5sum: %s\nSHA256: %s\n\n", control.Text, debFileName, size, digests[0], digests[1])
 	}

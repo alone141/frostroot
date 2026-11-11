@@ -7,7 +7,7 @@ import (
 )
 
 // diskRecipe returns valid.toml as a disk recipe: the target named, no
-// [wsl], and a [disk] that asks for a size and a qcow2.
+// [wsl], and a [disk] that asks for a size.
 func diskRecipe(t *testing.T) Recipe {
 	t.Helper()
 	imageRecipe := loadValidRecipe(t)
@@ -15,7 +15,7 @@ func diskRecipe(t *testing.T) Recipe {
 	// valid.toml is 22.04's, which builds no disk.
 	imageRecipe.Image.Release = "26.04"
 	imageRecipe.WSL = WSL{}
-	imageRecipe.Disk = &Disk{Size: "16G", Formats: []string{DiskFormatQcow2}}
+	imageRecipe.Disk = &Disk{Size: "16G"}
 	return imageRecipe
 }
 
@@ -48,7 +48,6 @@ sudo = true
 
 [disk]
 size = "16G"
-formats = ["qcow2"]
 
 [locale]
 lang = "en_US.UTF-8"
@@ -64,7 +63,7 @@ include = ["git"]
 	want := Recipe{
 		Image:    Image{Name: "lab", Release: "26.04", Arch: "amd64", Target: TargetDisk},
 		User:     User{Name: "student", Sudo: true},
-		Disk:     &Disk{Size: "16G", Formats: []string{DiskFormatQcow2}},
+		Disk:     &Disk{Size: "16G"},
 		Locale:   Locale{Lang: "en_US.UTF-8", Timezone: "UTC"},
 		Packages: Packages{Include: []string{"git"}},
 	}
@@ -74,11 +73,28 @@ include = ["git"]
 	if problems := Validate(imageRecipe); len(problems) != 0 {
 		t.Errorf("Validate = %q", problems)
 	}
-	// [disk] may be left out, and Fedora builds disks too.
+	// [disk] may be left out.
+	imageRecipe.Disk = nil
+	if problems := Validate(imageRecipe); len(problems) != 0 {
+		t.Errorf("a disk recipe without [disk]: %q", problems)
+	}
+}
+
+// TestValidateRefusesAFedoraDisk: validate said ok of a Fedora disk recipe,
+// which build then refused as coming in a later version, and the form wrote
+// it.
+func TestValidateRefusesAFedoraDisk(t *testing.T) {
+	imageRecipe := diskRecipe(t)
 	imageRecipe.Disk = nil
 	imageRecipe.Image.Distro, imageRecipe.Image.Release, imageRecipe.Packages.Include = "fedora", "44", []string{"gcc"}
+	imageRecipe.Sources, imageRecipe.Python, imageRecipe.Certificates = nil, nil, nil
+	problems := Validate(imageRecipe)
+	if want := "a Fedora disk image comes in a later version of frostroot"; len(problems) != 1 || !strings.Contains(problems[0], want) {
+		t.Errorf("Validate = %q, want the one problem %q", problems, want)
+	}
+	imageRecipe.Image.Target = TargetWSL
 	if problems := Validate(imageRecipe); len(problems) != 0 {
-		t.Errorf("a Fedora disk recipe without [disk]: %q", problems)
+		t.Errorf("the same recipe for WSL: %q", problems)
 	}
 }
 
@@ -102,9 +118,11 @@ func TestValidateRefusesWhatATargetCannotUse(t *testing.T) {
 		{"a size with too many digits", func(r *Recipe) { r.Disk.Size = "12345678G" }, "invalid disk.size"},
 		{"a size smaller than the ESP allows", func(r *Recipe) { r.Disk.Size = "512M" }, "out of range"},
 		{"a size larger than 64T", func(r *Recipe) { r.Disk.Size = "65537G" }, "out of range"},
+		// A qcow2 was accepted, offered and documented, and none was ever
+		// written: the build exited 0 with the raw image alone.
+		{"qcow2", func(r *Recipe) { r.Disk.Formats = []string{"qcow2"} }, "disk.formats: qcow2 comes in a later version of frostroot; this one writes the raw image only"},
 		{"vhdx", func(r *Recipe) { r.Disk.Formats = []string{"vhdx"} }, "vhdx comes in a later version"},
-		{"raw named", func(r *Recipe) { r.Disk.Formats = []string{"raw"} }, "the raw image is always written"},
-		{"qcow2 twice", func(r *Recipe) { r.Disk.Formats = []string{"qcow2", "qcow2"} }, "disk.formats names qcow2 twice"},
+		{"raw named", func(r *Recipe) { r.Disk.Formats = []string{"raw"} }, "writes the raw image only, so leave formats out"},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -230,6 +248,40 @@ func TestLockRoundTripWithADisk(t *testing.T) {
 	for _, want := range []string{`target = 'disk'`, "[disk]", "seed = '6f9619ff-8b86-4011-b42d-00c04fc964ff'", "[[disk_tools]]"} {
 		if !strings.Contains(content, want) {
 			t.Errorf("lock lacks %q:\n%s", want, content)
+		}
+	}
+}
+
+// TestALockRecordsTheDiskSizeAskedFor: a disk sized to fit is recorded as
+// such, apart from a lock written before the size was recorded, so that an
+// offline build can tell a recipe that asks for another size.
+func TestALockRecordsTheDiskSizeAskedFor(t *testing.T) {
+	toFit, asked := "", "32G"
+	for _, testCase := range []struct {
+		size       *string
+		wantLine   string
+		wantNoLine bool
+	}{
+		{size: nil, wantNoLine: true},
+		{size: &toFit, wantLine: "size = ''"},
+		{size: &asked, wantLine: "size = '32G'"},
+	} {
+		original := sampleLock()
+		original.Target = TargetDisk
+		original.Disk = &LockDisk{Size: testCase.size, Seed: "6f9619ff-8b86-4011-b42d-00c04fc964ff", DiskBytes: 2522873856, ESPBytes: 536870912, RootBytes: 1983905792, Shim: "shimx64.efi.signed.latest"}
+		path, content := saveAndRead(t, original)
+		reloaded, err := LoadLock(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(reloaded.Disk, original.Disk) {
+			t.Errorf("[disk] round trip = %+v, want %+v\n%s", reloaded.Disk, original.Disk, content)
+		}
+		if testCase.wantNoLine && strings.Contains(content, "size =") {
+			t.Errorf("a lock that records no size says one:\n%s", content)
+		}
+		if !testCase.wantNoLine && !strings.Contains(content, testCase.wantLine) {
+			t.Errorf("lock lacks %q:\n%s", testCase.wantLine, content)
 		}
 	}
 }

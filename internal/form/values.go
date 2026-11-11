@@ -76,7 +76,6 @@ func Defaults(host Host) Values {
 		KeyPPAs:           "",
 		KeyTarget:         recipe.TargetWSL,
 		KeyDiskSize:       "",
-		KeyDiskQcow2:      false,
 	}
 }
 
@@ -180,7 +179,6 @@ func FromRecipe(imageRecipe recipe.Recipe) Values {
 		KeyTarget:               imageRecipe.Target(),
 		keyOriginalTarget:       imageRecipe.Image.Target,
 		KeyDiskSize:             imageRecipe.DiskSize(),
-		KeyDiskQcow2:            slices.Contains(imageRecipe.DiskFormats(), recipe.DiskFormatQcow2),
 	}
 }
 
@@ -244,13 +242,10 @@ func recipeTarget(values Values) string {
 
 // diskTable returns a disk recipe's [disk] table. It is always written, so
 // that the recipe shows where the disk's settings go even when it takes
-// every default.
+// every default. It names no formats: the raw image is the only one built
+// so far.
 func diskTable(values Values) *recipe.Disk {
-	disk := &recipe.Disk{Size: values.String(KeyDiskSize)}
-	if values.Bool(KeyDiskQcow2) {
-		disk.Formats = []string{recipe.DiskFormatQcow2}
-	}
-	return disk
+	return &recipe.Disk{Size: values.String(KeyDiskSize)}
 }
 
 // certificatePaths returns every certificate the answers name: those the
@@ -336,11 +331,7 @@ func Summary(values Values) string {
 		if size == "" {
 			size = "sized to fit"
 		}
-		formats := "raw"
-		if slices.Contains(imageRecipe.DiskFormats(), recipe.DiskFormatQcow2) {
-			formats = "raw and qcow2"
-		}
-		lines = append(lines, fmt.Sprintf("Disk      %s, %s; the root grows to fill its disk", size, formats))
+		lines = append(lines, fmt.Sprintf("Disk      %s, raw; the root grows to fill its disk", size))
 	}
 	// In the order the questions were asked, so the recap can be read
 	// against the answers just given.

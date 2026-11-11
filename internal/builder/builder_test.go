@@ -468,32 +468,53 @@ func TestBuildRecordsAutoMarksAsAptWroteThem(t *testing.T) {
 	}
 }
 
-func TestBuildsInOneDirectoryDoNotShareTemporaryFiles(t *testing.T) {
-	// Two builds in the same recipe directory: neither a failing nor a
-	// succeeding build may remove the other's temporary lock. (Concurrent
-	// builds are still last-writer-wins; this only keeps them from sabotaging
-	// each other.)
-	options, _ := newTestOptions(t)
-	otherBuildsLock := filepath.Join(options.RecipeDir, ".frostroot.lock.424242.tmp")
-	if err := os.WriteFile(otherBuildsLock, []byte("theirs"), 0o644); err != nil {
+// TestBuildsLeaveAnotherUsersTemporaryFiles: the hold keeps a user's
+// second build out of a recipe directory, and a build removes the
+// temporary files a killed one of that user left there. Another user's
+// build, or one under sudo, has a hold of its own and may be running in
+// the same directory: its temporary lock and staged output are left alone.
+func TestBuildsLeaveAnotherUsersTemporaryFiles(t *testing.T) {
+	if _, known := fileOwner(mustStat(t, t.TempDir())); !known {
+		t.Skip("this system does not say who owns a file")
+	}
+	recipeDir := t.TempDir()
+	outputPath := filepath.Join(recipeDir, "dist", "lab-ubuntu-24.04-amd64.tar.gz")
+	if err := os.Mkdir(filepath.Dir(outputPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	assertStillTheirs := func(situation string) {
-		t.Helper()
-		content, err := os.ReadFile(otherBuildsLock)
-		if err != nil || string(content) != "theirs" {
-			t.Fatalf("another build's temporary lock was touched by %s: %q, %v", situation, content, err)
+	theirs := []string{
+		filepath.Join(recipeDir, ".frostroot.lock.424242.tmp"),
+		filepath.Join(recipeDir, "dist", ".lab-ubuntu-24.04-amd64.tar.gz.424242.tmp"),
+	}
+	for _, path := range theirs {
+		if err := os.WriteFile(path, []byte("theirs"), 0o644); err != nil {
+			t.Fatal(err)
 		}
 	}
-
-	if _, err := buildWith(&fakeBootstrapper{skipTarball: true}, options); err == nil {
-		t.Fatal("build without a tarball succeeded, want a failure")
+	// The files are this test's; to a build of another uid they are
+	// another user's.
+	removeLeftovers(recipeDir, os.Getuid()+1, outputPath)
+	for _, path := range theirs {
+		if content, err := os.ReadFile(path); err != nil || string(content) != "theirs" {
+			t.Errorf("another user's %s was touched: %q, %v", filepath.Base(path), content, err)
+		}
 	}
-	assertStillTheirs("a failed build")
-	if _, err := buildWith(&fakeBootstrapper{}, options); err != nil {
+	removeLeftovers(recipeDir, os.Getuid(), outputPath)
+	for _, path := range theirs {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the user's own leftover %s is still there: Stat error = %v", filepath.Base(path), err)
+		}
+	}
+}
+
+// mustStat returns the file information of path.
+func mustStat(t *testing.T, path string) os.FileInfo {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	assertStillTheirs("a successful build")
+	return info
 }
 
 func TestBuildRefusesUnwritableOutputBeforeBootstrapping(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"sync/atomic"
@@ -25,6 +26,7 @@ import (
 // vendorFixture is a lock with two packages and a server holding their files.
 type vendorFixture struct {
 	recipeDir string
+	cacheHome string // XDG_CACHE_HOME, where vendor's hold on the recipe directory is
 	lock      recipe.Lockfile
 	server    *httptest.Server
 	files     map[string][]byte // URL path to content; read only once the server runs
@@ -36,7 +38,7 @@ type vendorFixture struct {
 // names; a nil entry in files answers 404.
 func newVendorFixture(t *testing.T) *vendorFixture {
 	t.Helper()
-	fixture := &vendorFixture{recipeDir: t.TempDir(), files: map[string][]byte{}}
+	fixture := &vendorFixture{recipeDir: t.TempDir(), cacheHome: t.TempDir(), files: map[string][]byte{}}
 	fixture.lock = recipe.Lockfile{Version: 1, Distro: "ubuntu", Release: "24.04", Suite: "noble", Arch: "amd64", FrostrootVersion: "0.4.0", Requested: []string{"curl"}}
 	for _, name := range []string{"curl", "libc6"} {
 		content := []byte("deb " + name + strings.Repeat(".", 50))
@@ -213,6 +215,7 @@ func newVendorApp(fixture *vendorFixture, stdout, stderr *bytes.Buffer) *App {
 		Stderr:         stderr,
 		RecipeDir:      fixture.recipeDir,
 		GOOS:           "linux",
+		Getenv:         environmentWith(map[string]string{"XDG_CACHE_HOME": fixture.cacheHome}),
 		VendorFallback: func(pool.Entry) string { return "" },
 		VendorClient:   fixture.server.Client(),
 	}
@@ -355,6 +358,53 @@ func TestVendorRefusals(t *testing.T) {
 				t.Error("a refused vendor must not download")
 			}
 		})
+	}
+}
+
+// TestVendorThatCannotWriteItsPoolIsAUserError: a vendor/ that could not be
+// created exited 2, as a failed download does, where build says 1 of a dist/
+// it cannot write; and it said so only once the downloads had started.
+func TestVendorThatCannotWriteItsPoolIsAUserError(t *testing.T) {
+	fixture := newVendorFixture(t)
+	if err := os.WriteFile(filepath.Join(fixture.recipeDir, "vendor"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor"})
+	if exitCode != exitUserError || !strings.Contains(stderr.String(), "cannot write the vendored files") {
+		t.Fatalf("exit code = %d, stderr %s; want %d saying the pool cannot be written", exitCode, stderr.String(), exitUserError)
+	}
+	if fixture.requests.Load() != 0 {
+		t.Error("vendor downloaded into a pool it cannot write")
+	}
+}
+
+// A build in the same directory may place a new lock at any moment, and
+// vendor reads it once: it waits for nothing and fetches nothing.
+func TestVendorRefusesWhileABuildHoldsTheRecipeDir(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("recipe directories are held on Linux only")
+	}
+	fixture := newVendorFixture(t)
+	hold, err := builder.HoldRecipeDir(environmentWith(map[string]string{"XDG_CACHE_HOME": fixture.cacheHome}), fixture.recipeDir, "build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor"})
+	hold.Release()
+	if exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d; stderr %s", exitCode, exitUserError, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "another frostroot build or vendor is running") || !strings.Contains(stderr.String(), "frostroot build, process") {
+		t.Errorf("stderr does not name the build holding the directory:\n%s", stderr.String())
+	}
+	if fixture.requests.Load() != 0 {
+		t.Error("a refused vendor must not download")
+	}
+	stderr.Reset()
+	if exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor"}); exitCode != exitSuccess {
+		t.Errorf("vendor once the build is done: exit code = %d, stderr %s", exitCode, stderr.String())
 	}
 }
 
@@ -520,12 +570,7 @@ func TestVendorGoesOnWhenTheScreenFails(t *testing.T) {
 	app := newVendorApp(fixture, &stdout, &stderr)
 	app.Stdin = failingReader{}
 	app.IsTerminal = terminalChecker(true)
-	app.Getenv = func(name string) string {
-		if name == "TERM" {
-			return "xterm-256color"
-		}
-		return ""
-	}
+	app.Getenv = environmentWith(map[string]string{"TERM": "xterm-256color", "XDG_CACHE_HOME": fixture.cacheHome})
 
 	exitCode := make(chan int, 1)
 	go func() { exitCode <- app.Run([]string{"vendor"}) }()

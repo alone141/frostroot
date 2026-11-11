@@ -10,13 +10,12 @@ import (
 	"frostroot/internal/recipe"
 )
 
-// diskAnswers returns the defaults as a disk recipe's, with a size and a
-// qcow2 asked for.
+// diskAnswers returns the defaults as a disk recipe's, with a size asked
+// for.
 func diskAnswers() Values {
 	values := Defaults(noHost)
 	values[KeyTarget] = recipe.TargetDisk
 	values[KeyDiskSize] = "16G"
-	values[KeyDiskQcow2] = true
 	return values
 }
 
@@ -42,17 +41,18 @@ func TestTheTargetIsAskedAfterTheRelease(t *testing.T) {
 }
 
 // TestADiskRecipesPlainQuestions: a disk recipe asks no systemd question,
-// which is wsl.conf's, and asks the disk's size and qcow2 after the locale;
-// its name and user are described as a disk's.
+// which is wsl.conf's, and asks the disk's size after the locale, and no
+// format besides the raw image, which is the only one built so far; its
+// name and user are described as a disk's.
 func TestADiskRecipesPlainQuestions(t *testing.T) {
 	plain := Fixed{Family: true, Target: true}
 	ubuntu := FieldsFor(Fields(noHost), Variant{Family: distro.Ubuntu, Target: recipe.TargetDisk}, plain)
-	want := []string{KeyImageName, KeyRelease, KeyUserName, KeySudo, KeyTimezone, KeyLocale, KeyDiskSize, KeyDiskQcow2, KeySources, KeyPPAs, KeyPackages, KeyOtherPackages, KeyPythonPackages, KeyCertificates}
+	want := []string{KeyImageName, KeyRelease, KeyUserName, KeySudo, KeyTimezone, KeyLocale, KeyDiskSize, KeySources, KeyPPAs, KeyPackages, KeyOtherPackages, KeyPythonPackages, KeyCertificates}
 	if got := keysOf(ubuntu); !slices.Equal(got, want) {
 		t.Errorf("an Ubuntu disk recipe asks %q, want %q", got, want)
 	}
 	fedora := FieldsFor(Fields(noHost), Variant{Family: distro.Fedora, Target: recipe.TargetDisk}, plain)
-	want = []string{KeyImageName, KeyRelease, KeyUserName, KeySudo, KeyTimezone, KeyLocale, KeyDiskSize, KeyDiskQcow2, KeyPackages, KeyOtherPackages}
+	want = []string{KeyImageName, KeyRelease, KeyUserName, KeySudo, KeyTimezone, KeyLocale, KeyDiskSize, KeyPackages, KeyOtherPackages}
 	if got := keysOf(fedora); !slices.Equal(got, want) {
 		t.Errorf("a Fedora disk recipe asks %q, want %q", got, want)
 	}
@@ -71,7 +71,7 @@ func TestFieldsForWithTheTargetAsked(t *testing.T) {
 	if slices.Contains(keys, KeyDistro) || !slices.Contains(keys, KeyTarget) {
 		t.Errorf("asks %q; want the target and not the family", keys)
 	}
-	for _, key := range []string{KeySystemd, KeyDiskSize, KeyDiskQcow2} {
+	for _, key := range []string{KeySystemd, KeyDiskSize} {
 		if !slices.Contains(keys, key) {
 			t.Errorf("asks no %s; both targets' questions are wanted", key)
 		}
@@ -86,7 +86,7 @@ func TestADiskRecipeFromTheAnswers(t *testing.T) {
 	if imageRecipe.Image.Target != recipe.TargetDisk || imageRecipe.WSL != (recipe.WSL{}) {
 		t.Errorf("target %q, [wsl] %+v; want disk, and no [wsl]", imageRecipe.Image.Target, imageRecipe.WSL)
 	}
-	if want := (&recipe.Disk{Size: "16G", Formats: []string{recipe.DiskFormatQcow2}}); !reflect.DeepEqual(imageRecipe.Disk, want) {
+	if want := (&recipe.Disk{Size: "16G"}); !reflect.DeepEqual(imageRecipe.Disk, want) {
 		t.Errorf("[disk] = %+v, want %+v", imageRecipe.Disk, want)
 	}
 	if problems := recipe.Validate(imageRecipe); len(problems) != 0 {
@@ -98,7 +98,7 @@ func TestADiskRecipeFromTheAnswers(t *testing.T) {
 	// Taking every default still writes [disk], so the recipe shows where
 	// the disk's settings go.
 	values := diskAnswers()
-	values[KeyDiskSize], values[KeyDiskQcow2] = "", false
+	values[KeyDiskSize] = ""
 	if got := ToRecipe(values).Disk; !reflect.DeepEqual(got, &recipe.Disk{}) {
 		t.Errorf("[disk] of the defaults = %+v, want an empty table", got)
 	}
@@ -137,7 +137,7 @@ func TestTheRecipeNamesItsTargetOnlyWhenItMust(t *testing.T) {
 
 func TestSummaryOfADiskRecipe(t *testing.T) {
 	summary := Summary(diskAnswers())
-	for _, want := range []string{"Image     lab, Ubuntu 26.04 amd64, disk image", "System    UTC, en_US.UTF-8\n", "Disk      16G, raw and qcow2; the root grows to fill its disk"} {
+	for _, want := range []string{"Image     lab, Ubuntu 26.04 amd64, disk image", "System    UTC, en_US.UTF-8\n", "Disk      16G, raw; the root grows to fill its disk"} {
 		if !strings.Contains(summary+"\n", want) {
 			t.Errorf("summary lacks %q:\n%s", want, summary)
 		}
@@ -146,7 +146,7 @@ func TestSummaryOfADiskRecipe(t *testing.T) {
 		t.Errorf("a disk recipe's summary speaks of systemd, which is wsl.conf's:\n%s", summary)
 	}
 	values := diskAnswers()
-	values[KeyDiskSize], values[KeyDiskQcow2] = "", false
+	values[KeyDiskSize] = ""
 	if summary := Summary(values); !strings.Contains(summary, "Disk      sized to fit, raw;") {
 		t.Errorf("summary of the disk defaults:\n%s", summary)
 	}

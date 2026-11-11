@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"frostroot/internal/builder"
+	"frostroot/internal/export"
 	"frostroot/internal/pki"
 	"frostroot/internal/pool"
 	"frostroot/internal/recipe"
@@ -59,6 +60,15 @@ func (a *App) runVendor(args []string) int {
 			return exitUserError
 		}
 	}
+	// No build or other vendor of this user runs in the directory until
+	// this one is done: one that placed a new lock while this one read the
+	// old one would leave a pool for neither.
+	hold, err := builder.HoldRecipeDir(a.Getenv, a.RecipeDir, "vendor")
+	if err != nil {
+		a.stderrf("frostroot: %v\n", err)
+		return exitUserError
+	}
+	defer hold.Release()
 	lockPath := filepath.Join(a.RecipeDir, builder.LockFileName)
 	lock, err := recipe.LoadLock(lockPath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -154,6 +164,9 @@ func (a *App) runVendor(args []string) int {
 	case errors.Is(outcome.Err, context.Canceled) || outcome.Interrupted:
 		a.stderrf("frostroot: vendor interrupted; finished downloads are kept, so rerunning resumes\n")
 		return exitInterrupted
+	case errors.Is(outcome.Err, errVendorFiles):
+		a.stderrf("frostroot vendor: %v\n", outcome.Err)
+		return exitUserError
 	case outcome.Err != nil:
 		a.stderrf("frostroot vendor: %v\n", outcome.Err)
 		if errors.Is(outcome.Err, pool.ErrNotFound) {
@@ -323,6 +336,9 @@ func (r *vendorRun) allEntries() []pool.Entry {
 // goes.
 func (r *vendorRun) do(ctx context.Context) error {
 	report := func(event builder.ProgressEvent) { r.progress.Report(event) }
+	if err := r.checkPoolsWritable(); err != nil {
+		return err
+	}
 	report(builder.ProgressEvent{Phase: builder.PhaseVendorRead, Kind: builder.EventPhaseStarted})
 	report(builder.ProgressEvent{Phase: builder.PhaseVendorRead, Kind: builder.EventLogLine, Line: fmt.Sprintf("%s: %s, %s, from %s", builder.LockFileName, packageCount(len(r.entries)), builder.FormatBytes(pool.TotalSize(r.entries)), r.source)})
 	if len(r.wheelEntries) > 0 {
@@ -361,9 +377,12 @@ func (r *vendorRun) do(ctx context.Context) error {
 		// pruning: drop [python] from a recipe and every wheel on disk is a
 		// file the lock does not name. Prune is a no-op on a directory that
 		// is not there.
-		pruned, err := pool.Prune(prunable.dir, prunable.entries)
+		pruned, err := pool.Prune(ctx, prunable.dir, prunable.entries)
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
 		if err != nil {
-			return fmt.Errorf("pruning %s: %w", prunable.name, err)
+			return fmt.Errorf("%w: pruning %s: %w", errVendorFiles, prunable.name, err)
 		}
 		r.pruned = append(r.pruned, pruned...)
 		for _, removed := range pruned {
@@ -377,6 +396,34 @@ func (r *vendorRun) do(ctx context.Context) error {
 // fetchPool fills one pool directory, adding what it did to the run's
 // summary. downloading says whether the download phase has been announced
 // yet, so that two pools still report one phase.
+// errVendorFiles is a failure to create, write or prune the pools, which
+// the person can fix, unlike a download that fails.
+var errVendorFiles = errors.New("cannot write the vendored files")
+
+// checkPoolsWritable creates the pools vendor fills and checks that a file
+// can be written into each, so that a vendor/ that cannot be created, or a
+// pool a sudo run left owned by root, is said before any download, as
+// build says of dist/.
+func (r *vendorRun) checkPoolsWritable() error {
+	dirs := []string{r.poolDir}
+	if len(r.wheelEntries) > 0 {
+		dirs = append(dirs, r.wheelPoolDir)
+	}
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("%w: %w", errVendorFiles, err)
+		}
+		probe, err := export.CreateTemp(dir, ".frostroot-write-check-*.tmp")
+		if err != nil {
+			return fmt.Errorf("%w: %w", errVendorFiles, err)
+		}
+		// Best effort: the file is empty, and a prune would remove it.
+		_ = probe.Close()
+		_ = os.Remove(probe.Name())
+	}
+	return nil
+}
+
 func (r *vendorRun) fetchPool(ctx context.Context, report func(builder.ProgressEvent), downloading *bool, poolName, dir string, entries []pool.Entry, mirrorURL string, fallback func(pool.Entry) string) error {
 	sizesUnknown := poolSize(entries) == ""
 	summary, err := pool.Fetch(ctx, pool.FetchOptions{

@@ -2,6 +2,7 @@ package export
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -106,7 +107,7 @@ func renameAcrossFilesystems(oldPath, newPath string) error {
 func TestStageCreatesParentAndMoves(t *testing.T) {
 	sourcePath := writeSourceFile(t, "payload")
 	destinationPath := filepath.Join(t.TempDir(), "dist", "cpp-lab-ubuntu-22.04-amd64.tar.gz")
-	stagedPath, err := Stage(sourcePath, destinationPath, nil)
+	stagedPath, err := Stage(context.Background(), sourcePath, destinationPath, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +128,7 @@ func TestStageCopiesAcrossFilesystems(t *testing.T) {
 	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
 	writeExistingFile(t, destinationPath, "previous")
 
-	stagedPath, err := stage(sourcePath, destinationPath, renameAcrossFilesystems, nil)
+	stagedPath, err := stage(context.Background(), sourcePath, destinationPath, renameAcrossFilesystems, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +153,7 @@ func TestStageReportsCopyProgress(t *testing.T) {
 	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
 	var reports [][2]int64
 	onProgress := func(copiedBytes, totalBytes int64) { reports = append(reports, [2]int64{copiedBytes, totalBytes}) }
-	if _, err := stage(sourcePath, destinationPath, renameAcrossFilesystems, onProgress); err != nil {
+	if _, err := stage(context.Background(), sourcePath, destinationPath, renameAcrossFilesystems, onProgress); err != nil {
 		t.Fatal(err)
 	}
 	if len(reports) == 0 {
@@ -162,7 +163,7 @@ func TestStageReportsCopyProgress(t *testing.T) {
 		t.Errorf("last report = %v, want the whole file copied out of its size", last)
 	}
 	reports = nil
-	if _, err := stage(writeSourceFile(t, "payload"), filepath.Join(t.TempDir(), "renamed"), os.Rename, onProgress); err != nil {
+	if _, err := stage(context.Background(), writeSourceFile(t, "payload"), filepath.Join(t.TempDir(), "renamed"), os.Rename, onProgress); err != nil {
 		t.Fatal(err)
 	}
 	if len(reports) != 0 {
@@ -184,7 +185,7 @@ func TestStageReportsACopyChunkByChunk(t *testing.T) {
 		}
 		reports = append(reports, copiedBytes)
 	}
-	if _, err := stage(sourcePath, filepath.Join(t.TempDir(), "dist", "out.tar.gz"), renameAcrossFilesystems, onProgress); err != nil {
+	if _, err := stage(context.Background(), sourcePath, filepath.Join(t.TempDir(), "dist", "out.tar.gz"), renameAcrossFilesystems, onProgress); err != nil {
 		t.Fatal(err)
 	}
 	distinct := slices.Compact(slices.Clone(reports))
@@ -196,13 +197,40 @@ func TestStageReportsACopyChunkByChunk(t *testing.T) {
 	}
 }
 
+// TestStageStopsACanceledCopy: Ctrl-C during the copy onto a Windows drive
+// waited for the whole tarball, gigabytes of it. The copy stops at the next
+// chunk now, and leaves nothing beside the destination.
+func TestStageStopsACanceledCopy(t *testing.T) {
+	size := 3*copyChunkBytes + 17
+	sourcePath := writeSourceFile(t, strings.Repeat("x", size))
+	distDir := filepath.Join(t.TempDir(), "dist")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var reports []int64
+	onProgress := func(copiedBytes, _ int64) {
+		reports = append(reports, copiedBytes)
+		cancel()
+	}
+	_, err := stage(ctx, sourcePath, filepath.Join(distDir, "out.tar.gz"), renameAcrossFilesystems, onProgress)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("stage error = %v, want context.Canceled", err)
+	}
+	if len(reports) != 1 {
+		t.Errorf("reports = %v, want the copy stopped after its first chunk", reports)
+	}
+	assertDirectoryHolds(t, distDir)
+	if _, err := os.Stat(sourcePath); err != nil {
+		t.Errorf("the source must stay where it was: %v", err)
+	}
+}
+
 func TestStageAcrossFilesystemsRespectsUmaskWithoutChmod(t *testing.T) {
 	// dist/ is routinely on a drvfs mount of a Windows drive, where chmod
 	// fails with EPERM. The copy must not depend on chmod: the temporary file
 	// is created with its final mode and the umask applies, as for any file a
 	// user creates.
 	setUmask(t, 0o027)
-	stagedPath, err := stage(writeSourceFile(t, "payload"), filepath.Join(t.TempDir(), "dist", "out.tar.gz"), renameAcrossFilesystems, nil)
+	stagedPath, err := stage(context.Background(), writeSourceFile(t, "payload"), filepath.Join(t.TempDir(), "dist", "out.tar.gz"), renameAcrossFilesystems, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +249,7 @@ func TestStageLeavesOtherTemporaryFilesAlone(t *testing.T) {
 	otherBuildsTemporary := filepath.Join(distDir, ".out.tar.gz.12345.tmp")
 	writeExistingFile(t, otherBuildsTemporary, "theirs")
 
-	stagedPath, err := stage(writeSourceFile(t, "ours"), filepath.Join(distDir, "out.tar.gz"), renameAcrossFilesystems, nil)
+	stagedPath, err := stage(context.Background(), writeSourceFile(t, "ours"), filepath.Join(distDir, "out.tar.gz"), renameAcrossFilesystems, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +263,7 @@ func TestStageLeavesOtherTemporaryFilesAlone(t *testing.T) {
 func TestStageAcrossFilesystemsWithMissingSource(t *testing.T) {
 	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
 	missingSource := filepath.Join(t.TempDir(), "absent.tar.gz")
-	if _, err := stage(missingSource, destinationPath, renameAcrossFilesystems, nil); err == nil {
+	if _, err := stage(context.Background(), missingSource, destinationPath, renameAcrossFilesystems, nil); err == nil {
 		t.Fatal("stage succeeded, want an error for the missing source")
 	}
 	assertDirectoryHolds(t, filepath.Dir(destinationPath))
@@ -250,7 +278,7 @@ func TestStageDoesNotCopyOnOtherRenameErrors(t *testing.T) {
 	sourcePath := writeSourceFile(t, "payload")
 	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
 
-	_, err := stage(sourcePath, destinationPath, renameDenied, nil)
+	_, err := stage(context.Background(), sourcePath, destinationPath, renameDenied, nil)
 	if !errors.Is(err, syscall.EACCES) {
 		t.Fatalf("stage error = %v, want EACCES", err)
 	}
@@ -263,7 +291,7 @@ func TestUnstagePutsAMovedFileBack(t *testing.T) {
 	// and the image goes back to the work directory the failed build keeps.
 	sourcePath := writeSourceFile(t, "payload")
 	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
-	stagedPath, err := Stage(sourcePath, destinationPath, nil)
+	stagedPath, err := Stage(context.Background(), sourcePath, destinationPath, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +303,7 @@ func TestUnstagePutsAMovedFileBack(t *testing.T) {
 func TestUnstageRemovesACopy(t *testing.T) {
 	sourcePath := writeSourceFile(t, "payload")
 	destinationPath := filepath.Join(t.TempDir(), "dist", "out.tar.gz")
-	stagedPath, err := stage(sourcePath, destinationPath, renameAcrossFilesystems, nil)
+	stagedPath, err := stage(context.Background(), sourcePath, destinationPath, renameAcrossFilesystems, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +365,7 @@ func TestStageKeepsHolesAcrossFilesystems(t *testing.T) {
 	}
 	destinationPath := filepath.Join(t.TempDir(), "dist", "lab.img")
 	var reports [][2]int64
-	stagedPath, err := stage(sourcePath, destinationPath, renameAcrossFilesystems, func(copied, total int64) { reports = append(reports, [2]int64{copied, total}) })
+	stagedPath, err := stage(context.Background(), sourcePath, destinationPath, renameAcrossFilesystems, func(copied, total int64) { reports = append(reports, [2]int64{copied, total}) })
 	if err != nil {
 		t.Fatal(err)
 	}

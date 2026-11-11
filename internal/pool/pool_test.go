@@ -183,7 +183,7 @@ func fetchOptions(t *testing.T, mirror *fakeMirror, entries ...Entry) FetchOptio
 // and no temporary files.
 func assertPoolHolds(t *testing.T, dir string, entries ...Entry) {
 	t.Helper()
-	status, err := Verify(dir, entries, nil)
+	status, err := Verify(context.Background(), dir, entries, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +328,7 @@ func TestVerify(t *testing.T) {
 		}
 	}
 	var checks []int
-	status, err := Verify(dir, []Entry{present, missing, wrongContent, wrongSize}, func(checked, total int) {
+	status, err := Verify(context.Background(), dir, []Entry{present, missing, wrongContent, wrongSize}, func(checked, total int) {
 		if total != 4 {
 			t.Errorf("total = %d, want 4", total)
 		}
@@ -364,16 +364,50 @@ func TestVerify(t *testing.T) {
 	}
 }
 
+// TestVerifyStopsWhenCanceled: Ctrl-C while a pool of gigabytes was checked
+// waited for every file to be hashed.
+func TestVerifyStopsWhenCanceled(t *testing.T) {
+	dir := t.TempDir()
+	var entries []Entry
+	for _, name := range []string{"curl", "git", "libc6"} {
+		entry := entryFor(name, "1")
+		if err := os.WriteFile(filepath.Join(dir, entry.FileName), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		entries = append(entries, entry)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var checks []int
+	_, err := Verify(ctx, dir, entries, func(checked, _ int) {
+		checks = append(checks, checked)
+		cancel()
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Verify error = %v, want context.Canceled", err)
+	}
+	if !slices.Equal(checks, []int{1}) {
+		t.Errorf("checked %v, want the first file only", checks)
+	}
+	if _, err := Prune(ctx, dir, entries[:1]); !errors.Is(err, context.Canceled) {
+		t.Errorf("Prune error = %v, want context.Canceled", err)
+	}
+	for _, entry := range entries {
+		if _, err := os.Stat(filepath.Join(dir, entry.FileName)); err != nil {
+			t.Errorf("a canceled prune removed %s: %v", entry.FileName, err)
+		}
+	}
+}
+
 func TestVerifyMissingDirectory(t *testing.T) {
 	entry := entryFor("curl", "1")
-	status, err := Verify(filepath.Join(t.TempDir(), "nowhere"), []Entry{entry}, nil)
+	status, err := Verify(context.Background(), filepath.Join(t.TempDir(), "nowhere"), []Entry{entry}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(status.Missing) != 1 || !strings.Contains(status.Describe(10), "curl_1_amd64.deb (missing)") {
 		t.Errorf("status = %+v", status)
 	}
-	if complete, err := Verify(t.TempDir(), nil, nil); err != nil || !complete.Complete() || complete.Describe(10) != "" {
+	if complete, err := Verify(context.Background(), t.TempDir(), nil, nil); err != nil || !complete.Complete() || complete.Describe(10) != "" {
 		t.Errorf("an empty pool for an empty manifest is complete: %+v, %v", complete, err)
 	}
 }
@@ -387,7 +421,7 @@ func TestPrune(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	removed, err := Prune(dir, []Entry{keep})
+	removed, err := Prune(context.Background(), dir, []Entry{keep})
 	if err != nil {
 		t.Fatal(err)
 	}

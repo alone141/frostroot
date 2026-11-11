@@ -26,8 +26,8 @@ set -uo pipefail
 e2eRepo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 E2E_ROOT=${FROSTROOT_E2E_ROOT:-/var/tmp/frostroot-e2e-$(id -u)}
 # The family and release the scenarios build: Ubuntu 24.04, the release the
-# runs the README records were made with, unless E2E_RELEASE names another;
-# with E2E_DISTRO=fedora, Fedora 44.
+# runs docs/VERIFICATION.md records were made with, unless E2E_RELEASE names
+# another; with E2E_DISTRO=fedora, Fedora 44.
 E2E_DISTRO=${E2E_DISTRO:-ubuntu}
 case "$E2E_DISTRO" in
 ubuntu) E2E_RELEASE=${E2E_RELEASE:-24.04} ;;

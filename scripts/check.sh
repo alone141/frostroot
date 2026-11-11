@@ -6,9 +6,11 @@
 #
 # usage: scripts/check.sh [--only STEPS] [--skip STEPS] [-- GO-TEST-ARGS...]
 #
-#   STEPS is a comma-separated list of: fmt vet test windows lint vuln
+#   STEPS is a comma-separated list of: fmt vet test windows lint vuln fuzz
 #   The default runs every step but vuln, which needs the network and can
-#   turn red on any day a vulnerability is disclosed, so it runs when asked.
+#   turn red on any day a vulnerability is disclosed, so it runs when asked,
+#   and fuzz, which runs every fuzz target for FROSTROOT_FUZZTIME (10s by
+#   default) each; their seed corpora run with the test step anyway.
 #   GO-TEST-ARGS replace ./... for the test step:
 #     scripts/check.sh --only test -- -run TestInsecure ./internal/cli/
 #
@@ -19,7 +21,7 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 2
 
-allSteps=(fmt vet test windows lint vuln)
+allSteps=(fmt vet test windows lint vuln fuzz)
 defaultSteps=(fmt vet test windows lint)
 # Bump together with release.yml, which installs the same version.
 govulncheckVersion=v1.8.0
@@ -132,6 +134,21 @@ step_test() {
 	else
 		go test -race "${testArgs[@]}"
 	fi
+}
+
+step_fuzz() {
+	# Every fuzz target, one at a time: go test fuzzes one target of one
+	# package per run. A crasher is written under the package's
+	# testdata/fuzz, where every go test then runs it as a seed: commit it
+	# with the fix.
+	local fuzztime=${FROSTROOT_FUZZTIME:-10s} file target status=0
+	while IFS= read -r file; do
+		while IFS= read -r target; do
+			echo "$(dirname "$file") $target"
+			go test -run='^$' -fuzz="^${target}\$" -fuzztime="$fuzztime" "./$(dirname "$file")" || status=1
+		done < <(sed -n 's/^func \(Fuzz[A-Za-z0-9_]*\)(f \*testing\.F) {$/\1/p' "$file")
+	done < <(grep -rl --include='*_test.go' '^func Fuzz' internal | sort)
+	return $status
 }
 
 step_windows() {

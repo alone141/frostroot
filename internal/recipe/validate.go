@@ -566,11 +566,17 @@ func targetProblems(imageRecipe Recipe) []string {
 		problems = append(problems, fmt.Sprintf("image name %q is a disk's host name, and a host name has no underscore, double dot, or leading or trailing dot or dash", name))
 	}
 	// An Ubuntu release frostroot makes no disk of: the boot chain and the
-	// first boot were measured on the releases that build one. Fedora's
-	// disk is build's to refuse until it is built.
-	if family, err := distro.FamilyOf(imageRecipe.Image.Distro); err == nil && family == distro.Ubuntu {
-		if release, err := distro.Lookup(imageRecipe.Image.Release, imageRecipe.Image.Arch); err == nil && !release.BuildsDisks() {
-			problems = append(problems, fmt.Sprintf("a disk image is built for Ubuntu %s, not %s", orList(distro.DiskVersions(distro.Ubuntu)), imageRecipe.Image.Release))
+	// first boot were measured on the releases that build one. A Fedora
+	// disk is not built yet, and validate said ok of a recipe build then
+	// refused.
+	if family, err := distro.FamilyOf(imageRecipe.Image.Distro); err == nil {
+		switch family {
+		case distro.Ubuntu:
+			if release, err := distro.Lookup(imageRecipe.Image.Release, imageRecipe.Image.Arch); err == nil && !release.BuildsDisks() {
+				problems = append(problems, fmt.Sprintf("a disk image is built for Ubuntu %s, not %s", orList(distro.DiskVersions(distro.Ubuntu)), imageRecipe.Image.Release))
+			}
+		case distro.Fedora:
+			problems = append(problems, fmt.Sprintf("a Fedora disk image comes in a later version of frostroot; a disk image is built for Ubuntu %s", orList(distro.DiskVersions(distro.Ubuntu))))
 		}
 	}
 	if size := imageRecipe.DiskSize(); size != "" {
@@ -625,15 +631,15 @@ func CheckDiskSize(size string) error {
 	return err
 }
 
-// CheckDiskFormat reports why format cannot be in [disk] formats, or nil.
+// CheckDiskFormat reports why format cannot be in [disk] formats: no format
+// besides the raw image is built yet, and a recipe that asked for one
+// built, exited 0 and wrote no such file.
 func CheckDiskFormat(format string) error {
 	switch format {
-	case DiskFormatQcow2:
-		return nil
-	case "vhdx":
-		return fmt.Errorf("disk.formats: vhdx comes in a later version of frostroot; %s is the format besides the raw image so far", DiskFormatQcow2)
+	case DiskFormatQcow2, "vhdx":
+		return fmt.Errorf("disk.formats: %s comes in a later version of frostroot; this one writes the raw image only, so leave formats out", format)
 	}
-	return fmt.Errorf("invalid disk.formats entry %q (%q; the raw image is always written)", format, DiskFormatQcow2)
+	return fmt.Errorf("invalid disk.formats entry %q: this version of frostroot writes the raw image only, so leave formats out", format)
 }
 
 // CheckPythonPackageName reports why name is not a PyPI distribution name, or

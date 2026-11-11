@@ -20,7 +20,10 @@ type StageProgress func(doneBytes, totalBytes int64)
 // filesystem and copied otherwise, made world-readable so that apt's
 // unprivileged fetcher inside mmdebstrap's user namespace can read it, and
 // then Packages and Release are written. repositoryDir is created 0755. The
-// caller verifies the pool first; Stage does not hash anything.
+// caller verifies the pool first, and apt trusts the index, so the index is
+// written only when every staged file still has its entry's SHA-256: a pool
+// file replaced since the check fails with deb.ErrDigestMismatch instead of
+// being installed.
 func Stage(poolDir string, entries []Entry, repositoryDir string, release deb.FlatRelease, onProgress StageProgress) error {
 	if err := os.MkdirAll(repositoryDir, 0o755); err != nil {
 		return err
@@ -34,6 +37,7 @@ func Stage(poolDir string, entries []Entry, repositoryDir string, release deb.Fl
 	totalBytes := TotalSize(entries)
 	var doneBytes int64
 	fileNames := make([]string, 0, len(entries))
+	wantSHA256 := make(map[string]string, len(entries))
 	for _, entry := range entries {
 		source := filepath.Join(poolDir, entry.FileName)
 		destination := filepath.Join(repositoryDir, entry.FileName)
@@ -45,8 +49,9 @@ func Stage(poolDir string, entries []Entry, repositoryDir string, release deb.Fl
 			onProgress(doneBytes, totalBytes)
 		}
 		fileNames = append(fileNames, entry.FileName)
+		wantSHA256[entry.FileName] = entry.SHA256
 	}
-	if err := deb.WriteFlatRepository(repositoryDir, release, fileNames); err != nil {
+	if err := deb.WriteFlatRepository(repositoryDir, release, fileNames, wantSHA256); err != nil {
 		return fmt.Errorf("writing the repository index: %w", err)
 	}
 	return nil
@@ -83,9 +88,16 @@ func StageFiles(poolDir string, entries []Entry, destinationDir string, onProgre
 // the filesystem allows and the source is already world-readable, a copy
 // otherwise. A link shares the source's mode, and changing that would change
 // the user's pool file too, so a source with another mode is copied. Either
-// way the result is mode 0644 and any earlier destination is replaced.
+// way the result is mode 0644 and any earlier destination is replaced. A
+// source that is a symbolic link stages what it points to, as Verify checked
+// it: a hard link to the link itself would dangle, or point elsewhere, from
+// the destination's directory.
 func linkOrCopy(source, destination string) error {
 	if err := os.Remove(destination); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	source, err := filepath.EvalSymlinks(source)
+	if err != nil {
 		return err
 	}
 	sourceInfo, err := os.Stat(source)

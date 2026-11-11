@@ -37,7 +37,7 @@ func WriteAr(members []ArMember) []byte {
 }
 
 // WriteTar encodes files as a tar archive with "./" names, as dpkg-deb does.
-func WriteTar(t *testing.T, files map[string]string) []byte {
+func WriteTar(t testing.TB, files map[string]string) []byte {
 	t.Helper()
 	var archive bytes.Buffer
 	tarWriter := tar.NewWriter(&archive)
@@ -58,7 +58,7 @@ func WriteTar(t *testing.T, files map[string]string) []byte {
 
 // Compress encodes data with the compressor a control.tar extension names:
 // "" for none, ".gz", ".xz" or ".zst".
-func Compress(t *testing.T, extension string, data []byte) []byte {
+func Compress(t testing.TB, extension string, data []byte) []byte {
 	t.Helper()
 	var compressed bytes.Buffer
 	switch extension {
@@ -102,7 +102,7 @@ func Compress(t *testing.T, extension string, data []byte) []byte {
 
 // Build writes a .deb file named fileName into dir whose control.tar uses
 // the given compression extension and holds control, and returns its path.
-func Build(t *testing.T, dir, fileName, extension, control string) string {
+func Build(t testing.TB, dir, fileName, extension, control string) string {
 	t.Helper()
 	controlTar := Compress(t, extension, WriteTar(t, map[string]string{"control": control, "md5sums": ""}))
 	dataTar := Compress(t, extension, WriteTar(t, map[string]string{"usr/bin/" + fileName: "#!/bin/sh\necho hello\n"}))

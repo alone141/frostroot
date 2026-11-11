@@ -10,7 +10,6 @@ sudo = true
 
 [disk]
 size = "16G"
-formats = ["qcow2"]
 
 [locale]
 lang = "en_US.UTF-8"

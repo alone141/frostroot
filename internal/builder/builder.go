@@ -237,20 +237,42 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		return Result{}, err
 	}
 	if tools != nil {
-		if err := tools.preflight(); err != nil {
+		if err := tools.preflight(ctx); err != nil {
 			return Result{}, err
 		}
 	}
 	if err := checkOutputWritable(options.RecipeDir); err != nil {
 		return Result{}, err
 	}
-	if offline != nil {
-		if err := verifyPool(offline, progress); err != nil {
-			return Result{}, err
-		}
-	}
 	if err := prepareWorkRoot(workRoot, currentUID); err != nil {
 		return Result{}, err
+	}
+	// From here until the build has placed its files or failed, no other
+	// build or vendor of this user runs in the recipe directory: two would
+	// place and read one lock. An offline build read the lock before it
+	// held the directory, so that a recipe a build cannot use is refused
+	// without touching the work root; it checks that no other run replaced
+	// the lock meanwhile.
+	hold, err := holdRecipeDir(workRoot, options.RecipeDir, "build")
+	if err != nil {
+		return Result{}, err
+	}
+	defer hold.Release()
+	placePhase, outputNoun := PhasePlaceTarball, "tarball"
+	tarballPath := filepath.Join(options.RecipeDir, export.TarballRelPath(imageRecipe.Image.Name, string(family), imageRecipe.Image.Release, imageRecipe.Image.Arch))
+	imagePath := filepath.Join(options.RecipeDir, export.ImageRelPath(imageRecipe.Image.Name, string(family), imageRecipe.Image.Release, imageRecipe.Image.Arch))
+	outputPath := tarballPath
+	if disk {
+		placePhase, outputNoun, outputPath = PhasePlaceImage, "image", imagePath
+	}
+	removeLeftovers(options.RecipeDir, currentUID, tarballPath, imagePath)
+	if offline != nil {
+		if err := offline.checkLockUnchanged(); err != nil {
+			return Result{}, err
+		}
+		if err := verifyPool(ctx, offline, progress); err != nil {
+			return Result{}, err
+		}
 	}
 	workDir, err := createBuildDir(workRoot)
 	if err != nil {
@@ -269,7 +291,11 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		// error is the one returned.
 		if tools != nil {
 			// The tree is no evidence of the failure; its log is, and stays.
-			_ = tools.remove(ctx)
+			// A tree that cannot be removed is gigabytes the person has to
+			// remove by hand, possibly owned by ids only one command can.
+			if removeErr := tools.remove(ctx); removeErr != nil {
+				err = errors.Join(err, removeErr)
+			}
 		}
 		if temporaryLockPath != "" {
 			_ = os.Remove(temporaryLockPath)
@@ -338,6 +364,8 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 			lock.Target = recipe.TargetDisk
 			lock.DiskTools = tools.packages
 			locked := layout.lock()
+			requestedSize := imageRecipe.DiskSize()
+			locked.Size = &requestedSize
 			lock.Disk = &locked
 		}
 		result.PythonPackageCount = counts.python
@@ -356,12 +384,6 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 			return failBuild(err)
 		}
 	}
-	placePhase, outputNoun := PhasePlaceTarball, "tarball"
-	outputPath := filepath.Join(options.RecipeDir, export.TarballRelPath(imageRecipe.Image.Name, string(family), imageRecipe.Image.Release, imageRecipe.Image.Arch))
-	if layout != nil {
-		placePhase, outputNoun = PhasePlaceImage, "image"
-		outputPath = filepath.Join(options.RecipeDir, export.ImageRelPath(imageRecipe.Image.Name, string(family), imageRecipe.Image.Release, imageRecipe.Image.Arch))
-	}
 	progress.Report(ProgressEvent{Phase: placePhase, Kind: EventPhaseStarted})
 	reportCopied := func(copiedBytes, totalBytes int64) {
 		progress.Report(ProgressEvent{Phase: placePhase, Kind: EventProgress, Done: copiedBytes, Total: totalBytes, Unit: UnitBytes})
@@ -376,9 +398,15 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	// For the instant between the two renames the lock describes an image
 	// that is beside it under a temporary name, and should the tarball's
 	// rename fail then, the previous lock is put back.
-	stagedOutputPath, err = export.Stage(builtOutputPath, outputPath, reportCopied)
+	stagedOutputPath, err = export.Stage(ctx, builtOutputPath, outputPath, reportCopied)
 	if err != nil {
 		return failBuild(fmt.Errorf("placing %s: %w", outputNoun, err))
+	}
+	// The last moment a Ctrl-C can still mean that nothing was written: the
+	// renames that follow are instant, and the second puts back what the
+	// first replaced only when it fails.
+	if err := ctx.Err(); err != nil {
+		return failBuild(err)
 	}
 	var previousLock []byte
 	lockPlaced, hadPreviousLock := false, false
@@ -449,10 +477,10 @@ func chooseDiskLayout(offline *offlinePlan) (*diskLayout, error) {
 
 // verifyPool checks vendor/debs, or a Fedora lock's vendor/rpms, and
 // vendor/wheels against the lock, as a phase with a files bar, before any
-// work directory exists.
-func verifyPool(offline *offlinePlan, progress Progress) error {
+// work directory exists. A canceled ctx stops it between two files.
+func verifyPool(ctx context.Context, offline *offlinePlan, progress Progress) error {
 	progress.Report(ProgressEvent{Phase: PhaseVerifyVendored, Kind: EventPhaseStarted})
-	status, err := pool.Verify(offline.poolDir, offline.entries, func(checked, total int) {
+	status, err := pool.Verify(ctx, offline.poolDir, offline.entries, func(checked, total int) {
 		progress.Report(ProgressEvent{Phase: PhaseVerifyVendored, Kind: EventProgress, Done: int64(checked), Total: int64(total), Unit: UnitFiles})
 	})
 	if err != nil {
@@ -462,7 +490,7 @@ func verifyPool(offline *offlinePlan, progress Progress) error {
 		return fmt.Errorf("%w: %s in %s; run frostroot vendor", ErrPoolIncomplete, status.Describe(maxNamedPoolProblems), pool.DirName(offline.lock))
 	}
 	if len(offline.wheelEntries) > 0 {
-		wheelStatus, err := pool.Verify(offline.wheelPoolDir, offline.wheelEntries, nil)
+		wheelStatus, err := pool.Verify(ctx, offline.wheelPoolDir, offline.wheelEntries, nil)
 		if err != nil {
 			return fmt.Errorf("checking %s: %w", offline.wheelPoolDir, err)
 		}
@@ -519,10 +547,20 @@ func stageRepository(offline *offlinePlan, repositoryDir string, progress Progre
 		progress.Report(ProgressEvent{Phase: PhasePrepareRepository, Kind: EventProgress, Done: doneBytes, Total: totalBytes, Unit: UnitBytes})
 	})
 	if err != nil {
-		return fmt.Errorf("preparing the local repository: %w", err)
+		return fmt.Errorf("preparing the local repository: %w", stagingError(err, offline))
 	}
 	progress.Report(ProgressEvent{Phase: PhasePrepareRepository, Kind: EventPhaseFinished})
 	return nil
+}
+
+// stagingError is err, from staging the pool into a local repository, as
+// a pool problem the person can fix when a file was replaced after the pool
+// was checked.
+func stagingError(err error, offline *offlinePlan) error {
+	if errors.Is(err, deb.ErrDigestMismatch) {
+		return fmt.Errorf("%w: %w; a file in %s changed while the build ran, run frostroot vendor", ErrPoolIncomplete, err, pool.DirName(offline.lock))
+	}
+	return err
 }
 
 // createBuildDir creates a new, uniquely named build directory under workRoot.

@@ -228,6 +228,43 @@ func TestRunFormEndToEnd(t *testing.T) {
 			t.Errorf("err = %v, want ErrCanceled", err)
 		}
 	})
+	// The CLI sends answers that cannot be written back to the form with a
+	// note on the Image page, above the questions that decide them.
+	t.Run("a note on the Image page", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		keys := make([]string, 0, maxKeyPresses)
+		for range maxKeyPresses {
+			keys = append(keys, "\r")
+		}
+		fields := append([]form.Field{form.NoteField(form.PageImage, "Not written yet", "Change these, then write again:\n  a problem")}, form.Fields(noHost)...)
+		values, err := RunForm(ctx, fields, form.Defaults(noHost), nil, pacedKeys(keys...), io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := form.ToRecipe(values), form.ToRecipe(form.Defaults(noHost)); !reflect.DeepEqual(got, want) {
+			t.Errorf("accepting every default past the note gave\n%+v\nwant\n%+v", got, want)
+		}
+	})
+	// No on the summary page is the plain interface's no to its last
+	// question, not an interrupt: the two exited alike only by accident.
+	t.Run("declining to write", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		var sudo []form.Field
+		for _, field := range form.Fields(noHost) {
+			if field.Key == form.KeySudo {
+				sudo = append(sudo, field)
+			}
+		}
+		values, err := RunForm(ctx, sudo, form.Defaults(noHost), nil, pacedKeys("\r", "n"), io.Discard)
+		if !errors.Is(err, ErrDeclined) {
+			t.Fatalf("err = %v, want ErrDeclined", err)
+		}
+		if values == nil || !values.Bool(form.KeySudo) {
+			t.Errorf("values = %v, want the answers given", values)
+		}
+	})
 }
 
 // TestSummaryGainsTheWarningWhenTheIndexLands: the preview, and with it the
