@@ -250,9 +250,9 @@ Hand-typed alternatives break in ways that are easy to miss:
   `docs/superpowers/reviews/` holds dated findings. The audit there is a
   point-in-time record and is never edited after the fact; its issues
   track what changed.
-- **Verification:** the README's "Verification" section records what was
-  run for real, one paragraph per version. Add yours after you have run it,
-  not before.
+- **Verification:** [docs/VERIFICATION.md](docs/VERIFICATION.md) records
+  what was run for real, one paragraph per version. Add yours after you
+  have run it, not before.
 - **Releases:** `builder.Version` must equal the tag, or `release.yml`
   refuses to publish. Keep the line as `const Version = "X.Y.Z"`, because
   the workflow reads it with sed. Pushing the tag is the owner's decision.
