@@ -10,8 +10,8 @@ Image
   Fedora 44
 
   Target
+  A disk image is built for Ubuntu 24.04 or 26.04
   WSL  (a tarball for wsl --import)
-
 
 
 

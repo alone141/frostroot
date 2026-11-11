@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"frostroot/internal/distro"
 	"frostroot/internal/form"
 	"frostroot/internal/recipe"
 )
@@ -101,5 +102,106 @@ func TestFormEditsADiskRecipe(t *testing.T) {
 	d.pressEnterUntil(stageDone)
 	if got := form.ToRecipe(d.model.binding.values()); !reflect.DeepEqual(got, original) {
 		t.Errorf("an unchanged disk recipe came back as\n%+v\nwant\n%+v", got, original)
+	}
+}
+
+// toTheRelease presses Shift-Tab from the target back up to the release.
+func (d *formDriver) toTheRelease() {
+	d.t.Helper()
+	d.press(pressShiftTab)
+	if focused := d.model.pages.GetFocusedField(); focused == nil || focused.GetKey() != form.KeyRelease {
+		d.t.Fatalf("the release does not have the focus before the target:\n%s", d.model.View())
+	}
+}
+
+// TestFormOffersADiskImageOnlyWhereOneIsBuilt: the target offers a disk
+// image for Ubuntu 24.04 and 26.04, and for the other releases and Fedora
+// offers WSL alone and says where a disk image is built.
+func TestFormOffersADiskImageOnlyWhereOneIsBuilt(t *testing.T) {
+	for _, test := range []struct {
+		family  distro.Family
+		release string
+		want    string
+	}{
+		{distro.Ubuntu, "20.04", recipe.TargetWSL},
+		{distro.Ubuntu, "22.04", recipe.TargetWSL},
+		{distro.Ubuntu, "24.04", recipe.TargetDisk},
+		{distro.Ubuntu, "26.04", recipe.TargetDisk},
+		{distro.Fedora, "44", recipe.TargetWSL},
+	} {
+		t.Run(string(test.family)+"-"+test.release, func(t *testing.T) {
+			initial := form.ForFamily(form.Defaults(noHost), test.family)
+			initial[form.KeyRelease] = test.release
+			d := newFormDriver(t, initial)
+			d.toTheTarget()
+			d.press(pressRight) // to a disk image, where there is one
+			if got := form.Target(d.model.binding.values()); got != test.want {
+				t.Errorf("Right on the target answered %s, want %s", got, test.want)
+			}
+			view := d.model.View()
+			wantSaid := test.want == recipe.TargetWSL
+			if said := strings.Contains(view, "A disk image is built for Ubuntu 24.04 or 26.04"); said != wantSaid {
+				t.Errorf("saying where a disk image is built = %v, want %v:\n%s", said, wantSaid, view)
+			}
+		})
+	}
+}
+
+// TestFormDropsADiskImageTheReleaseHasNot: a disk image answered on 26.04
+// stays one on 24.04, is WSL on 22.04, and is a disk image again back on
+// 24.04; and with a size typed on the Disk page, moving to 22.04 asks no
+// Disk page and writes a WSL recipe.
+func TestFormDropsADiskImageTheReleaseHasNot(t *testing.T) {
+	d := newFormDriver(t, form.Defaults(noHost))
+	d.toTheTarget()
+	d.press(pressRight) // a disk image
+	d.toTheRelease()
+	d.press(pressUp) // 26.04 to 24.04
+	if got := form.Target(d.model.binding.values()); got != recipe.TargetDisk {
+		t.Fatalf("on 24.04 the target is %s, want the disk image kept", got)
+	}
+	d.press(pressUp) // 24.04 to 22.04
+	if got := form.ToRecipe(d.model.binding.values()); got.Image.Release != "22.04" || got.Image.Target != "" || got.Disk != nil {
+		t.Errorf("on 22.04 the recipe is %+v, want a WSL one", got.Image)
+	}
+	d.press(pressDown) // back to 24.04
+	if got := form.Target(d.model.binding.values()); got != recipe.TargetDisk {
+		t.Fatalf("back on 24.04 the target is %s, want the disk image answered before", got)
+	}
+	d.pressEnterUntilField(form.KeyDiskSize)
+	d.press(typeText("16G"))
+	for range 7 { // back up to the Image page's release
+		d.press(pressShiftTab)
+		if focused := d.model.pages.GetFocusedField(); focused != nil && focused.GetKey() == form.KeyRelease {
+			break
+		}
+	}
+	if focused := d.model.pages.GetFocusedField(); focused == nil || focused.GetKey() != form.KeyRelease {
+		t.Fatalf("never got back to the release:\n%s", d.model.View())
+	}
+	d.press(pressUp) // 24.04 to 22.04
+	if asked := d.focusedKeys(); slices.Contains(asked, form.KeyDiskSize) {
+		t.Errorf("asked %q on 22.04, want no Disk page", asked)
+	}
+	if got := form.ToRecipe(d.model.binding.values()); got.Image.Target != "" || got.Disk != nil || !got.WSL.Systemd {
+		t.Errorf("on 22.04 the recipe is %+v, want a WSL one", got)
+	}
+}
+
+// TestFormDropsADiskImageFedoraHasNot: a disk image answered for Ubuntu is
+// WSL once the family is Fedora.
+func TestFormDropsADiskImageFedoraHasNot(t *testing.T) {
+	d := newFormDriver(t, form.Defaults(noHost))
+	d.toTheTarget()
+	d.press(pressRight)    // a disk image
+	d.press(pressShiftTab) // back to the release
+	d.press(pressShiftTab) // and to the family
+	if focused := d.model.pages.GetFocusedField(); focused == nil || focused.GetKey() != form.KeyDistro {
+		t.Fatalf("the family does not have the focus:\n%s", d.model.View())
+	}
+	d.press(pressRight) // Ubuntu to Fedora
+	d.pressEnterUntil(stageDone)
+	if got := form.ToRecipe(d.model.binding.values()); got.Image.Distro != "fedora" || got.Image.Target != "" || got.Disk != nil {
+		t.Errorf("the Fedora recipe is %+v, want a WSL one", got)
 	}
 }

@@ -105,8 +105,9 @@ It asks the target after the release: a tarball for WSL, or a disk image
 that boots a PC or a VM, whose questions have no systemd and a Disk page
 instead. --target answers it, and --plain writes a WSL recipe unless
 --target says disk. No password is asked for a disk image's user: it is set
-at the first boot. A disk image is built for Ubuntu only so far, so
---distro fedora --target disk is refused before any question.
+at the first boot. A disk image is built for Ubuntu only so far: the form
+offers it for the releases that build one, and --distro fedora
+--target disk is refused before any question.
 
 ` + indexUsageText
 
