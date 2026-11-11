@@ -88,6 +88,10 @@ func (a *App) runVendor(args []string) int {
 		return exitUserError
 	}
 	poolName := pool.DirName(lock)
+	otherPoolName := pool.RPMsDirName
+	if poolName == pool.RPMsDirName {
+		otherPoolName = pool.DebsDirName
+	}
 	source := lock.Mirror
 	if poolName == pool.RPMsDirName {
 		// A Fedora lock's packages come from Fedora's own server, not an
@@ -119,19 +123,21 @@ func (a *App) runVendor(args []string) int {
 	}
 	a.warnIfUnverified(lock)
 	run := &vendorRun{
-		poolName:     poolName,
-		poolDir:      filepath.Join(a.RecipeDir, filepath.FromSlash(poolName)),
-		entries:      entries,
-		wheelPoolDir: filepath.Join(a.RecipeDir, filepath.FromSlash(pool.WheelsDirName)),
-		wheelEntries: wheelEntries,
-		mirrorURL:    *mirrorURL,
-		source:       source,
-		prune:        *prune,
-		fallback:     a.VendorFallback,
-		client:       a.VendorClient,
-		rootCAs:      rootCAs,
-		insecure:     *insecure,
-		checksLock:   lock.PythonResolvedUnverified() && !*insecure,
+		poolName:      poolName,
+		poolDir:       filepath.Join(a.RecipeDir, filepath.FromSlash(poolName)),
+		entries:       entries,
+		otherPoolName: otherPoolName,
+		otherPoolDir:  filepath.Join(a.RecipeDir, filepath.FromSlash(otherPoolName)),
+		wheelPoolDir:  filepath.Join(a.RecipeDir, filepath.FromSlash(pool.WheelsDirName)),
+		wheelEntries:  wheelEntries,
+		mirrorURL:     *mirrorURL,
+		source:        source,
+		prune:         *prune,
+		fallback:      a.VendorFallback,
+		client:        a.VendorClient,
+		rootCAs:       rootCAs,
+		insecure:      *insecure,
+		checksLock:    lock.PythonResolvedUnverified() && !*insecure,
 	}
 	if run.fallback == nil {
 		run.fallback = pool.FallbackURL(lock)
@@ -301,6 +307,11 @@ type vendorRun struct {
 	poolName string // vendor/debs, or vendor/rpms for a Fedora lock
 	poolDir  string
 	entries  []pool.Entry
+	// otherPoolName and otherPoolDir are the other family's pool, which the
+	// lock names nothing in: what --prune empties after a recipe changes
+	// family.
+	otherPoolName string
+	otherPoolDir  string
 	// wheelPoolDir and wheelEntries are the Python side, empty for a lock
 	// with no Python packages. Wheels come from PyPI, each by its own whole
 	// URL, so neither --mirror nor the Launchpad fallback touches them.
@@ -370,12 +381,13 @@ func (r *vendorRun) do(ctx context.Context) error {
 		name    string
 	}{
 		{r.poolDir, r.entries, r.poolName},
+		{r.otherPoolDir, nil, r.otherPoolName},
 		{r.wheelPoolDir, r.wheelEntries, pool.WheelsDirName},
 	} {
 		// A pool the lock no longer names is exactly the one that needs
-		// pruning: drop [python] from a recipe and every wheel on disk is a
-		// file the lock does not name. Prune is a no-op on a directory that
-		// is not there.
+		// pruning: drop [python] from a recipe, or move it from Fedora to
+		// Ubuntu, and every wheel or rpm on disk is a file the lock does not
+		// name. Prune is a no-op on a directory that is not there.
 		pruned, err := pool.Prune(ctx, prunable.dir, prunable.entries)
 		if errors.Is(err, context.Canceled) {
 			return err

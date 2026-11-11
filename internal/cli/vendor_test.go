@@ -646,6 +646,53 @@ func TestVendorPruneRemovesADownloadCutShort(t *testing.T) {
 	}
 }
 
+// TestVendorPrunesTheOtherFamilysPool: after a recipe moved from Fedora to
+// Ubuntu, vendor --prune left every file of vendor/rpms, though its help
+// promises to remove what the lock does not name there too; and the same
+// the other way.
+func TestVendorPrunesTheOtherFamilysPool(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		fedora    bool   // the lock is Fedora's
+		otherPool string // the pool of the family the recipe left
+		stale     []string
+	}{
+		{"from Fedora to Ubuntu", false, "rpms", []string{"git-2.54.0-1.fc44.x86_64.rpm", ".glibc-2.43-2.fc44.x86_64.rpm.4242.tmp"}},
+		{"from Ubuntu to Fedora", true, "debs", []string{"curl_0.9_amd64.deb"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newVendorFixture(t)
+			if test.fedora {
+				fixture.useFedoraLock(t)
+			}
+			otherPoolDir := filepath.Join(fixture.recipeDir, "vendor", test.otherPool)
+			if err := os.MkdirAll(otherPoolDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range append([]string{"README"}, test.stale...) {
+				if err := os.WriteFile(filepath.Join(otherPoolDir, name), []byte("stale"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var stdout, stderr bytes.Buffer
+			if exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor", "--prune"}); exitCode != exitSuccess {
+				t.Fatalf("exit code = %d, stderr %s", exitCode, stderr.String())
+			}
+			for _, name := range test.stale {
+				if _, err := os.Stat(filepath.Join(otherPoolDir, name)); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("%s survived --prune: Stat error = %v", name, err)
+				}
+				if !strings.Contains(stdout.String(), name) {
+					t.Errorf("stdout does not say %s was removed:\n%s", name, stdout.String())
+				}
+			}
+			if _, err := os.Stat(filepath.Join(otherPoolDir, "README")); err != nil {
+				t.Errorf("--prune removed a file that is no package: %v", err)
+			}
+		})
+	}
+}
+
 // useFedoraLock replaces the fixture's lock with a Fedora one: two packages
 // of the image from two repositories, and a tools tree sharing one of them,
 // served under the repositories' paths.
