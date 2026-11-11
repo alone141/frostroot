@@ -22,8 +22,8 @@ import (
 func skipUnlessDiskToolsAvailable(t *testing.T) {
 	t.Helper()
 	skipUnlessMmdebstrapAvailable(t)
-	if err := (&Bubblewrap{}).Preflight(); err != nil {
-		t.Skipf("bubblewrap not installed: %v", err)
+	if err := (&Bubblewrap{}).Preflight(context.Background()); err != nil {
+		t.Skipf("the disk tools cannot run here: %v", err)
 	}
 }
 

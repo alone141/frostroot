@@ -237,7 +237,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		return Result{}, err
 	}
 	if tools != nil {
-		if err := tools.preflight(); err != nil {
+		if err := tools.preflight(ctx); err != nil {
 			return Result{}, err
 		}
 	}
@@ -291,7 +291,11 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		// error is the one returned.
 		if tools != nil {
 			// The tree is no evidence of the failure; its log is, and stays.
-			_ = tools.remove(ctx)
+			// A tree that cannot be removed is gigabytes the person has to
+			// remove by hand, possibly owned by ids only one command can.
+			if removeErr := tools.remove(ctx); removeErr != nil {
+				err = errors.Join(err, removeErr)
+			}
 		}
 		if temporaryLockPath != "" {
 			_ = os.Remove(temporaryLockPath)

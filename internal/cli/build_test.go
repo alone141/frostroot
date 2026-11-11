@@ -116,7 +116,7 @@ type fakeToolRunner struct {
 	runs []builder.ToolRun
 }
 
-func (f *fakeToolRunner) Preflight() error { return nil }
+func (f *fakeToolRunner) Preflight(context.Context) error { return nil }
 
 func (f *fakeToolRunner) Run(_ context.Context, run builder.ToolRun) error {
 	f.runs = append(f.runs, run)

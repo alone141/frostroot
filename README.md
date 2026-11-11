@@ -409,7 +409,12 @@ fetches the tree's packages into `vendor/debs/` beside the image's, and
 `build --offline` makes the tree and the disk from them: two offline builds
 of one lock are the same image, byte for byte. A disk build needs
 `bubblewrap` and, unprivileged, `uidmap`, on top of mmdebstrap, and about
-three times the image's size in its work directory. The design is in the
+three times the image's size in its work directory. Unprivileged, bwrap and
+`unshare --map-auto` (util-linux 2.38 or newer, with subordinate ids for you
+in `/etc/subuid` and `/etc/subgid`) run in user namespaces of their own: on
+a machine that boots Ubuntu's own kernel, where AppArmor keeps programs
+without a profile out of those, build with `sudo` or lift the restriction
+as for Fedora. frostroot checks both before it starts. The design is in the
 [bare-metal spec](docs/superpowers/specs/2026-10-09-frostroot-bare-metal.md).
 
 ## Finding packages

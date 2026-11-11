@@ -30,7 +30,7 @@ func newFakeDiskHost() *fakeHost {
 }
 
 func (h *fakeHost) bubblewrap(uid int) *Bubblewrap {
-	return &Bubblewrap{RunCommand: h.run, LookPath: h.lookPath, CurrentUID: func() int { return uid }}
+	return &Bubblewrap{RunCommand: h.run, LookPath: h.lookPath, ReadFile: h.readFile, CurrentUID: func() int { return uid }}
 }
 
 // TestBubblewrapCommandLine: the tree's /usr and /etc read-only, the work
@@ -163,29 +163,65 @@ func TestBubblewrapPreflightNamesEveryMissingProgram(t *testing.T) {
 	for _, program := range []string{"bwrap", "unshare", "newuidmap", "newgidmap"} {
 		delete(host.installed, program)
 	}
-	err := host.bubblewrap(1000).Preflight()
+	err := host.bubblewrap(1000).Preflight(context.Background())
 	if !errors.Is(err, ErrNoDiskTool) {
 		t.Fatalf("Preflight = %v, want ErrNoDiskTool", err)
 	}
 	if want := "bwrap, unshare, newuidmap, newgidmap; install with: sudo apt install bubblewrap util-linux uidmap"; !strings.Contains(err.Error(), want) {
 		t.Errorf("Preflight = %v, want it to end %q", err, want)
 	}
-	err = host.bubblewrap(0).Preflight()
+	err = host.bubblewrap(0).Preflight(context.Background())
 	if !errors.Is(err, ErrNoDiskTool) || !strings.HasSuffix(err.Error(), "bwrap; install with: sudo apt install bubblewrap") {
 		t.Errorf("Preflight as root = %v, want only bwrap named", err)
 	}
 	host.installed["bwrap"] = true
-	if err := host.bubblewrap(0).Preflight(); err != nil {
+	if err := host.bubblewrap(0).Preflight(context.Background()); err != nil {
 		t.Errorf("Preflight as root with bwrap = %v, want nil", err)
 	}
-	if err := host.bubblewrap(1000).Preflight(); !errors.Is(err, ErrNoDiskTool) {
+	if err := host.bubblewrap(1000).Preflight(context.Background()); !errors.Is(err, ErrNoDiskTool) {
 		t.Errorf("Preflight unprivileged without unshare's helpers = %v, want ErrNoDiskTool", err)
 	}
-	if err := newFakeDiskHost().bubblewrap(1000).Preflight(); err != nil {
+	if err := newFakeDiskHost().bubblewrap(1000).Preflight(context.Background()); err != nil {
 		t.Errorf("Preflight on a ready host = %v, want nil", err)
 	}
 	if len(host.ran) != 0 {
-		t.Errorf("Preflight ran %q; it only looks programs up", host.ran)
+		t.Errorf("Preflight ran %q; a host without the programs is refused before anything runs", host.ran)
+	}
+}
+
+// TestBubblewrapPreflightChecksTheUserNamespaces: unprivileged, bwrap and
+// unshare run in user namespaces of their own. A kernel that keeps them out
+// of those, or an unshare without --map-auto, failed the build at its first
+// bwrap, after the image was built, and left a tree of subordinate ids that
+// could not be removed.
+func TestBubblewrapPreflightChecksTheUserNamespaces(t *testing.T) {
+	host := newFakeDiskHost()
+	host.restriction = "1"
+	err := host.bubblewrap(1000).Preflight(context.Background())
+	if !errors.Is(err, ErrUserNamespacesRestricted) || !strings.Contains(err.Error(), "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0") {
+		t.Errorf("Preflight on a restricting kernel = %v, want ErrUserNamespacesRestricted with the way out", err)
+	}
+	if err := host.bubblewrap(0).Preflight(context.Background()); err != nil {
+		t.Errorf("Preflight as root on a restricting kernel = %v, want nil: root makes no user namespace", err)
+	}
+	if len(host.ran) != 0 {
+		t.Errorf("ran %q, want nothing run on a host its kernel's setting refuses, or as root", host.ran)
+	}
+
+	host = newFakeDiskHost()
+	host.restriction = "0"
+	host.results["unshare"] = fakeResult{stderr: "unshare: unrecognized option '--map-auto'\n", err: errors.New("exit status 1")}
+	err = host.bubblewrap(1000).Preflight(context.Background())
+	if !errors.Is(err, ErrNoDiskTool) || !strings.Contains(err.Error(), "unrecognized option '--map-auto'") || !strings.Contains(err.Error(), "util-linux 2.38 or newer") {
+		t.Errorf("Preflight with an unshare that cannot map = %v, want ErrNoDiskTool with unshare's words and what it needs", err)
+	}
+
+	host = newFakeDiskHost()
+	if err := host.bubblewrap(1000).Preflight(context.Background()); err != nil {
+		t.Fatalf("Preflight on a ready host = %v, want nil", err)
+	}
+	if want := []string{"unshare --map-root-user --map-auto -- true"}; !slices.Equal(host.ran, want) {
+		t.Errorf("ran %q, want %q", host.ran, want)
 	}
 }
 
@@ -215,6 +251,13 @@ func TestBubblewrapRemovesTheTreeInTheNamespaceThatMadeIt(t *testing.T) {
 	err := host.bubblewrap(0).RemoveTree(context.Background(), tree)
 	if err == nil || !strings.Contains(err.Error(), "removing "+tree+": exit status 1: rm: cannot remove") {
 		t.Errorf("RemoveTree = %v, want rm's own words", err)
+	}
+	// The tree belongs to ids only the namespace can remove: the error
+	// says how.
+	host.results["unshare"] = fakeResult{err: errors.New("exit status 1")}
+	err = host.bubblewrap(1000).RemoveTree(context.Background(), tree)
+	if want := "remove it with: unshare --map-root-user --map-auto -- rm -rf -- '" + tree + "'"; err == nil || !strings.HasSuffix(err.Error(), want) {
+		t.Errorf("RemoveTree = %v, want it to end %q", err, want)
 	}
 
 	// Nothing frostroot did not make under a work directory: a relative
@@ -278,7 +321,7 @@ type fakeToolRunner struct {
 	runsAtRemoval        int // how many tools had run when the tree was removed
 }
 
-func (f *fakeToolRunner) Preflight() error {
+func (f *fakeToolRunner) Preflight(context.Context) error {
 	f.preflighted = true
 	return f.preflightErr
 }
@@ -522,6 +565,26 @@ func TestDiskBuildFailsWhenTheTreeCannotBeRemoved(t *testing.T) {
 		t.Error("a failed build keeps its work directory")
 	}
 	assertNoDiskBuildOutput(t, options)
+}
+
+// TestDiskBuildFailingNamesATreeItCannotRemove: a build that failed with a
+// tools tree it then could not remove discarded the removal's error, and
+// the kept work directory held gigabytes of subordinate ids nobody was told
+// about.
+func TestDiskBuildFailingNamesATreeItCannotRemove(t *testing.T) {
+	options, _ := newTestOptions(t)
+	runner := &fakeToolRunner{
+		removeErr: errors.New("removing tree: exit status 1; remove it with: unshare --map-root-user --map-auto -- rm -rf -- 'tree'"),
+		failOn:    "mke2fs",
+		runErr:    errors.New("mke2fs: exit status 1: mke2fs: Could not open image.tar"),
+	}
+	_, err := buildDiskWith(&fakeBootstrapper{}, runner, options)
+	if err == nil || !strings.Contains(err.Error(), "mke2fs: Could not open image.tar") {
+		t.Fatalf("Build = %v, want the tool's failure", err)
+	}
+	if !strings.Contains(err.Error(), "removing the disk tools tree: removing tree: exit status 1; remove it with: unshare") {
+		t.Errorf("Build = %v, want the tree it could not remove named, and how to remove it", err)
+	}
 }
 
 func TestDiskBuildPreflightsTheRunnerBeforeAnyWork(t *testing.T) {
