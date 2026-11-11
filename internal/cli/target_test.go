@@ -20,14 +20,13 @@ import (
 // proves before it renames the file into place.
 func TestADiskRecipeIsWrittenAsADisksAndReadsBack(t *testing.T) {
 	for name, disk := range map[string]*recipe.Disk{
-		"defaults":         {},
-		"a size and qcow2": {Size: "16G", Formats: []string{recipe.DiskFormatQcow2}},
+		"defaults": {},
+		"a size":   {Size: "16G"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			values := form.Defaults(form.Host{ReadFile: noHostFile})
 			values[form.KeyTarget] = recipe.TargetDisk
 			values[form.KeyDiskSize] = disk.Size
-			values[form.KeyDiskQcow2] = len(disk.Formats) > 0
 			imageRecipe := form.ToRecipe(values)
 			recipePath := filepath.Join(t.TempDir(), recipeFileName)
 			if err := writeRecipe(recipePath, imageRecipe, false); err != nil {
@@ -60,10 +59,10 @@ func TestADiskRecipeIsWrittenAsADisksAndReadsBack(t *testing.T) {
 
 // TestInitWithTargetDisk: --target answers the target, and the plain
 // questions of a disk recipe are a WSL recipe's without systemd, with the
-// disk's size and qcow2 after the locale.
+// disk's size after the locale.
 func TestInitWithTargetDisk(t *testing.T) {
 	recipeDir := t.TempDir()
-	answers := []string{"pc-lab", "", "", "", "", "", "16G", "y", "", "", "", "", "", "", ""}
+	answers := []string{"pc-lab", "", "", "", "", "", "16G", "", "", "", "", "", "", ""}
 	exitCode, stdout, stderr := runInitWithAnswers(recipeDir, answers, "--target", "disk")
 	if exitCode != exitSuccess {
 		t.Fatalf("exit code = %d\n%s\n%s", exitCode, stdout, stderr)
@@ -73,7 +72,7 @@ func TestInitWithTargetDisk(t *testing.T) {
 	if exitCode := app.Run([]string{"init", "--target", "disk"}); exitCode != exitSuccess {
 		t.Fatalf("second init: exit code = %d", exitCode)
 	}
-	wantTopics := []string{"image name", "release", "user name", "sudo", "timezone", "locale", "disk size", "qcow2", "apt sources", "other ppas", "packages", "other packages", "python packages", "certificate authorities", "write frostroot.toml"}
+	wantTopics := []string{"image name", "release", "user name", "sudo", "timezone", "locale", "disk size", "apt sources", "other ppas", "packages", "other packages", "python packages", "certificate authorities", "write frostroot.toml"}
 	if len(prompt.questionsAsked) != len(wantTopics) {
 		t.Fatalf("questions asked = %q, want one about each of %q", prompt.questionsAsked, wantTopics)
 	}
@@ -85,14 +84,14 @@ func TestInitWithTargetDisk(t *testing.T) {
 	want := recipe.Recipe{
 		Image:    recipe.Image{Name: "pc-lab", Release: "26.04", Arch: "amd64", Target: recipe.TargetDisk},
 		User:     recipe.User{Name: "student", Sudo: true},
-		Disk:     &recipe.Disk{Size: "16G", Formats: []string{recipe.DiskFormatQcow2}},
+		Disk:     &recipe.Disk{Size: "16G"},
 		Locale:   recipe.Locale{Lang: "en_US.UTF-8", Timezone: "UTC"},
 		Packages: recipe.Packages{Include: []string{}},
 	}
 	if got := loadWrittenRecipe(t, recipeDir); !reflect.DeepEqual(got, want) {
 		t.Errorf("recipe:\n got %+v\nwant %+v", got, want)
 	}
-	if !strings.Contains(stdout, "Disk      16G, raw and qcow2") {
+	if !strings.Contains(stdout, "Disk      16G, raw;") {
 		t.Errorf("the summary does not describe the disk:\n%s", stdout)
 	}
 	exitCode, validated, note := runValidateIn(recipeDir)

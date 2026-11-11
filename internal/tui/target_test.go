@@ -30,7 +30,7 @@ func TestFormAsksADiskImagesQuestions(t *testing.T) {
 	d.toTheTarget()
 	d.press(pressRight) // WSL to a disk image
 	asked := d.focusedKeys()
-	want := []string{form.KeyTarget, form.KeyUserName, form.KeySudo, form.KeyTimezone, form.KeyLocale, form.KeyDiskSize, form.KeyDiskQcow2, form.KeySources, form.KeyPPAs, form.KeyPackages, form.KeyOtherPackages, form.KeyPythonPackages, form.KeyCertificates}
+	want := []string{form.KeyTarget, form.KeyUserName, form.KeySudo, form.KeyTimezone, form.KeyLocale, form.KeyDiskSize, form.KeySources, form.KeyPPAs, form.KeyPackages, form.KeyOtherPackages, form.KeyPythonPackages, form.KeyCertificates}
 	if !slices.Equal(asked, want) {
 		t.Errorf("asked %q, want %q", asked, want)
 	}
@@ -93,7 +93,7 @@ func TestFormEditsADiskRecipe(t *testing.T) {
 	original := recipe.Recipe{
 		Image:    recipe.Image{Name: "pc-lab", Release: "26.04", Arch: "amd64", Target: recipe.TargetDisk},
 		User:     recipe.User{Name: "student", Sudo: true},
-		Disk:     &recipe.Disk{Size: "32G", Formats: []string{recipe.DiskFormatQcow2}},
+		Disk:     &recipe.Disk{Size: "32G"},
 		Locale:   recipe.Locale{Lang: "en_US.UTF-8", Timezone: "UTC"},
 		Packages: recipe.Packages{Include: []string{"git"}},
 	}

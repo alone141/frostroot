@@ -353,7 +353,7 @@ own server, which `--mirror`, an Ubuntu archive, does not replace.
 | `wsl.systemd` | boot with systemd; WSL only | `true` |
 | `wsl.default_user` | must equal `user.name`; may be omitted; WSL only | the user name |
 | `disk.size` | the image file's size, a whole number with `G` or `M` (GiB or MiB), `1G` to `64T`; may be omitted, which sizes it to fit; disk only | omitted |
-| `disk.formats` | `["qcow2"]` writes a qcow2 beside the raw image, which is always written; disk only | none |
+| `disk.formats` | formats to write beside the raw image, which is always written; this version writes none and refuses every name (qcow2 and vhdx come later); disk only | none |
 | `locale.lang` | e.g. `en_US.UTF-8`, `tr_TR.UTF-8`, `C.UTF-8` | `en_US.UTF-8` |
 | `locale.timezone` | e.g. `UTC`, `Europe/Istanbul`, `America/Argentina/Buenos_Aires` | `UTC` |
 | `packages.include` | apt package names only, or Fedora's rpm names; no versions, no suites | preset plus extras |
@@ -376,8 +376,9 @@ with Secure Boot on, instead of a tarball for WSL: `build` writes
 `dist/<name>-ubuntu-<release>-amd64.img`, a raw GPT image with an EFI system
 partition and an ext4 root, for Ubuntu 24.04 and 26.04. A disk recipe has no
 `[wsl]`, which is `wsl.conf`'s, and may have a `[disk]` table with the image
-file's size, by default the content with room to spare, and the formats to
-write beside the raw image, of which qcow2 comes in a later version. `init
+file's size, by default the content with room to spare. The raw image is the
+only format so far: a qcow2 comes in a later version, and `formats` refuses
+it until then. `init
 --target disk` writes one, the full-screen form asks the target after the
 release, and `edit` moves a recipe between the two targets, carrying every
 answer.

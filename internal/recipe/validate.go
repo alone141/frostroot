@@ -625,15 +625,15 @@ func CheckDiskSize(size string) error {
 	return err
 }
 
-// CheckDiskFormat reports why format cannot be in [disk] formats, or nil.
+// CheckDiskFormat reports why format cannot be in [disk] formats: no format
+// besides the raw image is built yet, and a recipe that asked for one
+// built, exited 0 and wrote no such file.
 func CheckDiskFormat(format string) error {
 	switch format {
-	case DiskFormatQcow2:
-		return nil
-	case "vhdx":
-		return fmt.Errorf("disk.formats: vhdx comes in a later version of frostroot; %s is the format besides the raw image so far", DiskFormatQcow2)
+	case DiskFormatQcow2, "vhdx":
+		return fmt.Errorf("disk.formats: %s comes in a later version of frostroot; this one writes the raw image only, so leave formats out", format)
 	}
-	return fmt.Errorf("invalid disk.formats entry %q (%q; the raw image is always written)", format, DiskFormatQcow2)
+	return fmt.Errorf("invalid disk.formats entry %q: this version of frostroot writes the raw image only, so leave formats out", format)
 }
 
 // CheckPythonPackageName reports why name is not a PyPI distribution name, or

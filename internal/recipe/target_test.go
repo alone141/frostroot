@@ -7,7 +7,7 @@ import (
 )
 
 // diskRecipe returns valid.toml as a disk recipe: the target named, no
-// [wsl], and a [disk] that asks for a size and a qcow2.
+// [wsl], and a [disk] that asks for a size.
 func diskRecipe(t *testing.T) Recipe {
 	t.Helper()
 	imageRecipe := loadValidRecipe(t)
@@ -15,7 +15,7 @@ func diskRecipe(t *testing.T) Recipe {
 	// valid.toml is 22.04's, which builds no disk.
 	imageRecipe.Image.Release = "26.04"
 	imageRecipe.WSL = WSL{}
-	imageRecipe.Disk = &Disk{Size: "16G", Formats: []string{DiskFormatQcow2}}
+	imageRecipe.Disk = &Disk{Size: "16G"}
 	return imageRecipe
 }
 
@@ -48,7 +48,6 @@ sudo = true
 
 [disk]
 size = "16G"
-formats = ["qcow2"]
 
 [locale]
 lang = "en_US.UTF-8"
@@ -64,7 +63,7 @@ include = ["git"]
 	want := Recipe{
 		Image:    Image{Name: "lab", Release: "26.04", Arch: "amd64", Target: TargetDisk},
 		User:     User{Name: "student", Sudo: true},
-		Disk:     &Disk{Size: "16G", Formats: []string{DiskFormatQcow2}},
+		Disk:     &Disk{Size: "16G"},
 		Locale:   Locale{Lang: "en_US.UTF-8", Timezone: "UTC"},
 		Packages: Packages{Include: []string{"git"}},
 	}
@@ -102,9 +101,11 @@ func TestValidateRefusesWhatATargetCannotUse(t *testing.T) {
 		{"a size with too many digits", func(r *Recipe) { r.Disk.Size = "12345678G" }, "invalid disk.size"},
 		{"a size smaller than the ESP allows", func(r *Recipe) { r.Disk.Size = "512M" }, "out of range"},
 		{"a size larger than 64T", func(r *Recipe) { r.Disk.Size = "65537G" }, "out of range"},
+		// A qcow2 was accepted, offered and documented, and none was ever
+		// written: the build exited 0 with the raw image alone.
+		{"qcow2", func(r *Recipe) { r.Disk.Formats = []string{"qcow2"} }, "disk.formats: qcow2 comes in a later version of frostroot; this one writes the raw image only"},
 		{"vhdx", func(r *Recipe) { r.Disk.Formats = []string{"vhdx"} }, "vhdx comes in a later version"},
-		{"raw named", func(r *Recipe) { r.Disk.Formats = []string{"raw"} }, "the raw image is always written"},
-		{"qcow2 twice", func(r *Recipe) { r.Disk.Formats = []string{"qcow2", "qcow2"} }, "disk.formats names qcow2 twice"},
+		{"raw named", func(r *Recipe) { r.Disk.Formats = []string{"raw"} }, "writes the raw image only, so leave formats out"},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
