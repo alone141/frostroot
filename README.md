@@ -313,7 +313,7 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 | Command | What it does |
 |---|---|
 | `frostroot init [--distro ubuntu\|fedora] [--target wsl\|disk] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE] [--insecure] [--refresh-index]` | Opens the form and writes a commented `frostroot.toml`, then fetches the signing keys of the sources you picked into `keys/`. The form asks for the distribution first, unless `--distro` answers it, and for the target after the release, unless `--target` answers it: a tarball for WSL, or a disk image (see [Disk images](#disk-images)), which is built for Ubuntu only so far: `--distro fedora --target disk` is refused before any question. Refuses to overwrite a recipe without `--force`. Writes nothing unless the answers validate and you confirm. |
-| `frostroot edit [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE] [--insecure] [--refresh-index]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back; fetches any missing source keys. The full-screen form can move the recipe to the other distribution. The file is regenerated from the template, so your own comments in it do not survive. |
+| `frostroot edit [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE] [--insecure] [--refresh-index]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back; fetches any missing source keys. The full-screen form can move the recipe to the other distribution, or to the other target. The file is regenerated from the template, so your own comments in it do not survive. |
 | `frostroot capture [--root DIR] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE] [--insecure] [--refresh-index]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, starting with a page of what it found and what a recipe cannot carry, writes `frostroot.toml`, the signing keys of the third-party sources it could carry and the certificate authorities the machine added under `/usr/local/share/ca-certificates`, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys and certificates; needs no root. |
 | `frostroot validate` | Checks `frostroot.toml`, including that every source's key file is there and is a key, and prints every problem. No network, no root. |
 | `frostroot build [--mirror URL] [--ca-bundle FILE] [--insecure] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-<distro>-<release>-amd64.tar.gz`, such as `dist/lab-ubuntu-24.04-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. A disk recipe gets `dist/<name>-<distro>-<release>-amd64.img` instead, a raw GPT image that boots with Secure Boot on (see [Disk images](#disk-images)). |
@@ -362,8 +362,8 @@ own server, which `--mirror`, an Ubuntu archive, does not replace.
 | `disk.size` | the image file's size, a whole number with `G` or `M` (GiB or MiB), `1G` to `64T`; may be omitted, which sizes it to fit; disk only | omitted |
 | `disk.formats` | formats to write beside the raw image, which is always written; this version writes none and refuses every name (qcow2 and vhdx come later); disk only | none |
 | `locale.lang` | e.g. `en_US.UTF-8`, `tr_TR.UTF-8`, `C.UTF-8` | `en_US.UTF-8` |
-| `locale.timezone` | e.g. `UTC`, `Europe/Istanbul`, `America/Argentina/Buenos_Aires` | `UTC` |
-| `packages.include` | apt package names only, or Fedora's rpm names; no versions, no suites | preset plus extras |
+| `locale.timezone` | e.g. `UTC`, `Europe/Istanbul`, `America/Argentina/Buenos_Aires` | the host's timezone, or `UTC` |
+| `packages.include` | apt package names only, or Fedora's rpm names; no versions, no suites | none |
 | `python.include` | PyPI names only; see [Python packages](#python-packages); Ubuntu only so far | none |
 | `python.index_url` | an `https` PEP 691 simple index to resolve from instead of PyPI, with no credentials; needs `python.include`; see [Resolving from an internal index](#resolving-from-an-internal-index) | none, which is PyPI |
 | `[[sources]]` | extra apt repositories; see [Third-party sources](#third-party-sources); Ubuntu only | none |
@@ -1186,8 +1186,9 @@ login, sudo, networking or apt.
 authorities from `ca-certificates` plus whatever `[certificates]` names; see
 [Networks that inspect TLS](#networks-that-inspect-tls). The Ubuntu archive
 is fetched over plain HTTP with signed metadata, so it is never affected.
-`init` fetches signing keys with the host's own certificate store, so on such
-a network it needs the authority installed on the build host.
+frostroot's own downloads trust the host's store, the recipe's
+`[certificates]` and `--ca-bundle FILE`; `init` has no recipe until it
+writes one, so give its package search `--ca-bundle`.
 
 **Building from a Windows checkout.** If `go build` inside WSL reports `error
 obtaining VCS status`, git is refusing a repository owned by Windows; add
@@ -1218,7 +1219,8 @@ packages that come from them (v0.12), `--insecure` for a network whose
 certificate authority nobody has, with the lock recording what it could not
 verify (v0.13), Ubuntu 26.04, which new recipes now start on (v0.14), and
 Fedora 44, built with mkosi, rebuilt offline byte for byte, and offered by
-the form beside Ubuntu (v0.15).
+the form beside Ubuntu (v0.15), and, not released yet, a raw disk image of
+Ubuntu 24.04 or 26.04 that boots a PC or a VM.
 
 **Deliberately not yet:** families other than Ubuntu and Fedora · flat or
 unsigned apt repositories · npm and cargo lockfiles · Python source
