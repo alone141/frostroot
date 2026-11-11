@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -48,10 +49,15 @@ func (s Status) Describe(limit int) string {
 // Verify checks dir against entries by size and SHA-256, reporting every
 // file's state to onChecked as it goes (checked files so far, total). A
 // directory that does not exist is a pool in which everything is missing.
-func Verify(dir string, entries []Entry, onChecked func(checked, total int)) (Status, error) {
+// A canceled ctx stops it between two files, with ctx's error: a pool of
+// gigabytes takes minutes to hash.
+func Verify(ctx context.Context, dir string, entries []Entry, onChecked func(checked, total int)) (Status, error) {
 	var status Status
 	listed := map[string]bool{}
 	for index, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return Status{}, err
+		}
 		listed[entry.FileName] = true
 		state, err := checkFile(filepath.Join(dir, entry.FileName), entry)
 		if err != nil {
@@ -132,9 +138,10 @@ func isPartialDownload(name string) bool {
 
 // Prune removes the files in dir that entries do not name, .deb or .whl
 // packages and the .tmp files of downloads that were cut short, and returns
-// their names, sorted. Nothing else in the directory is touched.
-func Prune(dir string, entries []Entry) ([]string, error) {
-	status, err := Verify(dir, entries, nil)
+// their names, sorted. Nothing else in the directory is touched. A canceled
+// ctx stops it as it does Verify.
+func Prune(ctx context.Context, dir string, entries []Entry) ([]string, error) {
+	status, err := Verify(ctx, dir, entries, nil)
 	if err != nil {
 		return nil, err
 	}

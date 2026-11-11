@@ -54,7 +54,7 @@ func TestFetchTrustsTheAuthorityItIsGiven(t *testing.T) {
 	if summary.Fetched != 1 {
 		t.Errorf("fetched %d files, want 1", summary.Fetched)
 	}
-	if status, err := Verify(poolDir, []Entry{entry}, nil); err != nil || len(status.Missing) != 0 {
+	if status, err := Verify(context.Background(), poolDir, []Entry{entry}, nil); err != nil || len(status.Missing) != 0 {
 		t.Errorf("the wheel did not land: %+v (%v)", status, err)
 	}
 }

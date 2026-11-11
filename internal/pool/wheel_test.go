@@ -181,7 +181,7 @@ func TestFetchWheelsWithoutSizes(t *testing.T) {
 
 	// A second run checks by checksum alone, since the lock records no size,
 	// and downloads nothing.
-	status, err := Verify(dir, entries, nil)
+	status, err := Verify(context.Background(), dir, entries, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestVerifyAndPruneWheels(t *testing.T) {
 	if err := os.WriteFile(stale, []byte("stale"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	status, err := Verify(dir, []Entry{entry}, nil)
+	status, err := Verify(context.Background(), dir, []Entry{entry}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,10 +229,10 @@ func TestVerifyAndPruneWheels(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, entry.FileName), []byte("tampered"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if status, err := Verify(dir, []Entry{entry}, nil); err != nil || len(status.Corrupt) != 1 {
+	if status, err := Verify(context.Background(), dir, []Entry{entry}, nil); err != nil || len(status.Corrupt) != 1 {
 		t.Fatalf("Verify = %+v, %v; want the tampered wheel reported corrupt", status, err)
 	}
-	pruned, err := Prune(dir, []Entry{entry})
+	pruned, err := Prune(context.Background(), dir, []Entry{entry})
 	if err != nil {
 		t.Fatal(err)
 	}

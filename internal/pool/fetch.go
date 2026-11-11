@@ -115,7 +115,7 @@ func Fetch(ctx context.Context, options FetchOptions) (Summary, error) {
 	if err := os.MkdirAll(options.Dir, 0o755); err != nil {
 		return Summary{}, err
 	}
-	status, err := Verify(options.Dir, options.Entries, options.OnChecked)
+	status, err := Verify(ctx, options.Dir, options.Entries, options.OnChecked)
 	if err != nil {
 		return Summary{}, err
 	}

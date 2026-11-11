@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -80,14 +81,14 @@ func TestVerifyAndPruneRPMs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	status, err := Verify(dir, []Entry{locked}, nil)
+	status, err := Verify(context.Background(), dir, []Entry{locked}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !status.Complete() || !slices.Equal(status.Extra, []string{superseded}) {
 		t.Fatalf("Verify = %+v, want the locked rpm present and the superseded one extra", status)
 	}
-	pruned, err := Prune(dir, []Entry{locked})
+	pruned, err := Prune(context.Background(), dir, []Entry{locked})
 	if err != nil {
 		t.Fatal(err)
 	}

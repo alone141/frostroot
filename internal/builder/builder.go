@@ -258,11 +258,19 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		return Result{}, err
 	}
 	defer hold.Release()
+	placePhase, outputNoun := PhasePlaceTarball, "tarball"
+	tarballPath := filepath.Join(options.RecipeDir, export.TarballRelPath(imageRecipe.Image.Name, string(family), imageRecipe.Image.Release, imageRecipe.Image.Arch))
+	imagePath := filepath.Join(options.RecipeDir, export.ImageRelPath(imageRecipe.Image.Name, string(family), imageRecipe.Image.Release, imageRecipe.Image.Arch))
+	outputPath := tarballPath
+	if disk {
+		placePhase, outputNoun, outputPath = PhasePlaceImage, "image", imagePath
+	}
+	removeLeftovers(options.RecipeDir, tarballPath, imagePath)
 	if offline != nil {
 		if err := offline.checkLockUnchanged(); err != nil {
 			return Result{}, err
 		}
-		if err := verifyPool(offline, progress); err != nil {
+		if err := verifyPool(ctx, offline, progress); err != nil {
 			return Result{}, err
 		}
 	}
@@ -370,12 +378,6 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 			return failBuild(err)
 		}
 	}
-	placePhase, outputNoun := PhasePlaceTarball, "tarball"
-	outputPath := filepath.Join(options.RecipeDir, export.TarballRelPath(imageRecipe.Image.Name, string(family), imageRecipe.Image.Release, imageRecipe.Image.Arch))
-	if layout != nil {
-		placePhase, outputNoun = PhasePlaceImage, "image"
-		outputPath = filepath.Join(options.RecipeDir, export.ImageRelPath(imageRecipe.Image.Name, string(family), imageRecipe.Image.Release, imageRecipe.Image.Arch))
-	}
 	progress.Report(ProgressEvent{Phase: placePhase, Kind: EventPhaseStarted})
 	reportCopied := func(copiedBytes, totalBytes int64) {
 		progress.Report(ProgressEvent{Phase: placePhase, Kind: EventProgress, Done: copiedBytes, Total: totalBytes, Unit: UnitBytes})
@@ -390,9 +392,15 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	// For the instant between the two renames the lock describes an image
 	// that is beside it under a temporary name, and should the tarball's
 	// rename fail then, the previous lock is put back.
-	stagedOutputPath, err = export.Stage(builtOutputPath, outputPath, reportCopied)
+	stagedOutputPath, err = export.Stage(ctx, builtOutputPath, outputPath, reportCopied)
 	if err != nil {
 		return failBuild(fmt.Errorf("placing %s: %w", outputNoun, err))
+	}
+	// The last moment a Ctrl-C can still mean that nothing was written: the
+	// renames that follow are instant, and the second puts back what the
+	// first replaced only when it fails.
+	if err := ctx.Err(); err != nil {
+		return failBuild(err)
 	}
 	var previousLock []byte
 	lockPlaced, hadPreviousLock := false, false
@@ -463,10 +471,10 @@ func chooseDiskLayout(offline *offlinePlan) (*diskLayout, error) {
 
 // verifyPool checks vendor/debs, or a Fedora lock's vendor/rpms, and
 // vendor/wheels against the lock, as a phase with a files bar, before any
-// work directory exists.
-func verifyPool(offline *offlinePlan, progress Progress) error {
+// work directory exists. A canceled ctx stops it between two files.
+func verifyPool(ctx context.Context, offline *offlinePlan, progress Progress) error {
 	progress.Report(ProgressEvent{Phase: PhaseVerifyVendored, Kind: EventPhaseStarted})
-	status, err := pool.Verify(offline.poolDir, offline.entries, func(checked, total int) {
+	status, err := pool.Verify(ctx, offline.poolDir, offline.entries, func(checked, total int) {
 		progress.Report(ProgressEvent{Phase: PhaseVerifyVendored, Kind: EventProgress, Done: int64(checked), Total: int64(total), Unit: UnitFiles})
 	})
 	if err != nil {
@@ -476,7 +484,7 @@ func verifyPool(offline *offlinePlan, progress Progress) error {
 		return fmt.Errorf("%w: %s in %s; run frostroot vendor", ErrPoolIncomplete, status.Describe(maxNamedPoolProblems), pool.DirName(offline.lock))
 	}
 	if len(offline.wheelEntries) > 0 {
-		wheelStatus, err := pool.Verify(offline.wheelPoolDir, offline.wheelEntries, nil)
+		wheelStatus, err := pool.Verify(ctx, offline.wheelPoolDir, offline.wheelEntries, nil)
 		if err != nil {
 			return fmt.Errorf("checking %s: %w", offline.wheelPoolDir, err)
 		}

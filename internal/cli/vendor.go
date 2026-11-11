@@ -370,7 +370,7 @@ func (r *vendorRun) do(ctx context.Context) error {
 		// pruning: drop [python] from a recipe and every wheel on disk is a
 		// file the lock does not name. Prune is a no-op on a directory that
 		// is not there.
-		pruned, err := pool.Prune(prunable.dir, prunable.entries)
+		pruned, err := pool.Prune(ctx, prunable.dir, prunable.entries)
 		if err != nil {
 			return fmt.Errorf("pruning %s: %w", prunable.name, err)
 		}

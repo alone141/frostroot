@@ -8,6 +8,7 @@
 package export
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -46,8 +47,10 @@ type CopyProgressFunc func(copiedBytes, totalBytes int64)
 // holds a half-written file under the final name. Under WSL the copy is the
 // normal case: the work directory is on the Linux disk and dist/ often sits
 // on a Windows drive. onCopyProgress may be nil; a rename reports nothing.
-func Stage(sourcePath, destinationPath string, onCopyProgress CopyProgressFunc) (stagedPath string, err error) {
-	return stage(sourcePath, destinationPath, os.Rename, onCopyProgress)
+// A canceled ctx stops the copy between two chunks, with ctx's error, and
+// leaves nothing in the destination directory.
+func Stage(ctx context.Context, sourcePath, destinationPath string, onCopyProgress CopyProgressFunc) (stagedPath string, err error) {
+	return stage(ctx, sourcePath, destinationPath, os.Rename, onCopyProgress)
 }
 
 // Unstage undoes Stage for a file that is not going into place after all:
@@ -70,7 +73,7 @@ func Unstage(stagedPath, sourcePath string) {
 // a move across filesystems.
 type renameFunc func(oldPath, newPath string) error
 
-func stage(sourcePath, destinationPath string, rename renameFunc, onCopyProgress CopyProgressFunc) (string, error) {
+func stage(ctx context.Context, sourcePath, destinationPath string, rename renameFunc, onCopyProgress CopyProgressFunc) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(destinationPath), 0o755); err != nil {
 		return "", err
 	}
@@ -86,7 +89,7 @@ func stage(sourcePath, destinationPath string, rename renameFunc, onCopyProgress
 	copied := false
 	if errors.Is(err, syscall.EXDEV) {
 		copied = true
-		err = copyInto(sourcePath, temporary, onCopyProgress)
+		err = copyInto(ctx, sourcePath, temporary, onCopyProgress)
 	}
 	if closeErr := temporary.Close(); err == nil && copied {
 		// A rename replaced the file this handle was on, so its close has
@@ -102,8 +105,9 @@ func stage(sourcePath, destinationPath string, rename renameFunc, onCopyProgress
 
 // copyInto copies the file at sourcePath into destination, keeping its
 // holes where the system can, reporting its progress, and syncs it, so
-// that what the caller renames into place is on disk.
-func copyInto(sourcePath string, destination *os.File, onCopyProgress CopyProgressFunc) error {
+// that what the caller renames into place is on disk. A canceled ctx stops
+// it between two chunks.
+func copyInto(ctx context.Context, sourcePath string, destination *os.File, onCopyProgress CopyProgressFunc) error {
 	source, err := os.Open(sourcePath)
 	if err != nil {
 		return err
@@ -121,7 +125,7 @@ func copyInto(sourcePath string, destination *os.File, onCopyProgress CopyProgre
 			onCopyProgress(copied, size)
 		}
 	}
-	if err := copyKeepingHoles(source, destination, size, report); err != nil {
+	if err := copyKeepingHoles(ctx, source, destination, size, report); err != nil {
 		return err
 	}
 	return destination.Sync()
@@ -129,8 +133,8 @@ func copyInto(sourcePath string, destination *os.File, onCopyProgress CopyProgre
 
 // copyWhole copies size bytes of source into destination as they are,
 // reporting as it goes.
-func copyWhole(source, destination *os.File, size int64, report func(copied int64)) error {
-	return copyChunks(&progressWriter{writer: destination, report: report}, io.LimitReader(source, size), size, make([]byte, copyChunkBytes))
+func copyWhole(ctx context.Context, source, destination *os.File, size int64, report func(copied int64)) error {
+	return copyChunks(&progressWriter{ctx: ctx, writer: destination, report: report}, io.LimitReader(source, size), size, make([]byte, copyChunkBytes))
 }
 
 // copyChunkBytes is how much a copy moves between two progress reports: a
@@ -152,8 +156,11 @@ func copyChunks(destination io.Writer, source io.Reader, size int64, buffer []by
 	return nil
 }
 
-// progressWriter reports the running total of bytes written through it.
+// progressWriter reports the running total of bytes written through it,
+// and fails the write after which ctx is canceled: a copy of gigabytes onto
+// a slow drive stops at the next chunk, not at its end.
 type progressWriter struct {
+	ctx         context.Context
 	writer      io.Writer
 	writtenByte int64
 	report      func(copied int64)
@@ -163,6 +170,9 @@ func (w *progressWriter) Write(data []byte) (int, error) {
 	written, err := w.writer.Write(data)
 	w.writtenByte += int64(written)
 	w.report(w.writtenByte)
+	if err == nil {
+		err = w.ctx.Err()
+	}
 	return written, err
 }
 
