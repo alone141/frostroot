@@ -20,7 +20,7 @@ import (
 	"frostroot/internal/tui"
 )
 
-const vendorUsageText = `usage: frostroot vendor [--mirror URL] [--ca-bundle FILE | --insecure] [--prune] [--plain]
+const vendorUsageText = `usage: frostroot vendor [--mirror URL] [--ca-bundle FILE] [--insecure] [--prune] [--plain]
 
 Download every package frostroot.lock names into vendor/debs/, or vendor/rpms/
 for a Fedora image, and every Python wheel it names into vendor/wheels/,

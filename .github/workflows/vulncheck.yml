@@ -1,0 +1,26 @@
+name: govulncheck, weekly
+
+# CI runs govulncheck on every pull request and every push to master. A
+# vulnerability disclosed while nobody pushes was found instead by the next
+# release run, which is how the v0.15.0 tag published nothing; this run
+# finds it the week it is disclosed. GitHub runs a scheduled workflow from
+# the default branch.
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: govulncheck against the toolchain go.mod pins
+        run: scripts/check.sh --only vuln

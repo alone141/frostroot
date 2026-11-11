@@ -29,7 +29,7 @@ var archiveUnreachableMessages = []string{
 	"Unable to connect", "No route to host", "404  Not Found",
 }
 
-const buildUsageText = `usage: frostroot build [--mirror URL | --offline] [--ca-bundle FILE | --insecure] [--keep-work] [--plain]
+const buildUsageText = `usage: frostroot build [--mirror URL | --offline] [--ca-bundle FILE] [--insecure] [--keep-work] [--plain]
 
 Build frostroot.lock and dist/<name>-<distro>-<release>-amd64.tar.gz from frostroot.toml.
 Needs Linux, network, and user namespaces or root: mmdebstrap for Ubuntu, and

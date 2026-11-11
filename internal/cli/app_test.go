@@ -55,6 +55,13 @@ func TestRunHelp(t *testing.T) {
 				t.Errorf("Run(%q): usage should list %s: %q", args, command, stdout.String())
 			}
 		}
+		// What build writes and vendor fills, for every family and target:
+		// the usage once named Ubuntu's tarball and vendor/debs alone.
+		for _, output := range []string{"<distro>", ".img", "vendor/debs", "vendor/rpms", "vendor/wheels"} {
+			if !strings.Contains(stdout.String(), output) {
+				t.Errorf("Run(%q): usage should name %s: %q", args, output, stdout.String())
+			}
+		}
 	}
 }
 

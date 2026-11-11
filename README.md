@@ -257,7 +257,7 @@ terminal:
 
 ```console
 Wrote dist/cpp-lab-ubuntu-22.04-amd64.tar.gz (222 MB)
-Wrote frostroot.lock (341 packages)
+Wrote frostroot.lock (341 packages), frozen at 2026-09-17 16:20:22 UTC
 
 Import it on Windows:
   wsl --import cpp-lab <install-dir> dist/cpp-lab-ubuntu-22.04-amd64.tar.gz
@@ -305,12 +305,12 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 
 | Command | What it does |
 |---|---|
-| `frostroot init [--distro ubuntu\|fedora] [--target wsl\|disk] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Opens the form and writes a commented `frostroot.toml`, then fetches the signing keys of the sources you picked into `keys/`. The form asks for the distribution first, unless `--distro` answers it, and for the target after the release, unless `--target` answers it: a tarball for WSL, or a disk image (see [Disk images](#disk-images)). Refuses to overwrite a recipe without `--force`. Writes nothing unless the answers validate and you confirm. |
-| `frostroot edit [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back; fetches any missing source keys. The full-screen form can move the recipe to the other distribution. The file is regenerated from the template, so your own comments in it do not survive. |
-| `frostroot capture [--root DIR] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE \| --insecure] [--refresh-index]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, starting with a page of what it found and what a recipe cannot carry, writes `frostroot.toml`, the signing keys of the third-party sources it could carry and the certificate authorities the machine added under `/usr/local/share/ca-certificates`, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys and certificates; needs no root. |
+| `frostroot init [--distro ubuntu\|fedora] [--target wsl\|disk] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE] [--insecure] [--refresh-index]` | Opens the form and writes a commented `frostroot.toml`, then fetches the signing keys of the sources you picked into `keys/`. The form asks for the distribution first, unless `--distro` answers it, and for the target after the release, unless `--target` answers it: a tarball for WSL, or a disk image (see [Disk images](#disk-images)). Refuses to overwrite a recipe without `--force`. Writes nothing unless the answers validate and you confirm. |
+| `frostroot edit [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE] [--insecure] [--refresh-index]` | Opens the existing `frostroot.toml` in the same form, with its values preselected, and writes it back; fetches any missing source keys. The full-screen form can move the recipe to the other distribution. The file is regenerated from the template, so your own comments in it do not survive. |
+| `frostroot capture [--root DIR] [--force] [--plain] [--mirror URL] [--python-index URL] [--ca-bundle FILE] [--insecure] [--refresh-index]` | Describes an installed Ubuntu system (this one, or one mounted at `DIR`) as a recipe: opens the form with what apt, the source files and the configuration say, starting with a page of what it found and what a recipe cannot carry, writes `frostroot.toml`, the signing keys of the third-party sources it could carry and the certificate authorities the machine added under `/usr/local/share/ca-certificates`, and writes `frostroot-capture.md`, a report of everything a recipe cannot carry. Copies nothing but those public keys and certificates; needs no root. |
 | `frostroot validate` | Checks `frostroot.toml`, including that every source's key file is there and is a key, and prints every problem. No network, no root. |
-| `frostroot build [--mirror URL] [--ca-bundle FILE \| --insecure] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-<distro>-<release>-amd64.tar.gz`, such as `dist/lab-ubuntu-24.04-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. A disk recipe gets `dist/<name>-<distro>-<release>-amd64.img` instead, a raw GPT image that boots with Secure Boot on (see [Disk images](#disk-images)). |
-| `frostroot vendor [--mirror URL] [--ca-bundle FILE \| --insecure] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, a disk image's tools tree's included, or `vendor/rpms/` for Fedora, and every wheel it names into `vendor/wheels/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name, including the partial download an abandoned run leaves behind. |
+| `frostroot build [--mirror URL] [--ca-bundle FILE] [--insecure] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-<distro>-<release>-amd64.tar.gz`, such as `dist/lab-ubuntu-24.04-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. A disk recipe gets `dist/<name>-<distro>-<release>-amd64.img` instead, a raw GPT image that boots with Secure Boot on (see [Disk images](#disk-images)). |
+| `frostroot vendor [--mirror URL] [--ca-bundle FILE] [--insecure] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, a disk image's tools tree's included, or `vendor/rpms/` for Fedora, and every wheel it names into `vendor/wheels/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name, including the partial download an abandoned run leaves behind. |
 | `frostroot build --offline [--keep-work] [--plain]` | Rebuilds the image from `frostroot.lock` and `vendor/debs/` or `vendor/rpms/`, without the network. Fails unless the result has exactly the lock's packages. The lock is read, not written. A disk recipe's rebuild makes the same image, byte for byte. |
 | `frostroot version` | Prints the version and the commit it was built from. |
 
@@ -358,6 +358,7 @@ own server, which `--mirror`, an Ubuntu archive, does not replace.
 | `locale.timezone` | e.g. `UTC`, `Europe/Istanbul`, `America/Argentina/Buenos_Aires` | `UTC` |
 | `packages.include` | apt package names only, or Fedora's rpm names; no versions, no suites | preset plus extras |
 | `python.include` | PyPI names only; see [Python packages](#python-packages); Ubuntu only so far | none |
+| `python.index_url` | an `https` PEP 691 simple index to resolve from instead of PyPI, with no credentials; needs `python.include`; see [Resolving from an internal index](#resolving-from-an-internal-index) | none, which is PyPI |
 | `[[sources]]` | extra apt repositories; see [Third-party sources](#third-party-sources); Ubuntu only | none |
 | `certificates.include` | PEM files beside the recipe; see [Networks that inspect TLS](#networks-that-inspect-tls); Ubuntu only so far | none |
 
@@ -1201,7 +1202,7 @@ the form beside Ubuntu (v0.15).
 
 **Deliberately not yet:** families other than Ubuntu and Fedora · flat or
 unsigned apt repositories · npm and cargo lockfiles · Python source
-distributions · bare-metal disk or ISO images · a native Windows binary ·
+distributions · an ISO image, or a disk image of Fedora · a native Windows binary ·
 architectures other than amd64.
 
 Each exclusion has a door left open in the design. Fedora went in behind a
