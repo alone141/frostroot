@@ -566,11 +566,17 @@ func targetProblems(imageRecipe Recipe) []string {
 		problems = append(problems, fmt.Sprintf("image name %q is a disk's host name, and a host name has no underscore, double dot, or leading or trailing dot or dash", name))
 	}
 	// An Ubuntu release frostroot makes no disk of: the boot chain and the
-	// first boot were measured on the releases that build one. Fedora's
-	// disk is build's to refuse until it is built.
-	if family, err := distro.FamilyOf(imageRecipe.Image.Distro); err == nil && family == distro.Ubuntu {
-		if release, err := distro.Lookup(imageRecipe.Image.Release, imageRecipe.Image.Arch); err == nil && !release.BuildsDisks() {
-			problems = append(problems, fmt.Sprintf("a disk image is built for Ubuntu %s, not %s", orList(distro.DiskVersions(distro.Ubuntu)), imageRecipe.Image.Release))
+	// first boot were measured on the releases that build one. A Fedora
+	// disk is not built yet, and validate said ok of a recipe build then
+	// refused.
+	if family, err := distro.FamilyOf(imageRecipe.Image.Distro); err == nil {
+		switch family {
+		case distro.Ubuntu:
+			if release, err := distro.Lookup(imageRecipe.Image.Release, imageRecipe.Image.Arch); err == nil && !release.BuildsDisks() {
+				problems = append(problems, fmt.Sprintf("a disk image is built for Ubuntu %s, not %s", orList(distro.DiskVersions(distro.Ubuntu)), imageRecipe.Image.Release))
+			}
+		case distro.Fedora:
+			problems = append(problems, fmt.Sprintf("a Fedora disk image comes in a later version of frostroot; a disk image is built for Ubuntu %s", orList(distro.DiskVersions(distro.Ubuntu))))
 		}
 	}
 	if size := imageRecipe.DiskSize(); size != "" {

@@ -73,11 +73,28 @@ include = ["git"]
 	if problems := Validate(imageRecipe); len(problems) != 0 {
 		t.Errorf("Validate = %q", problems)
 	}
-	// [disk] may be left out, and Fedora builds disks too.
+	// [disk] may be left out.
+	imageRecipe.Disk = nil
+	if problems := Validate(imageRecipe); len(problems) != 0 {
+		t.Errorf("a disk recipe without [disk]: %q", problems)
+	}
+}
+
+// TestValidateRefusesAFedoraDisk: validate said ok of a Fedora disk recipe,
+// which build then refused as coming in a later version, and the form wrote
+// it.
+func TestValidateRefusesAFedoraDisk(t *testing.T) {
+	imageRecipe := diskRecipe(t)
 	imageRecipe.Disk = nil
 	imageRecipe.Image.Distro, imageRecipe.Image.Release, imageRecipe.Packages.Include = "fedora", "44", []string{"gcc"}
+	imageRecipe.Sources, imageRecipe.Python, imageRecipe.Certificates = nil, nil, nil
+	problems := Validate(imageRecipe)
+	if want := "a Fedora disk image comes in a later version of frostroot"; len(problems) != 1 || !strings.Contains(problems[0], want) {
+		t.Errorf("Validate = %q, want the one problem %q", problems, want)
+	}
+	imageRecipe.Image.Target = TargetWSL
 	if problems := Validate(imageRecipe); len(problems) != 0 {
-		t.Errorf("a Fedora disk recipe without [disk]: %q", problems)
+		t.Errorf("the same recipe for WSL: %q", problems)
 	}
 }
 

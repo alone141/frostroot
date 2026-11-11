@@ -3,6 +3,7 @@
 package cli
 
 import (
+	"context"
 	"crypto/x509"
 	"errors"
 	"flag"
@@ -15,10 +16,12 @@ import (
 	"runtime/debug"
 
 	"frostroot/internal/builder"
+	"frostroot/internal/form"
 	"frostroot/internal/pki"
 	"frostroot/internal/pool"
 	"frostroot/internal/recipe"
 	"frostroot/internal/sources"
+	"frostroot/internal/tui"
 )
 
 // readCABundle reads the file --ca-bundle named, or returns nil when the
@@ -115,6 +118,9 @@ type App struct {
 	// means a client honoring the proxy environment. Tests answer from
 	// their own server.
 	IndexClient *http.Client
+	// runForm shows the full-screen form; nil means tui.RunForm. Tests
+	// answer it themselves.
+	runForm func(ctx context.Context, fields []form.Field, initial form.Values, preview tui.PreviewFunc, input io.Reader, output io.Writer) (form.Values, error)
 }
 
 // New returns an App wired to the real process.

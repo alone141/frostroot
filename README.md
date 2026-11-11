@@ -223,7 +223,10 @@ goes back, Ctrl-C or Esc leaves without writing (exit 130). The last page shows 
 exactly as it will be written — or, for `edit`, a diff of the file against
 it, with a count and a warning when comments of your own are about to be
 replaced by the template's; when nothing would change, the question defaults
-to not writing. `capture` opens with a page of what it found and what a
+to not writing. Answers that cannot be built, such as a disk image of Ubuntu
+22.04 or of Fedora, are named on that page, and Write takes you back to the
+form with every answer kept and the problem at the top of the first page.
+`capture` opens with a page of what it found and what a
 recipe cannot carry. You type an image name, a user name and, if you want,
 extra package names or PPAs; everything else is a choice. The signing keys
 of the sources you picked are fetched, checked against pinned fingerprints

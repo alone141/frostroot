@@ -74,7 +74,7 @@ func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath 
 	var problems []string
 	var err error
 	if fullScreen {
-		values, err = tui.RunForm(context.Background(), fields, initial, preview, a.Stdin, a.Stdout)
+		values, problems, err = a.runFullScreenForm(fields, initial, preview)
 	} else {
 		values, problems, err = a.askFieldsPlain(fields, initial)
 	}
@@ -161,6 +161,45 @@ func (a *App) declineToWrite(commandName string, unchanged bool) int {
 	}
 	a.stderrf("frostroot %s: nothing written\n", commandName)
 	return exitUserError
+}
+
+// runFullScreenForm runs the full-screen form until its answers make a
+// recipe that validates, or it is left. Answers that do not validate send
+// the person back to the form with every answer kept and what is wrong at
+// the top of the Image page, rather than out of it with none: an Ubuntu
+// 22.04 disk, or a Fedora one, was found only after the summary's Write,
+// and every answer of the session went with the exit. The summary page
+// says so before that Write.
+func (a *App) runFullScreenForm(fields []form.Field, initial form.Values, preview tui.PreviewFunc) (form.Values, []string, error) {
+	run := a.runForm
+	if run == nil {
+		run = tui.RunForm
+	}
+	warnedPreview := func(values form.Values) tui.Preview {
+		shown := preview(values)
+		if problems := recipe.Validate(form.ToRecipe(values)); len(problems) > 0 {
+			warning := "These answers cannot be written yet; Write takes you back to them:\n  " + strings.Join(problems, "\n  ")
+			if shown.Warning != "" {
+				warning += "\n\n" + shown.Warning
+			}
+			shown.Warning = warning
+		}
+		return shown
+	}
+	asked := fields
+	for {
+		values, err := run(context.Background(), asked, initial, warnedPreview, a.Stdin, a.Stdout)
+		if err != nil {
+			return values, nil, err
+		}
+		problems := recipe.Validate(form.ToRecipe(values))
+		if len(problems) == 0 {
+			return values, nil, nil
+		}
+		initial = values
+		note := form.NoteField(form.PageImage, "Not written yet", "Change these, then write again:\n  "+strings.Join(problems, "\n  "))
+		asked = slices.Concat([]form.Field{note}, fields)
+	}
 }
 
 // recipePreview returns what the last page of the form shows for the
