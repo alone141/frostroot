@@ -59,6 +59,15 @@ func (a *App) runVendor(args []string) int {
 			return exitUserError
 		}
 	}
+	// No build or other vendor of this user runs in the directory until
+	// this one is done: one that placed a new lock while this one read the
+	// old one would leave a pool for neither.
+	hold, err := builder.HoldRecipeDir(a.Getenv, a.RecipeDir, "vendor")
+	if err != nil {
+		a.stderrf("frostroot: %v\n", err)
+		return exitUserError
+	}
+	defer hold.Release()
 	lockPath := filepath.Join(a.RecipeDir, builder.LockFileName)
 	lock, err := recipe.LoadLock(lockPath)
 	if errors.Is(err, os.ErrNotExist) {

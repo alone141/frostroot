@@ -244,13 +244,27 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if err := checkOutputWritable(options.RecipeDir); err != nil {
 		return Result{}, err
 	}
+	if err := prepareWorkRoot(workRoot, currentUID); err != nil {
+		return Result{}, err
+	}
+	// From here until the build has placed its files or failed, no other
+	// build or vendor of this user runs in the recipe directory: two would
+	// place and read one lock. An offline build read the lock before it
+	// held the directory, so that a recipe a build cannot use is refused
+	// without touching the work root; it checks that no other run replaced
+	// the lock meanwhile.
+	hold, err := holdRecipeDir(workRoot, options.RecipeDir, "build")
+	if err != nil {
+		return Result{}, err
+	}
+	defer hold.Release()
 	if offline != nil {
+		if err := offline.checkLockUnchanged(); err != nil {
+			return Result{}, err
+		}
 		if err := verifyPool(offline, progress); err != nil {
 			return Result{}, err
 		}
-	}
-	if err := prepareWorkRoot(workRoot, currentUID); err != nil {
-		return Result{}, err
 	}
 	workDir, err := createBuildDir(workRoot)
 	if err != nil {

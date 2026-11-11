@@ -342,7 +342,7 @@ func (a *App) reportBuildFailure(err error, interrupted bool, archiveURL, keptWo
 		errors.Is(err, builder.ErrFedoraOption), errors.Is(err, builder.ErrUserNamespacesRestricted),
 		errors.Is(err, builder.ErrNoDiskTool),
 		errors.Is(err, builder.ErrNoKeyring), errors.Is(err, builder.ErrBadWorkRoot),
-		errors.Is(err, builder.ErrUnwritableOutput), errors.Is(err, builder.ErrNoLock),
+		errors.Is(err, builder.ErrUnwritableOutput), errors.Is(err, builder.ErrNoLock), errors.Is(err, builder.ErrRecipeDirBusy),
 		errors.Is(err, builder.ErrLockMismatch), errors.Is(err, builder.ErrPoolIncomplete),
 		errors.Is(err, builder.ErrSourceKey), errors.Is(err, builder.ErrCertificate), errors.Is(err, builder.ErrBadSourceDateEpoch),
 		errors.Is(err, pool.ErrNoChecksums), errors.Is(err, pool.ErrBadLock):

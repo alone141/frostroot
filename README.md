@@ -335,7 +335,7 @@ own server, which `--mirror`, an Ubuntu archive, does not replace.
 | Exit code | Meaning |
 |---|---|
 | 0 | success |
-| 1 | something you can fix: invalid or missing recipe, not Linux, mmdebstrap or ubuntu-keyring missing, a host without `mount` or one that cannot mount in the build, for Fedora mkosi or a program it runs missing, an mkosi frostroot does not know, or user namespaces restricted, for a disk image bubblewrap or uidmap missing or a `disk.size` too small for the image (the work directory is kept), unusable work directory, a `dist/` you cannot write to, a source key or certificate file that cannot be read, an unusable `SOURCE_DATE_EPOCH`; for `vendor` and `--offline`, no lock, a lock that cannot be read or holds what no build writes, a lock without checksums, a recipe that changed since the lock, an incomplete `vendor/debs/` or `vendor/rpms/` |
+| 1 | something you can fix: invalid or missing recipe, not Linux, mmdebstrap or ubuntu-keyring missing, a host without `mount` or one that cannot mount in the build, for Fedora mkosi or a program it runs missing, an mkosi frostroot does not know, or user namespaces restricted, for a disk image bubblewrap or uidmap missing or a `disk.size` too small for the image (the work directory is kept), unusable work directory, a `dist/` you cannot write to, a source key or certificate file that cannot be read, an unusable `SOURCE_DATE_EPOCH`, another `build` or `vendor` of yours running in the same directory; for `vendor` and `--offline`, no lock, a lock that cannot be read or holds what no build writes, a lock without checksums, a recipe that changed since the lock, an incomplete `vendor/debs/` or `vendor/rpms/` |
 | 2 | the build failed: mmdebstrap or mkosi failed (unknown package, mirror unreachable), provisioning failed, the tarball could not be placed, an offline build's packages differ from the lock; for `vendor`, a download failed or a file did not match its checksum |
 | 130 | interrupted with Ctrl-C; nothing is written and the work directory is kept; `vendor` keeps finished downloads |
 
@@ -1134,9 +1134,13 @@ bootstrapping and says so; `sudo chown -R $USER dist frostroot.lock` or
 removing them fixes it. Its work directory, `/var/tmp/frostroot-0`, stays out
 of the way of unprivileged builds.
 
-**One build per recipe directory at a time.** Two builds running in the same
-directory do not disturb each other's temporary files, but whichever finishes
-last wins, and the lock and tarball may then come from different builds.
+**One build per recipe directory at a time.** A `build` or `vendor` holds
+its recipe directory until it is done, and a second one started there
+meanwhile stops at once with exit 1, naming the one that is running. The
+hold is a lock file under your work directory, so it keeps out your own
+runs only: a build of another user, or one under `sudo`, is not seen, and
+two of those in one directory can still leave a lock and a tarball of
+different builds.
 
 **20.04 images ship known, unfixed CVEs.** Focal's standard support ended in
 May 2025. Its packages are still on the archive, but security fixes since then

@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -45,15 +44,9 @@ var (
 // timezone and systemd settings may differ, as on Ubuntu; the locale may
 // too, as long as the lock holds its langpack.
 func planFedoraOffline(recipeDir string, imageRecipe recipe.Recipe, release distro.FedoraRelease) (*offlinePlan, error) {
-	lockPath := filepath.Join(recipeDir, LockFileName)
-	lock, err := recipe.LoadLock(lockPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("%w in %s; run frostroot build online first, then frostroot vendor", ErrNoLock, recipeDir)
-	}
+	lockPath, lock, lockInfo, err := loadOfflineLock(recipeDir)
 	if err != nil {
-		// A lock that does not parse, written by a newer frostroot or
-		// edited by hand, is the person's to fix, as vendor says it is.
-		return nil, fmt.Errorf("%w: %w", pool.ErrBadLock, err)
+		return nil, err
 	}
 	// As on Ubuntu: a lock of another family is read no further.
 	if lockFamily, err := distro.FamilyOf(lock.Distro); err != nil || lockFamily != distro.Fedora {
@@ -110,6 +103,7 @@ func planFedoraOffline(recipeDir string, imageRecipe recipe.Recipe, release dist
 	}
 	return &offlinePlan{
 		lockPath: lockPath,
+		lockInfo: lockInfo,
 		lock:     lock,
 		entries:  entries,
 		poolDir:  filepath.Join(recipeDir, filepath.FromSlash(pool.RPMsDirName)),

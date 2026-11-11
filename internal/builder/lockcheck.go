@@ -54,6 +54,9 @@ func (k packageKey) String() string { return k.name + " " + k.version + " " + k.
 // exists: the lock it rebuilds and the pool it rebuilds from.
 type offlinePlan struct {
 	lockPath string
+	// lockInfo is the lock file as it was before it was read, for
+	// checkLockUnchanged.
+	lockInfo os.FileInfo
 	lock     recipe.Lockfile
 	// entries is everything the pool must hold, once each: the image's
 	// packages and, for a disk image, the disk tools tree's; entriesFor
@@ -210,21 +213,48 @@ func checkLockTarget(lock recipe.Lockfile, imageRecipe recipe.Recipe) error {
 	return nil
 }
 
+// loadOfflineLock reads the lock in recipeDir for an offline build: its
+// path, what it says, and the file as it was before it was read, so that
+// checkLockUnchanged can tell, once the recipe directory is held, whether
+// another run replaced it meanwhile.
+func loadOfflineLock(recipeDir string) (string, recipe.Lockfile, os.FileInfo, error) {
+	lockPath := filepath.Join(recipeDir, LockFileName)
+	lockInfo, err := os.Stat(lockPath)
+	if err == nil {
+		var lock recipe.Lockfile
+		if lock, err = recipe.LoadLock(lockPath); err == nil {
+			return lockPath, lock, lockInfo, nil
+		}
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return "", recipe.Lockfile{}, nil, fmt.Errorf("%w in %s; run frostroot build online first, then frostroot vendor", ErrNoLock, recipeDir)
+	}
+	// A lock that does not parse, written by a newer frostroot or edited
+	// by hand, is the person's to fix, as vendor says it is.
+	return "", recipe.Lockfile{}, nil, fmt.Errorf("%w: %w", pool.ErrBadLock, err)
+}
+
+// checkLockUnchanged fails when the lock file is no longer the one the plan
+// read: another build placed a new one between the reading and the hold on
+// the recipe directory, and building from what was read would end with an
+// image of the old lock beside the new one.
+func (p *offlinePlan) checkLockUnchanged() error {
+	current, err := os.Stat(p.lockPath)
+	if err == nil && p.lockInfo != nil && os.SameFile(current, p.lockInfo) && current.Size() == p.lockInfo.Size() && current.ModTime().Equal(p.lockInfo.ModTime()) {
+		return nil
+	}
+	return fmt.Errorf("%w: %s changed while this build was starting; run it again", ErrRecipeDirBusy, LockFileName)
+}
+
 // planOffline loads the lock in recipeDir and checks that it still describes
 // imageRecipe, an Ubuntu recipe: same family, same release, same
 // architecture, same requested packages. The user, sudo, locale, timezone
 // and systemd settings may differ; they are provisioned at build time and
 // need no packages.
 func planOffline(recipeDir string, imageRecipe recipe.Recipe, release distro.Release) (*offlinePlan, error) {
-	lockPath := filepath.Join(recipeDir, LockFileName)
-	lock, err := recipe.LoadLock(lockPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("%w in %s; run frostroot build online first, then frostroot vendor", ErrNoLock, recipeDir)
-	}
+	lockPath, lock, lockInfo, err := loadOfflineLock(recipeDir)
 	if err != nil {
-		// A lock that does not parse, written by a newer frostroot or
-		// edited by hand, is the person's to fix, as vendor says it is.
-		return nil, fmt.Errorf("%w: %w", pool.ErrBadLock, err)
+		return nil, err
 	}
 	// A lock of another family names packages, files and repositories that
 	// only that family's build can install, so nothing else in it is read.
@@ -313,6 +343,7 @@ func planOffline(recipeDir string, imageRecipe recipe.Recipe, release distro.Rel
 	}
 	return &offlinePlan{
 		lockPath:     lockPath,
+		lockInfo:     lockInfo,
 		lock:         lock,
 		entries:      entries,
 		poolDir:      filepath.Join(recipeDir, filepath.FromSlash(pool.DebsDirName)),
