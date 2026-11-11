@@ -248,6 +248,10 @@ func (f *fetcher) primary(plan rpmPlan) ([]Entry, error) {
 		if errors.Is(err, errTooLarge) || counted.count > plan.primary.size {
 			return nil, fmt.Errorf("%s: %w", url, errTooLarge)
 		}
+		// A server that went quiet is not one that published anew.
+		if errors.Is(err, errStalled) {
+			return nil, fmt.Errorf("%s: %w", url, err)
+		}
 		// A cut download fails in the decompressor or the parser before
 		// the digest is ever compared.
 		return nil, fmt.Errorf("%s: %w: %w", url, errChanged, err)
@@ -363,8 +367,8 @@ func reducePrimary(reader io.Reader) ([]Entry, error) {
 	for _, kept := range byName {
 		entries = append(entries, Entry{
 			Name:        kept.name,
-			Version:     displayEVR(kept.epoch, kept.version, kept.rel),
-			Description: oneLine(kept.summary),
+			Version:     cutField(displayEVR(kept.epoch, kept.version, kept.rel), maxFieldBytes),
+			Description: cutField(oneLine(kept.summary), maxDescriptionBytes),
 		})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
@@ -376,7 +380,7 @@ func reducePrimary(reader io.Reader) ([]Entry, error) {
 // already kept.
 func keepNewest(byName map[string]rpmPackage, read rpmPackage) {
 	read.name, read.arch = oneLine(read.name), strings.TrimSpace(read.arch)
-	if !read.isRPM || !read.hasVersion || read.name == "" {
+	if !read.isRPM || !read.hasVersion || read.name == "" || len(read.name) > maxNameBytes {
 		return
 	}
 	if read.arch != distro.FedoraArch && read.arch != "noarch" {

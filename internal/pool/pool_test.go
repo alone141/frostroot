@@ -631,6 +631,50 @@ func TestFetchCanceledRemovesPartialFiles(t *testing.T) {
 	assertPoolHolds(t, options.Dir)
 }
 
+// TestFetchFailsADownloadThatStalls: the client's timeout covers the
+// headers only, so a server that sent half a file and then nothing, with
+// the connection still open, held vendor until someone pressed Ctrl-C.
+// A download that receives nothing for the stall timeout fails, after the
+// one retry a failed download gets, and leaves no partial file.
+func TestFetchFailsADownloadThatStalls(t *testing.T) {
+	entry := entryFor("big", "1")
+	entry.Size = 1 << 20
+	entry.SHA256 = strings.Repeat("0", 64)
+	released := make(chan struct{})
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		attempts.Add(1)
+		writer.Header().Set("Content-Length", "1048576")
+		_, _ = writer.Write(make([]byte, 4096))
+		if flusher, canFlush := writer.(http.Flusher); canFlush {
+			flusher.Flush()
+		}
+		select { // half a file, then nothing, until the client gives up
+		case <-released:
+		case <-request.Context().Done():
+		}
+	}))
+	t.Cleanup(func() { close(released); server.Close() })
+	options := FetchOptions{Dir: t.TempDir(), Entries: []Entry{entry}, MirrorURL: server.URL, Sleep: noSleep, StallTimeout: 200 * time.Millisecond}
+	result := make(chan error, 1)
+	go func() {
+		_, err := Fetch(context.Background(), options)
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		if !errors.Is(err, ErrStalled) {
+			t.Errorf("err = %v, want ErrStalled", err)
+		}
+		if got := attempts.Load(); got != 2 {
+			t.Errorf("the file was asked for %d times, want twice: once, and the one retry", got)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("Fetch is still waiting on a download that stalled")
+	}
+	assertPoolHolds(t, options.Dir)
+}
+
 func TestFetchManyFilesWithSeveralWorkers(t *testing.T) {
 	var entries []Entry
 	for i := range 25 {

@@ -236,7 +236,7 @@ func TestWriteStageSourcesListForOfflineBuilds(t *testing.T) {
 	}
 	hooks := CustomizeHooks(stage)
 	uploadIndex := slices.IndexFunc(hooks, func(hook string) bool { return strings.HasSuffix(hook, " /etc/apt/sources.list") })
-	provisionIndex := slices.IndexFunc(hooks, func(hook string) bool { return strings.HasPrefix(hook, "chroot ") })
+	provisionIndex := slices.IndexFunc(hooks, func(hook string) bool { return strings.Contains(hook, "chroot ") })
 	if uploadIndex < 0 || uploadIndex > provisionIndex {
 		t.Errorf("hooks = %q, want the sources.list uploaded before provisioning", hooks)
 	}
@@ -267,7 +267,7 @@ func TestCustomizeHooksOrderAndContent(t *testing.T) {
 	wantHooks := []string{
 		"upload '/w/stage/wsl.conf' /etc/wsl.conf",
 		"upload '/w/stage/sudoers' /etc/sudoers.d/90-frostroot",
-		`chroot "$1" /bin/sh -c "$(cat '/w/stage/provision.sh')" frostroot-provision`,
+		`script=$(cat '/w/stage/provision.sh') && chroot "$1" /bin/sh -c "$script" frostroot-provision`,
 		// The host's files go after everything that needs the network:
 		// resolv.conf is how a hook resolves a name.
 		`rm -f "$1/etc/resolv.conf" "$1/etc/hostname"`,
@@ -298,11 +298,37 @@ func TestCustomizeHooksWithoutSudoOmitSudoers(t *testing.T) {
 }
 
 func TestHooksAndScriptNeverSwallowFailures(t *testing.T) {
-	everything := strings.Join(CustomizeHooks(sampleStage("/w/stage")), "\n") + "\n" + renderProvisionScript(t, sampleRecipe())
+	// The Python script too, which used to end its compile step with
+	// "|| true" where nothing looked.
+	everything := strings.Join(CustomizeHooks(sampleStage("/w/stage")), "\n") + "\n" + renderProvisionScript(t, sampleRecipe()) +
+		"\n" + renderPythonScript(t, pythonRecipe(), PythonOptions{})
 	for _, failureSwallower := range []string{"|| true", "|| :", "set +e"} {
 		if strings.Contains(everything, failureSwallower) {
 			t.Errorf("hooks must fail closed, found %q", failureSwallower)
 		}
+	}
+}
+
+// TestScriptHooksFailWhenTheScriptCannotBeRead: the hooks ran
+// sh -c "$(cat FILE)", and a command substitution that fails inside an
+// argument does not fail the command, so a script that could not be read
+// ran as an empty one and the hook succeeded, packing an image nothing had
+// provisioned. Run through a real shell, as mmdebstrap does.
+func TestScriptHooksFailWhenTheScriptCannotBeRead(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "never-staged.sh")
+	for _, name := range []string{provisionScriptName, pythonScriptName, diskScriptName} {
+		t.Run(name, func(t *testing.T) {
+			// mmdebstrap runs shell hooks as: sh -c HOOK exec ROOTDIR. The
+			// stand-in for chroot says whether it was reached.
+			script := `chroot() { echo "chroot ran"; }` + "\n" + runStagedScriptHook(missing, name)
+			output, err := exec.Command("sh", "-c", script, "exec", "/fake/root").CombinedOutput()
+			if err == nil {
+				t.Errorf("the hook succeeded with its script missing: %s", output)
+			}
+			if strings.Contains(string(output), "chroot ran") {
+				t.Errorf("the hook ran chroot with no script to run: %s", output)
+			}
+		})
 	}
 }
 
@@ -320,7 +346,7 @@ func TestProvisionHookRunsTheStagedScriptWithHostilePaths(t *testing.T) {
 	}
 	var provisionHook string
 	for _, hook := range CustomizeHooks(stage) {
-		if strings.HasPrefix(hook, "chroot ") {
+		if strings.Contains(hook, "chroot ") {
 			provisionHook = hook
 		}
 	}

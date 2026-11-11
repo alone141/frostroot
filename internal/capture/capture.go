@@ -105,7 +105,10 @@ func Read(rootDir string) (Snapshot, error) {
 	}
 	snapshot.Release = release
 
-	installed, ok := root.installedPackages()
+	installed, ok, err := root.installedPackages()
+	if err != nil {
+		return Snapshot{}, err
+	}
 	if !ok {
 		return Snapshot{}, fmt.Errorf("%w: no dpkg status under %s", ErrNotLinuxRoot, root)
 	}
@@ -116,7 +119,10 @@ func Read(rootDir string) (Snapshot, error) {
 	snapshot.Arch = arch
 	snapshot.InstalledCount = len(installed)
 
-	auto, haveAutoMarks := root.autoInstalled()
+	auto, haveAutoMarks, err := root.autoInstalled()
+	if err != nil {
+		return Snapshot{}, err
+	}
 	requested, dropped, machinePackages := requestedPackages(installed, auto)
 	snapshot.Packages = requested
 	switch {

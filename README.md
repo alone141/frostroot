@@ -280,7 +280,9 @@ and `edit` ask the same questions one line at a time, and `build` and
 The distribution is not one of those questions: `init --distro fedora`
 answers it, a plain `init` without it writes an Ubuntu recipe, and `edit`
 keeps the recipe's, so a script that pipes answers in answers the same
-questions it always did.
+questions it always did. An empty answer keeps the value shown in
+brackets; `-` empties a question that may be empty, such as the other
+packages, the Python packages or a list.
 
 **The order of those questions changed in v0.12**, because the sources are
 now asked before the packages. A script that answers them by position — a
@@ -333,7 +335,7 @@ own server, which `--mirror`, an Ubuntu archive, does not replace.
 | Exit code | Meaning |
 |---|---|
 | 0 | success |
-| 1 | something you can fix: invalid or missing recipe, not Linux, mmdebstrap or ubuntu-keyring missing, for Fedora mkosi or a program it runs missing or an mkosi frostroot does not know, for a disk image bubblewrap or uidmap missing, unusable work directory, a `dist/` you cannot write to; for `vendor` and `--offline`, no lock, a lock without checksums, a recipe that changed since the lock, an incomplete `vendor/debs/` or `vendor/rpms/` |
+| 1 | something you can fix: invalid or missing recipe, not Linux, mmdebstrap or ubuntu-keyring missing, a host without `mount` or one that cannot mount in the build, for Fedora mkosi or a program it runs missing, an mkosi frostroot does not know, or user namespaces restricted, for a disk image bubblewrap or uidmap missing or a `disk.size` too small for the image (the work directory is kept), unusable work directory, a `dist/` you cannot write to, a source key or certificate file that cannot be read, an unusable `SOURCE_DATE_EPOCH`; for `vendor` and `--offline`, no lock, a lock that cannot be read or holds what no build writes, a lock without checksums, a recipe that changed since the lock, an incomplete `vendor/debs/` or `vendor/rpms/` |
 | 2 | the build failed: mmdebstrap or mkosi failed (unknown package, mirror unreachable), provisioning failed, the tarball could not be placed, an offline build's packages differ from the lock; for `vendor`, a download failed or a file did not match its checksum |
 | 130 | interrupted with Ctrl-C; nothing is written and the work directory is kept; `vendor` keeps finished downloads |
 

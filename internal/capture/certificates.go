@@ -79,7 +79,7 @@ func (root systemRoot) certificatesForRecipe() (carried []capturedCertificate, l
 		if !strings.HasSuffix(entry.Name(), ".crt") {
 			return nil
 		}
-		data, err := os.ReadFile(filePath)
+		data, err := readRegular(filePath)
 		if err != nil {
 			left = append(left, leftSource{from, "could not be read: " + err.Error()})
 			return nil

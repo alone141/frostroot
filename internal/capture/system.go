@@ -2,6 +2,9 @@ package capture
 
 import (
 	"bufio"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -72,9 +75,68 @@ func (root systemRoot) pathInRoot(relative string) (string, bool) {
 	return resolved, systemRoot(realRoot).contains(realPath)
 }
 
-// readText returns a file's content, or "" and false when it cannot be read.
+// maxReadBytes bounds any one file capture reads. The largest is dpkg's
+// status, tens of megabytes on a machine with everything installed.
+const maxReadBytes = 256 << 20
+
+// Why openInRoot refuses a file.
+var (
+	errOutsideRoot  = errors.New("it leads outside the captured root")
+	errNotRegular   = errors.New("it is not a regular file")
+	errFileTooLarge = fmt.Errorf("it is larger than %d bytes", maxReadBytes)
+)
+
+// openInRoot opens relative, a path under the root, for reading: only once
+// it resolves inside the root, symlinks followed, and only a regular file.
+// With --root DIR the tree was written by another machine, and a symlink in
+// it to one of this machine's files would describe this machine as that
+// one; a FIFO would block the open, and a device never end the read.
+func (root systemRoot) openInRoot(relative string) (*os.File, error) {
+	resolved, inside := root.pathInRoot(relative)
+	if !inside {
+		return nil, errOutsideRoot
+	}
+	return openRegular(resolved)
+}
+
+// openRegular opens path, which the caller has kept inside the root, if it
+// is a regular file.
+func openRegular(path string) (*os.File, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errNotRegular
+	}
+	return os.Open(path)
+}
+
+// readRegular reads path as openRegular opens it, up to maxReadBytes.
+func readRegular(path string) ([]byte, error) {
+	file, err := openRegular(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }() // read-only
+	content, err := io.ReadAll(io.LimitReader(file, maxReadBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(content) > maxReadBytes {
+		return nil, errFileTooLarge
+	}
+	return content, nil
+}
+
+// readText returns a file's content, or "" and false when it cannot be read
+// or openInRoot refuses it.
 func (root systemRoot) readText(relative string) (string, bool) {
-	content, err := os.ReadFile(root.path(relative))
+	resolved, inside := root.pathInRoot(relative)
+	if !inside {
+		return "", false
+	}
+	content, err := readRegular(resolved)
 	if err != nil {
 		return "", false
 	}

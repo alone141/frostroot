@@ -25,7 +25,12 @@ const (
 	defaultUserAgent      = "frostroot"
 	retryDelay            = time.Second
 	responseHeaderTimeout = 30 * time.Second
-	copyBufferBytes       = 256 << 10
+	// DefaultStallTimeout is how long a download may receive nothing
+	// before it fails: long enough for a slow link, short enough that a
+	// server which sent half a file and went quiet does not hold vendor
+	// for good.
+	DefaultStallTimeout = time.Minute
+	copyBufferBytes     = 256 << 10
 	// maxUnknownFileBytes bounds a download whose size the lock does not
 	// record. The largest wheel on PyPI is a few hundred megabytes.
 	maxUnknownFileBytes = 2 << 30
@@ -39,6 +44,8 @@ var (
 	// ErrMismatch means a source served a file with another size or
 	// checksum than the lock records.
 	ErrMismatch = errors.New("size or checksum differs from the lock")
+	// ErrStalled means a download received nothing for the stall timeout.
+	ErrStalled = errors.New("the download stalled")
 )
 
 // FetchError says which file could not be fetched, from where, and why.
@@ -77,6 +84,10 @@ type FetchOptions struct {
 	Insecure  bool
 	Workers   int    // concurrent downloads; <= 0 means DefaultWorkers
 	UserAgent string // "" means defaultUserAgent
+	// StallTimeout fails a download that receives nothing for this long,
+	// after its headers; <= 0 means DefaultStallTimeout. The client's own
+	// timeout covers only the headers, and a body can stop mid-file.
+	StallTimeout time.Duration
 
 	OnChecked    func(checked, total int)                  // Verify progress
 	OnDownloaded func(doneBytes, totalBytes int64)         // download progress, in bytes still to fetch
@@ -188,6 +199,9 @@ func newFetcher(options FetchOptions, totalBytes int64) *fetcher {
 	if f.options.Sleep == nil {
 		f.options.Sleep = sleepUnlessCanceled
 	}
+	if f.options.StallTimeout <= 0 {
+		f.options.StallTimeout = DefaultStallTimeout
+	}
 	return f
 }
 
@@ -260,7 +274,12 @@ func (f *fetcher) downloadWithRetry(ctx context.Context, entry Entry, url string
 // SHA-256 against entry, and renames it to the entry's file name. Any
 // failure removes the temporary file.
 func (f *fetcher) download(ctx context.Context, entry Entry, url string) (err error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	// The request has a context of its own, which a watchdog cancels when
+	// the body has sent nothing for the stall timeout: the read that
+	// waits for it then fails, and the download with it.
+	requestCtx, cancelRequest := context.WithCancelCause(ctx)
+	defer cancelRequest(nil)
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
@@ -301,8 +320,15 @@ func (f *fetcher) download(ctx context.Context, entry Entry, url string) (err er
 	if entry.Size > 0 {
 		readLimit = entry.Size + 1
 	}
-	written, err := io.CopyBuffer(&progressWriter{writer: io.MultiWriter(temporary, digest), report: f.addProgress}, io.LimitReader(response.Body, readLimit), make([]byte, copyBufferBytes))
+	stallTimeout := f.options.StallTimeout
+	watchdog := time.AfterFunc(stallTimeout, func() { cancelRequest(ErrStalled) })
+	defer watchdog.Stop()
+	body := &stallReader{reader: io.LimitReader(response.Body, readLimit), received: func() { watchdog.Reset(stallTimeout) }}
+	written, err := io.CopyBuffer(&progressWriter{writer: io.MultiWriter(temporary, digest), report: f.addProgress}, body, make([]byte, copyBufferBytes))
 	if err != nil {
+		if errors.Is(context.Cause(requestCtx), ErrStalled) && ctx.Err() == nil {
+			return fmt.Errorf("%w: nothing received for %s", ErrStalled, stallTimeout)
+		}
 		return err
 	}
 	if entry.Size > 0 && written != entry.Size {
@@ -321,6 +347,21 @@ func (f *fetcher) download(ctx context.Context, entry Entry, url string) (err er
 		return err
 	}
 	return os.Rename(temporaryPath, filepath.Join(f.options.Dir, entry.FileName))
+}
+
+// stallReader tells received about every read that brought bytes, which
+// is what keeps a download's watchdog from firing.
+type stallReader struct {
+	reader   io.Reader
+	received func()
+}
+
+func (s *stallReader) Read(buffer []byte) (int, error) {
+	count, err := s.reader.Read(buffer)
+	if count > 0 {
+		s.received()
+	}
+	return count, err
 }
 
 // progressWriter reports every write to a function.

@@ -7,6 +7,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -448,16 +449,42 @@ func KeyPath(recipeDir string, source Source) string {
 // CheckImageName reports why name cannot be an image name, or nil. The name
 // becomes a file name and a WSL distribution name.
 func CheckImageName(name string) error {
-	if !imageNamePattern.MatchString(name) {
-		return fmt.Errorf("invalid image name %q (letters, digits, dot, dash, underscore; must not be empty)", name)
+	if !imageNamePattern.MatchString(name) || len(name) > maxImageNameLength {
+		return fmt.Errorf("invalid image name %q (letters, digits, dot, dash, underscore; 1-%d characters)", name, maxImageNameLength)
 	}
 	return nil
+}
+
+// maxImageNameLength bounds the image's name, which names the output file
+// and, for a disk, is the machine's host name, which Linux takes up to 64
+// characters of. A longer one failed only once the image was placed.
+const maxImageNameLength = 64
+
+// hostNamePattern is a host name systemd accepts as it is: labels of
+// letters, digits and dashes, neither starting nor ending with a dash,
+// joined by single dots.
+var hostNamePattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$`)
+
+// reservedAccountNames are the users and groups an Ubuntu or Fedora base
+// system already has: Debian's base-passwd, the accounts systemd and apt
+// add, and Fedora's setup package. useradd --user-group refuses each of
+// them minutes into a build, after the bootstrap.
+var reservedAccountNames = []string{
+	"_apt", "adm", "audio", "backup", "bin", "cdrom", "crontab", "daemon", "dialout", "dip", "disk", "fax",
+	"floppy", "ftp", "games", "gnats", "halt", "input", "irc", "kmem", "kvm", "list", "lp", "mail", "man",
+	"messagebus", "netdev", "news", "nobody", "nogroup", "operator", "plugdev", "proxy", "render", "sasl",
+	"shadow", "shutdown", "src", "staff", "sudo", "sync", "sys", "syslog", "systemd-journal", "systemd-network",
+	"systemd-resolve", "systemd-timesync", "tape", "tss", "tty", "users", "utmp", "uucp", "uuidd", "video",
+	"voice", "wheel", "www-data",
 }
 
 // CheckUserName reports why name cannot be the image's user, or nil.
 func CheckUserName(name string) error {
 	if name == "root" || !userNamePattern.MatchString(name) || len(name) > maxUserNameLength {
 		return fmt.Errorf("invalid user name %q (lowercase letters, digits, - and _; 1-%d chars; not root)", name, maxUserNameLength)
+	}
+	if slices.Contains(reservedAccountNames, name) {
+		return fmt.Errorf("invalid user name %q: the base system already has a user or group of that name, and the build could not create it", name)
 	}
 	return nil
 }
@@ -532,6 +559,11 @@ func targetProblems(imageRecipe Recipe) []string {
 	var problems []string
 	if imageRecipe.WSL != (WSL{}) {
 		problems = append(problems, "[wsl] is for WSL recipes: a disk image has no wsl.conf, so remove the table")
+	}
+	// A disk's /etc/hostname is its image's name, written as it is, and
+	// systemd boots with another name than one it does not accept.
+	if name := imageRecipe.Image.Name; imageNamePattern.MatchString(name) && !hostNamePattern.MatchString(name) {
+		problems = append(problems, fmt.Sprintf("image name %q is a disk's host name, and a host name has no underscore, double dot, or leading or trailing dot or dash", name))
 	}
 	// An Ubuntu release frostroot makes no disk of: the boot chain and the
 	// first boot were measured on the releases that build one. Fedora's

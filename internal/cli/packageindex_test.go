@@ -326,6 +326,89 @@ func TestPlainInitWarnsAboutPythonNamesFromACachedIndex(t *testing.T) {
 	}
 }
 
+// TestPythonIndexForKeepsARecipesOwnIndex: the form looked names up on
+// pypi.org unless --python-index said otherwise, even when the recipe it
+// was editing resolves from an index of its own, telling PyPI what that
+// index holds. The flag still decides when given.
+func TestPythonIndexForKeepsARecipesOwnIndex(t *testing.T) {
+	own := "https://nexus.corp.example/repository/pypi/simple"
+	withIndex := recipe.Recipe{Python: &recipe.Python{Include: []string{"corp-billing-client"}, IndexURL: own}}
+	for name, test := range map[string]struct {
+		flag        string
+		imageRecipe recipe.Recipe
+		want        string
+	}{
+		"the recipe's own index":            {imageRecipe: withIndex, want: own},
+		"the flag over the recipe's":        {flag: "https://other.example/simple", imageRecipe: withIndex, want: "https://other.example/simple"},
+		"no index anywhere is PyPI's":       {imageRecipe: recipe.Recipe{}, want: ""},
+		"a flag and a recipe with no index": {flag: "https://other.example/simple", want: "https://other.example/simple"},
+	} {
+		if got := pythonIndexFor(test.flag, test.imageRecipe); got != test.want {
+			t.Errorf("%s: pythonIndexFor = %q, want %q", name, got, test.want)
+		}
+	}
+	// And the summaries of a form opened that way ask that index, not
+	// pypi.org.
+	app := (&App{Getenv: environmentWith(map[string]string{"XDG_CACHE_HOME": t.TempDir()})}).withDefaults()
+	indexes, ok := app.packageIndexes(&indexFlags{pythonIndex: pythonIndexFor("", withIndex)})
+	if !ok {
+		t.Fatal("packageIndexes refused plain flags")
+	}
+	if indexes.pypiOptions.Mirror != own {
+		t.Errorf("PyPI options name %q, want the recipe's own index", indexes.pypiOptions.Mirror)
+	}
+}
+
+// redirectTransport sends every request to host over plain http, keeping
+// the path: an https index address that the test serves itself.
+type redirectTransport struct{ host string }
+
+func (r redirectTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	redirected := request.Clone(request.Context())
+	redirected.URL.Scheme, redirected.URL.Host = "http", r.host
+	return http.DefaultTransport.RoundTrip(redirected)
+}
+
+// TestEditChecksPythonNamesAgainstTheRecipesOwnIndex: edit opens the index
+// the recipe resolves from, not PyPI's, when no flag says otherwise. Here
+// that index is cached under its own address, as the full-screen form
+// would have fetched it, and --plain, which only reads caches, checks the
+// recipe's names against it: pandas and jupyterlab are not in it.
+func TestEditChecksPythonNamesAgainstTheRecipesOwnIndex(t *testing.T) {
+	private := indextest.ServePyPI(t, pypiProjects, nil)
+	own := "https://nexus.corp.example/repository/pypi/simple"
+	cacheHome := t.TempDir()
+	if _, err := index.OpenPyPI(context.Background(), index.Options{
+		Mirror:   own,
+		Client:   &http.Client{Transport: redirectTransport{host: strings.TrimPrefix(private.URL, "http://")}},
+		CacheDir: index.CacheDir(environmentWith(map[string]string{"XDG_CACHE_HOME": cacheHome})),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recipeDir := newRecipeDir(t, "python.toml")
+	imageRecipe := loadWrittenRecipe(t, recipeDir)
+	imageRecipe.Python.IndexURL = own
+	text, err := renderRecipe(imageRecipe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(recipeDir, "frostroot.toml"), []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	app := App{
+		Stdout: &stdout, Stderr: &stderr, RecipeDir: recipeDir, ReadFile: noHostFile,
+		Prompt: &scriptedPrompt{}, Getenv: environmentWith(map[string]string{"XDG_CACHE_HOME": cacheHome}),
+	}
+	if exitCode := app.Run([]string{"edit", "--plain"}); exitCode != exitSuccess {
+		t.Fatalf("exit %d\nstdout: %s\nstderr: %s", exitCode, stdout.String(), stderr.String())
+	}
+	_, warning, warned := strings.Cut(stdout.String(), "Not on PyPI:")
+	if !warned || !strings.Contains(warning, "pandas") || !strings.Contains(warning, "jupyterlab") {
+		t.Errorf("edit did not check the names against the recipe's own index:\n%s", stdout.String())
+	}
+}
+
 func TestPackageIndexesOpenPyPIOnceAndSummarizeOnDemand(t *testing.T) {
 	pypi := indextest.ServePyPI(t, pypiProjects, map[string]string{"requests": "Python HTTP for Humans."})
 	app := (&App{Getenv: environmentWith(map[string]string{"XDG_CACHE_HOME": t.TempDir()})}).withDefaults()

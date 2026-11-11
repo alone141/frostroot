@@ -242,7 +242,7 @@ func TestCustomizeHooksForADisk(t *testing.T) {
 			t.Errorf("%s was not written: %v", file.hostPath, err)
 		}
 	}
-	scriptHook := `chroot "$1" /bin/sh -c "$(cat ` + shellQuote(stage.DiskScriptPath) + `)" frostroot-disk`
+	scriptHook := runStagedScriptHook(stage.DiskScriptPath, "frostroot-disk")
 	scriptIndex := slices.Index(hooks, scriptHook)
 	if scriptIndex < 0 {
 		t.Fatalf("hooks lack the disk script:\n%s", joined)

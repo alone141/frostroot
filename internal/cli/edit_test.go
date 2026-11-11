@@ -151,6 +151,31 @@ func TestEditChangesOnlyWhatWasAnswered(t *testing.T) {
 	}
 }
 
+// TestEditPlainClearsAnAnswerWithADash: an empty answer keeps the current
+// value, so the last item of a list could never be removed in the plain
+// interface, nor the Python packages given up. "-" answers "none".
+func TestEditPlainClearsAnAnswerWithADash(t *testing.T) {
+	recipeDir := newRecipeDir(t, "python.toml")
+	answers := answersWith(map[int]string{answerPackages: clearAnswer, answerOtherPackages: "jq", answerPythonPackages: clearAnswer})
+	exitCode, _, stderr, _ := runEditWithAnswers(recipeDir, answers)
+	if exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr)
+	}
+	got := loadWrittenRecipe(t, recipeDir)
+	if !slices.Equal(got.Packages.Include, []string{"jq"}) {
+		t.Errorf("packages = %q, want the catalog's cleared and jq alone", got.Packages.Include)
+	}
+	if names := got.PythonPackages(); len(names) != 0 {
+		t.Errorf("python packages = %q, want none", names)
+	}
+	// A question that needs an answer takes "-" as what it says, and
+	// refuses it.
+	answers = answersWith(map[int]string{answerUserName: clearAnswer})
+	if exitCode, _, stderr, _ := runEditWithAnswers(recipeDir, answers); exitCode != exitUserError || !strings.Contains(stderr, `"-"`) {
+		t.Errorf("a user name of %q: exit %d, stderr %s; want it refused", clearAnswer, exitCode, stderr)
+	}
+}
+
 func TestEditWithoutRecipe(t *testing.T) {
 	exitCode, _, stderr, prompt := runEditWithAnswers(t.TempDir(), nil)
 	if exitCode != exitUserError {

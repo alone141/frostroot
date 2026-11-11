@@ -507,6 +507,70 @@ func TestOpenRefusesAnIndexLongerThanReleaseDeclares(t *testing.T) {
 	}
 }
 
+// TestOpenKeepsTheNewestVersionOfAName: a vendor's repository lists every
+// version of a package in one Packages file, in whatever order it likes,
+// and the entry kept was the last stanza of the name, not the newest.
+func TestOpenKeepsTheNewestVersionOfAName(t *testing.T) {
+	served := newArchive(t, ".xz")
+	versions := []string{"5:29.10.0-1~ubuntu.24.04~noble", "5:29.8.1-1~ubuntu.24.04~noble", "5:27.0.0-1~ubuntu.24.04~noble"}
+	var text strings.Builder
+	for _, version := range versions {
+		fmt.Fprintf(&text, "Package: docker-ce\nVersion: %s\nArchitecture: amd64\nSection: admin\nDescription: Docker: the open-source application container engine\n\n", version)
+	}
+	served.publishTexts("noble", ".xz", map[string][]byte{"universe": []byte(text.String())}, func(text []byte) int64 { return int64(len(text)) })
+	opened, err := Open(context.Background(), optionsFor(t, served))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry, found := opened.Lookup("docker-ce"); !found || entry.Version != versions[0] {
+		t.Errorf("Lookup = %+v, %v; want version %s, the newest", entry, found, versions[0])
+	}
+}
+
+// TestOpenFailsAnIndexThatStalls: the client's timeout covers the headers
+// only, so an archive that sent half an index and then nothing, with the
+// connection open, held the form's field for as long as the person waited.
+func TestOpenFailsAnIndexThatStalls(t *testing.T) {
+	served := newArchive(t, ".gz")
+	universe := "/dists/noble/universe/binary-amd64/Packages.gz"
+	// Closed before the server's own cleanup, which waits for the handler:
+	// if the client never gives up, the test still ends.
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) })
+	served.intercept = func(writer http.ResponseWriter, request *http.Request) bool {
+		if request.URL.Path != universe {
+			return false
+		}
+		served.mutex.Lock()
+		content := served.files[universe]
+		served.mutex.Unlock()
+		_, _ = writer.Write(content[:len(content)/2])
+		if flusher, canFlush := writer.(http.Flusher); canFlush {
+			flusher.Flush()
+		}
+		select { // then nothing, until the client gives up
+		case <-request.Context().Done():
+		case <-done:
+		}
+		return true
+	}
+	options := optionsFor(t, served)
+	options.StallTimeout = 200 * time.Millisecond
+	result := make(chan error, 1)
+	go func() {
+		_, err := Open(context.Background(), options)
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		if !errors.Is(err, ErrUnavailable) || !errors.Is(err, errStalled) {
+			t.Errorf("Open = %v, want ErrUnavailable wrapping errStalled", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("Open is still waiting on an index that stalled")
+	}
+}
+
 // TestOpenRefusesAnEndlessRelease: nothing declares the size of an
 // InRelease, and one that kept sending well-formed checksum lines was read
 // to its end, every line kept, until the form ran out of memory. The
@@ -628,6 +692,49 @@ func TestOpenDropsControlCharacters(t *testing.T) {
 		if !found || entry != want {
 			t.Errorf("%s: Lookup = %+v, %v; want %+v", when, entry, found, want)
 		}
+	}
+}
+
+// TestOpenCutsAFieldTheCacheCouldNotReadBack: a stanza may hold a line of
+// up to 4 MiB, and an entry kept it whole, so its cache line was longer
+// than the cache reader takes: the next run deleted the cache and fetched
+// the repository again, every run. Fields are cut, and a name too long
+// to be a package's is not kept.
+func TestOpenCutsAFieldTheCacheCouldNotReadBack(t *testing.T) {
+	// Letters that do not repeat, so that the index compresses as a real
+	// one does rather than past the bound on what it may expand to.
+	var long strings.Builder
+	state := uint32(1)
+	for long.Len() < 2<<20 {
+		state = state*1664525 + 1013904223
+		long.WriteByte(byte('a' + state>>24%26))
+	}
+	served := indextest.Serve(t, "noble", []indextest.Package{
+		{Name: "long", Version: "1.0", Section: "admin", Description: long.String()},
+		{Name: "n" + long.String()[:maxNameBytes], Version: "1.0", Section: "admin", Description: "a name no package has"},
+	})
+	options := Options{
+		Release:  distro.Release{Suite: "noble", ArchiveURL: served.URL, Components: []string{"main"}},
+		CacheDir: t.TempDir(),
+		Now:      func() time.Time { return testNow },
+	}
+	requestsBefore := 0
+	for _, when := range []string{"fetched", "from the cache"} {
+		requestsBefore = served.Requests()
+		opened, err := Open(context.Background(), options)
+		if err != nil {
+			t.Fatalf("%s: %v", when, err)
+		}
+		entry, found := opened.Lookup("long")
+		if !found || len(entry.Description) != maxDescriptionBytes || !strings.HasPrefix(long.String(), entry.Description) {
+			t.Errorf("%s: the long description kept %d bytes, want its first %d", when, len(entry.Description), maxDescriptionBytes)
+		}
+		if opened.Len() != 1 {
+			t.Errorf("%s: %d entries, want the over-long name left out", when, opened.Len())
+		}
+	}
+	if more := served.Requests() - requestsBefore; more != 0 {
+		t.Errorf("opening it again cost %d requests: the cache did not read back", more)
 	}
 }
 

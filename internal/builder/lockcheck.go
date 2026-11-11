@@ -222,7 +222,9 @@ func planOffline(recipeDir string, imageRecipe recipe.Recipe, release distro.Rel
 		return nil, fmt.Errorf("%w in %s; run frostroot build online first, then frostroot vendor", ErrNoLock, recipeDir)
 	}
 	if err != nil {
-		return nil, err
+		// A lock that does not parse, written by a newer frostroot or
+		// edited by hand, is the person's to fix, as vendor says it is.
+		return nil, fmt.Errorf("%w: %w", pool.ErrBadLock, err)
 	}
 	// A lock of another family names packages, files and repositories that
 	// only that family's build can install, so nothing else in it is read.

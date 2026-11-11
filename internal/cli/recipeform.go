@@ -31,8 +31,9 @@ func (a *App) useFullScreen(plainRequested bool) bool {
 	return a.IsTerminal(a.Stdin) && a.IsTerminal(a.Stdout)
 }
 
-// isCharacterDevice is the default terminal check: an *os.File on a character
-// device, which is what a terminal is and a pipe or a regular file is not.
+// isCharacterDevice reports whether stream is an *os.File on a character
+// device, which a terminal is and a pipe or a regular file is not, and
+// which /dev/null is as well; isTerminal is the check.
 func isCharacterDevice(stream any) bool {
 	file, isFile := stream.(*os.File)
 	if !isFile {
@@ -80,6 +81,10 @@ func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath 
 	if errors.Is(err, tui.ErrCanceled) {
 		a.stderrf("frostroot %s: canceled; nothing written\n", commandName)
 		return exitUserError
+	}
+	if errors.Is(err, context.Canceled) {
+		a.stderrf("frostroot %s: interrupted; nothing written\n", commandName)
+		return exitInterrupted
 	}
 	if err != nil {
 		a.stderrf("frostroot %s: %v\n", commandName, err)

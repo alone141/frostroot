@@ -241,8 +241,15 @@ rm -f {{shellQuote .CertPath}} {{shellQuote .ExtraTrustPath}}
 # between two rebuilds of one lock. Recompiling every module with hash-based
 # invalidation makes the caches depend on their sources alone. A module that
 # cannot be compiled is not an error here: nothing imports it during the
-# build, and Python compiles what it needs at import time anyway.
-"$venv"/bin/python -m compileall -q --invalidation-mode checked-hash "$venv" || true
+# build, and Python compiles what it needs at import time anyway. That, and
+# only that, is compileall's status 1; any other failure, of the interpreter
+# itself, fails the build.
+compileStatus=0
+"$venv"/bin/python -m compileall -q --invalidation-mode checked-hash "$venv" || compileStatus=$?
+if [ "$compileStatus" -gt 1 ]; then
+	echo "frostroot: compiling the environment's modules failed with status $compileStatus" >&2
+	exit "$compileStatus"
+fi
 
 # Every login shell finds the environment, so "python" is the image's python.
 printf 'PATH="%s/bin:$PATH"\n' "$venv" > {{shellQuote .ProfilePath}}

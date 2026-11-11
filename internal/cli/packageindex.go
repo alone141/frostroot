@@ -10,6 +10,7 @@ import (
 	"frostroot/internal/distro"
 	"frostroot/internal/form"
 	"frostroot/internal/index"
+	"frostroot/internal/recipe"
 )
 
 // indexFlags are what init, edit and capture take for the package index
@@ -86,6 +87,18 @@ type packageIndexes struct {
 	// fetch, or --refresh-index would be ignored for the rest of the run.
 	pypi        form.PackageIndex
 	pypiOffline form.PackageIndex
+}
+
+// pythonIndexFor returns the simple index the form searches for Python
+// packages and asks for their summaries: --python-index when given, and
+// otherwise the recipe's own [python] index_url. A recipe that resolves from
+// an index of its own must not have its names looked up on pypi.org: that
+// would tell PyPI what an internal index holds. "" means PyPI.
+func pythonIndexFor(flagValue string, imageRecipe recipe.Recipe) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	return imageRecipe.PythonIndexURL()
 }
 
 // packageIndexes returns the indexes for this run, or false when the flags

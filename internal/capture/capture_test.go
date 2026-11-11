@@ -357,15 +357,49 @@ func TestReportSaysWhenNothingWasFound(t *testing.T) {
 }
 
 func TestReadStanzas(t *testing.T) {
-	stanzas := readStanzas(strings.NewReader("Package: a\nConffiles:\n /etc/a 0123\n /etc/b 4567 obsolete\nDescription: first\n more\n\n\nPackage: b\nbroken line\nStatus: install ok installed\n"))
-	if len(stanzas) != 2 || stanzas[0]["Package"] != "a" || stanzas[1]["Status"] != "install ok installed" {
-		t.Fatalf("stanzas = %+v", stanzas)
+	stanzas, err := readStanzas(strings.NewReader("Package: a\nConffiles:\n /etc/a 0123\n /etc/b 4567 obsolete\nDescription: first\n more\n\n\nPackage: b\nbroken line\nStatus: install ok installed\n"))
+	if err != nil || len(stanzas) != 2 || stanzas[0]["Package"] != "a" || stanzas[1]["Status"] != "install ok installed" {
+		t.Fatalf("stanzas = %+v, err = %v", stanzas, err)
 	}
 	if lines := continuationLines(stanzas[0]["Conffiles"]); !slices.Equal(lines, []string{"/etc/a 0123", "/etc/b 4567 obsolete"}) {
 		t.Errorf("conffile lines = %q", lines)
 	}
 	if stanzas[0]["Description"] != "first\nmore" {
 		t.Errorf("description = %q", stanzas[0]["Description"])
+	}
+}
+
+// failingReader yields its text, then an I/O error, as a damaged disk does.
+type failingReader struct{ text *strings.Reader }
+
+func (f failingReader) Read(buffer []byte) (int, error) {
+	if f.text.Len() == 0 {
+		return 0, errors.New("input/output error")
+	}
+	return f.text.Read(buffer)
+}
+
+// TestCaptureRefusesADpkgStatusItCannotReadToTheEnd: the scanner's error
+// was never looked at, so a read error, or one line past its limit, ended
+// the package list there, and capture wrote a recipe of the first part of
+// the machine, counting only that part as installed.
+func TestCaptureRefusesADpkgStatusItCannotReadToTheEnd(t *testing.T) {
+	if _, err := readStanzas(failingReader{strings.NewReader("Package: a\nStatus: install ok installed\n\n")}); err == nil {
+		t.Error("readStanzas of a reader that fails = nil error")
+	}
+	overLong := dpkgStanza("dpkg", "required", installed) + dpkgStanza("git", "optional", installed, "Description: "+strings.Repeat("x", 5<<20))
+	for name, files := range map[string]map[string]string{
+		"the status":       {"var/lib/dpkg/status": overLong},
+		"apt's auto marks": {"var/lib/dpkg/status": dpkgStanza("dpkg", "required", installed), "var/lib/apt/extended_states": "Package: git\nAuto-Installed: 1\nDescription: " + strings.Repeat("x", 5<<20) + "\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := systemRoot(buildRoot(t, files))
+			_, _, statusErr := root.installedPackages()
+			_, _, autoErr := root.autoInstalled()
+			if statusErr == nil && autoErr == nil {
+				t.Error("a file with a line past the scanner's limit was read as if it ended there")
+			}
+		})
 	}
 }
 
@@ -868,9 +902,9 @@ func TestModifiedConffilesStayInsideTheRoot(t *testing.T) {
 		"etc/linked.conf": "-> " + hostFile,
 		"etc/edited.conf": "edited\n",
 	}))
-	packages, ok := root.installedPackages()
-	if !ok {
-		t.Fatal("the status could not be read")
+	packages, ok, err := root.installedPackages()
+	if !ok || err != nil {
+		t.Fatalf("the status could not be read: %v", err)
 	}
 	if modified := root.modifiedConffiles(packages); !slices.Equal(modified, []string{"/etc/edited.conf"}) {
 		t.Errorf("modified = %q, want only the edited file inside the root", modified)

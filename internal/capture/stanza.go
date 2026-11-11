@@ -15,7 +15,11 @@ type stanza map[string]string
 // the dpkg status file, apt's extended_states and its Packages indexes.
 // Malformed lines are skipped; a corrupt file yields fewer stanzas, not an
 // error, because capture reports what it finds rather than refusing to run.
-func readStanzas(reader io.Reader) []stanza {
+// A file that cannot be read to its end is an error, though: an I/O error
+// on a mounted disk, or a line past the scanner's limit, would otherwise
+// end the list there, and a dpkg status cut short is a recipe that silently
+// misses every package after the cut.
+func readStanzas(reader io.Reader) ([]stanza, error) {
 	var stanzas []stanza
 	current := stanza{}
 	lastField := ""
@@ -46,8 +50,11 @@ func readStanzas(reader io.Reader) []stanza {
 			current[name] = strings.TrimSpace(value)
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
 	flush()
-	return stanzas
+	return stanzas, nil
 }
 
 // continuationLines returns the lines of a multi-line field value after the
