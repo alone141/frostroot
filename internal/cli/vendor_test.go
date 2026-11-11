@@ -399,6 +399,29 @@ func TestVendorThatCannotWriteADownloadIsAUserError(t *testing.T) {
 	}
 }
 
+// TestVendorThatCannotReadItsPoolIsAUserError: a pool file a sudo vendor
+// left readable by root only failed the check with exit 2, the code for a
+// download that failed, though the person can fix it.
+func TestVendorThatCannotReadItsPoolIsAUserError(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a file this user cannot read: chmod does that only on Unix, and not to root")
+	}
+	fixture := newVendorFixture(t)
+	if err := os.MkdirAll(fixture.poolDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	unreadable := filepath.Join(fixture.poolDir(), "curl_1_amd64.deb")
+	if err := os.WriteFile(unreadable, fixture.files[fixture.lock.Packages[0].Filename], 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o644) }) // so that TempDir can remove it
+	var stdout, stderr bytes.Buffer
+	exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor"})
+	if exitCode != exitUserError || !strings.Contains(stderr.String(), "cannot read the pool") {
+		t.Fatalf("exit code = %d, stderr %s; want %d saying the pool cannot be read", exitCode, stderr.String(), exitUserError)
+	}
+}
+
 // A build in the same directory may place a new lock at any moment, and
 // vendor reads it once: it waits for nothing and fetches nothing.
 func TestVendorRefusesWhileABuildHoldsTheRecipeDir(t *testing.T) {

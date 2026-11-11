@@ -169,7 +169,7 @@ func (a *App) runVendor(args []string) int {
 	case errors.Is(outcome.Err, context.Canceled) || outcome.Interrupted:
 		a.stderrf("frostroot: vendor interrupted; finished downloads are kept, so rerunning resumes\n")
 		return exitInterrupted
-	case errors.Is(outcome.Err, errVendorFiles), errors.Is(outcome.Err, pool.ErrPoolWrite):
+	case errors.Is(outcome.Err, errVendorFiles), errors.Is(outcome.Err, pool.ErrPoolWrite), errors.Is(outcome.Err, pool.ErrPoolRead):
 		a.stderrf("frostroot vendor: %v\n", outcome.Err)
 		return exitUserError
 	case outcome.Err != nil:

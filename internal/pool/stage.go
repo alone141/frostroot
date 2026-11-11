@@ -91,18 +91,25 @@ func StageFiles(poolDir string, entries []Entry, destinationDir string, onProgre
 // way the result is mode 0644 and any earlier destination is replaced. A
 // source that is a symbolic link stages what it points to, as Verify checked
 // it: a hard link to the link itself would dangle, or point elsewhere, from
-// the destination's directory.
+// the destination's directory. A source that is gone since the caller
+// verified it, cannot be opened, or is not a regular file is ErrPoolRead. The
+// last is checked up front, not by wrapping the reader, which would turn off
+// io.Copy's kernel-side copy. An error of the destination, or an I/O error in
+// the middle of the copy, is returned as it is.
 func linkOrCopy(source, destination string) error {
 	if err := os.Remove(destination); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	source, err := filepath.EvalSymlinks(source)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrPoolRead, err)
 	}
 	sourceInfo, err := os.Stat(source)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrPoolRead, err)
+	}
+	if !sourceInfo.Mode().IsRegular() {
+		return fmt.Errorf("%w: %s is not a regular file", ErrPoolRead, source)
 	}
 	if sourceInfo.Mode().Perm() == 0o644 {
 		if err := os.Link(source, destination); err == nil {
@@ -111,7 +118,7 @@ func linkOrCopy(source, destination string) error {
 	}
 	sourceFile, err := os.Open(source)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrPoolRead, err)
 	}
 	defer func() { _ = sourceFile.Close() }() // read-only: closing cannot lose data
 	destinationFile, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)

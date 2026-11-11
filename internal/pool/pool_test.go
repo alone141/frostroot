@@ -517,6 +517,82 @@ func TestVerifyStopsWhenCanceled(t *testing.T) {
 	}
 }
 
+// TestAPoolThatCannotBeReadSaysSo: a pool file the check could not read
+// came back as the bare error of the file system, which vendor and build
+// took for a failed download or build and exited 2. A pool directory that
+// is a file stands in for an unreadable one on Unix, where looking a file
+// up in it fails with ENOTDIR; on Windows it does not fail, so that part
+// runs on Unix only. A directory where a file belongs stands in at
+// staging, on both.
+func TestAPoolThatCannotBeReadSaysSo(t *testing.T) {
+	entry := entryFor("curl", "1")
+	if runtime.GOOS != "windows" {
+		notADirectory := filepath.Join(t.TempDir(), "debs")
+		if err := os.WriteFile(notADirectory, []byte("not a directory"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Verify(context.Background(), notADirectory, []Entry{entry}, nil); !errors.Is(err, ErrPoolRead) {
+			t.Errorf("Verify error = %v, want ErrPoolRead", err)
+		}
+		if _, err := Prune(context.Background(), notADirectory, nil); !errors.Is(err, ErrPoolRead) {
+			t.Errorf("Prune error = %v, want ErrPoolRead", err)
+		}
+	}
+
+	// Staging: a file gone since the check, and a directory where it
+	// belongs, which no system reads as a file.
+	dir := t.TempDir()
+	err := StageFiles(dir, []Entry{entry}, t.TempDir(), nil)
+	if !errors.Is(err, ErrPoolRead) || !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("staging a file gone: error = %v, want ErrPoolRead and os.ErrNotExist", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, entry.FileName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err = Stage(dir, []Entry{entry}, t.TempDir(), deb.FlatRelease{Suite: "noble", Arch: "amd64"}, nil)
+	if !errors.Is(err, ErrPoolRead) {
+		t.Errorf("staging a directory: error = %v, want ErrPoolRead", err)
+	}
+	// A destination that cannot be written is not the pool's.
+	if err := os.Remove(filepath.Join(dir, entry.FileName)); err != nil {
+		t.Fatal(err)
+	}
+	writeEntry(t, dir, entry)
+	destination := filepath.Join(t.TempDir(), "staged")
+	if err := os.WriteFile(destination, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := StageFiles(dir, []Entry{entry}, destination, nil); err == nil || errors.Is(err, ErrPoolRead) {
+		t.Errorf("staging into a file: error = %v, want an error that is not ErrPoolRead", err)
+	}
+}
+
+// TestAPoolFileThatCannotBeReadSaysSo is the case the test above stands in
+// for: a file left readable by root only, by a sudo vendor, say. Neither
+// Windows nor root can make one.
+func TestAPoolFileThatCannotBeReadSaysSo(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a file this user cannot read: chmod does that only on Unix, and not to root")
+	}
+	dir := t.TempDir()
+	entry := entryFor("curl", "1")
+	writeEntry(t, dir, entry)
+	unreadable := filepath.Join(dir, entry.FileName)
+	if err := os.Chmod(unreadable, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o644) }) // so that TempDir can remove it
+	if _, err := Verify(context.Background(), dir, []Entry{entry}, nil); !errors.Is(err, ErrPoolRead) {
+		t.Errorf("Verify error = %v, want ErrPoolRead", err)
+	}
+	if _, err := Fetch(context.Background(), FetchOptions{Dir: dir, Entries: []Entry{entry}, Sleep: noSleep}); !errors.Is(err, ErrPoolRead) {
+		t.Errorf("Fetch error = %v, want ErrPoolRead", err)
+	}
+	if err := StageFiles(dir, []Entry{entry}, t.TempDir(), nil); !errors.Is(err, ErrPoolRead) {
+		t.Errorf("StageFiles error = %v, want ErrPoolRead", err)
+	}
+}
+
 func TestVerifyMissingDirectory(t *testing.T) {
 	entry := entryFor("curl", "1")
 	status, err := Verify(context.Background(), filepath.Join(t.TempDir(), "nowhere"), []Entry{entry}, nil)

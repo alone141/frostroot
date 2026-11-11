@@ -346,7 +346,7 @@ func (a *App) reportBuildFailure(err error, interrupted bool, archiveURL, keptWo
 		errors.Is(err, builder.ErrUnwritableOutput), errors.Is(err, builder.ErrNoLock), errors.Is(err, builder.ErrRecipeDirBusy),
 		errors.Is(err, builder.ErrLockMismatch), errors.Is(err, builder.ErrPoolIncomplete),
 		errors.Is(err, builder.ErrSourceKey), errors.Is(err, builder.ErrCertificate), errors.Is(err, builder.ErrBadSourceDateEpoch),
-		errors.Is(err, pool.ErrNoChecksums), errors.Is(err, pool.ErrBadLock):
+		errors.Is(err, pool.ErrNoChecksums), errors.Is(err, pool.ErrBadLock), errors.Is(err, pool.ErrPoolRead):
 		a.stderrf("frostroot: %v\n", err)
 		return exitUserError
 	default:

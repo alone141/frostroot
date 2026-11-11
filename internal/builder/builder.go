@@ -554,11 +554,15 @@ func stageRepository(offline *offlinePlan, repositoryDir string, progress Progre
 }
 
 // stagingError is err, from staging the pool into a local repository, as
-// a pool problem the person can fix when a file was replaced after the pool
-// was checked.
+// a pool problem the person can fix when a file was replaced or removed
+// after the pool was checked. One that cannot be read already says so with
+// pool.ErrPoolRead.
 func stagingError(err error, offline *offlinePlan) error {
 	if errors.Is(err, deb.ErrDigestMismatch) {
 		return fmt.Errorf("%w: %w; a file in %s changed while the build ran, run frostroot vendor", ErrPoolIncomplete, err, pool.DirName(offline.lock))
+	}
+	if errors.Is(err, pool.ErrPoolRead) && errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%w: %w; a file in %s was removed while the build ran, run frostroot vendor", ErrPoolIncomplete, err, pool.DirName(offline.lock))
 	}
 	return err
 }
