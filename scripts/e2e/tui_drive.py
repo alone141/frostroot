@@ -171,7 +171,10 @@ class Session:
             self.pump(0.2)
             pid, status = os.waitpid(self.pid, os.WNOHANG)
             if pid:
-                return os.waitstatus_to_exitcode(status)
+                # os.waitstatus_to_exitcode needs Python 3.9; Ubuntu 20.04 has 3.8.
+                if os.WIFSIGNALED(status):
+                    return -os.WTERMSIG(status)
+                return os.WEXITSTATUS(status)
         return None
 
 
