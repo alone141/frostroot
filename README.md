@@ -901,7 +901,8 @@ every file ever published to Ubuntu; the checksum decides, not the source.
 Rerunning after an interruption resumes; a corrupt file is replaced.
 
 `build --offline` refuses to start unless the lock still describes the
-recipe (same release, architecture and `include` list; the user, sudo,
+recipe (same release, architecture and `include` list, and for a disk image
+the same `disk.size`, which the lock's layout was made for; the user, sudo,
 locale, timezone and systemd may change freely) and `vendor/debs/` holds
 every locked file intact. It then hands mmdebstrap a local, trusted
 repository of exactly those files, installs every one of them, and compares

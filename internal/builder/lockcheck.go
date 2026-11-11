@@ -313,6 +313,9 @@ func planOffline(recipeDir string, imageRecipe recipe.Recipe, release distro.Rel
 			differences = append(differences, "python packages removed from the recipe: "+strings.Join(removed, ", "))
 		}
 	}
+	if difference := diskSizeDifference(lock, imageRecipe); difference != "" {
+		differences = append(differences, difference)
+	}
 	differences = append(differences, repositoryDifferences(lock, imageRecipe.Sources, release)...)
 	// The key files are read from beside the recipe and installed as the
 	// sources' signed-by keyrings, so an offline rebuild would quietly trust
@@ -350,6 +353,49 @@ func planOffline(recipeDir string, imageRecipe recipe.Recipe, release distro.Rel
 		wheelEntries: wheelEntries,
 		wheelPoolDir: filepath.Join(recipeDir, filepath.FromSlash(pool.WheelsDirName)),
 	}, nil
+}
+
+// diskSizeDifference says how the recipe's disk.size differs from the size
+// the lock's disk was made for, or "" when it does not. An offline build
+// makes the lock's layout, whatever the recipe now asks, so a size asked
+// for since is a mismatch rather than a size quietly dropped. A lock that
+// does not record the size asked for has its disk's whole size, which a
+// size asked for was exactly; a recipe that asks for none matches it.
+func diskSizeDifference(lock recipe.Lockfile, imageRecipe recipe.Recipe) string {
+	if lock.Disk == nil || imageRecipe.Target() != recipe.TargetDisk {
+		return ""
+	}
+	wanted := imageRecipe.DiskSize()
+	if lock.Disk.Size != nil {
+		if sameDiskSize(wanted, *lock.Disk.Size) {
+			return ""
+		}
+		return fmt.Sprintf("disk.size is %s, the lock's disk was made %s", describeDiskSize(wanted), describeDiskSize(*lock.Disk.Size))
+	}
+	wantedBytes, err := recipe.DiskSizeBytes(wanted)
+	if wanted == "" || err != nil || wantedBytes == lock.Disk.DiskBytes {
+		return ""
+	}
+	return fmt.Sprintf("disk.size is %s, the lock's disk is %dM", wanted, lock.Disk.DiskBytes/diskMiB)
+}
+
+// sameDiskSize reports whether two disk.size values ask for one size: "16G"
+// is "16384M".
+func sameDiskSize(a, b string) bool {
+	if a == "" || b == "" {
+		return a == b
+	}
+	aBytes, aErr := recipe.DiskSizeBytes(a)
+	bBytes, bErr := recipe.DiskSizeBytes(b)
+	return aErr == nil && bErr == nil && aBytes == bBytes
+}
+
+// describeDiskSize names a disk.size value in a sentence.
+func describeDiskSize(size string) string {
+	if size == "" {
+		return "sized to fit"
+	}
+	return size
 }
 
 // lockedPythonIndexURL returns the index the lock resolved from, or "" for

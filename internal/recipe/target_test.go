@@ -235,6 +235,40 @@ func TestLockRoundTripWithADisk(t *testing.T) {
 	}
 }
 
+// TestALockRecordsTheDiskSizeAskedFor: a disk sized to fit is recorded as
+// such, apart from a lock written before the size was recorded, so that an
+// offline build can tell a recipe that asks for another size.
+func TestALockRecordsTheDiskSizeAskedFor(t *testing.T) {
+	toFit, asked := "", "32G"
+	for _, testCase := range []struct {
+		size       *string
+		wantLine   string
+		wantNoLine bool
+	}{
+		{size: nil, wantNoLine: true},
+		{size: &toFit, wantLine: "size = ''"},
+		{size: &asked, wantLine: "size = '32G'"},
+	} {
+		original := sampleLock()
+		original.Target = TargetDisk
+		original.Disk = &LockDisk{Size: testCase.size, Seed: "6f9619ff-8b86-4011-b42d-00c04fc964ff", DiskBytes: 2522873856, ESPBytes: 536870912, RootBytes: 1983905792, Shim: "shimx64.efi.signed.latest"}
+		path, content := saveAndRead(t, original)
+		reloaded, err := LoadLock(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(reloaded.Disk, original.Disk) {
+			t.Errorf("[disk] round trip = %+v, want %+v\n%s", reloaded.Disk, original.Disk, content)
+		}
+		if testCase.wantNoLine && strings.Contains(content, "size =") {
+			t.Errorf("a lock that records no size says one:\n%s", content)
+		}
+		if !testCase.wantNoLine && !strings.Contains(content, testCase.wantLine) {
+			t.Errorf("lock lacks %q:\n%s", testCase.wantLine, content)
+		}
+	}
+}
+
 // TestALockOfWSLSaysNothingOfDisks: a tarball's lock is the bytes it was
 // before there were disks, so every lock written so far rebuilds as it did.
 func TestALockOfWSLSaysNothingOfDisks(t *testing.T) {

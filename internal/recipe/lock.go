@@ -62,10 +62,15 @@ type Lockfile struct {
 // disk is derived from, the sizes, and the shim its EFI system partition
 // boots. An online build chooses the seed; an offline build repeats it.
 type LockDisk struct {
-	Seed      string `toml:"seed"` // a UUID
-	DiskBytes int64  `toml:"disk_bytes"`
-	ESPBytes  int64  `toml:"esp_bytes"`
-	RootBytes int64  `toml:"root_bytes"`
+	// Size is the recipe's disk.size the sizes were chosen for, "" when it
+	// asked for a disk sized to fit, and nil in a lock written before it was
+	// recorded. An offline build makes the lock's layout, so a recipe that
+	// asks for another size no longer matches the lock.
+	Size      *string `toml:"size,omitempty"`
+	Seed      string  `toml:"seed"` // a UUID
+	DiskBytes int64   `toml:"disk_bytes"`
+	ESPBytes  int64   `toml:"esp_bytes"`
+	RootBytes int64   `toml:"root_bytes"`
 	// Shim is the file of /usr/lib/shim the partition's BOOTX64.EFI is,
 	// such as "shimx64.efi.signed.latest": which certificate authority
 	// signed it decides which firmware boots it.

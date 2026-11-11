@@ -765,6 +765,59 @@ func TestDiskBuildOfflineMakesTheTreeFromThePool(t *testing.T) {
 	}
 }
 
+// TestDiskBuildOfflineRefusesAnotherDiskSize: an offline build makes the
+// lock's layout, and a disk.size the recipe asked for since was dropped
+// without a word, while every other change it allows is applied.
+func TestDiskBuildOfflineRefusesAnotherDiskSize(t *testing.T) {
+	options, _ := newTestOptions(t)
+	lock := writeVendoredDiskLock(t, options)
+	if lock.Disk == nil || lock.Disk.Size == nil || *lock.Disk.Size != "" {
+		t.Fatalf("the online build's lock records [disk] %+v, want size \"\" for a disk sized to fit", lock.Disk)
+	}
+	options.Offline = true
+	imageRecipe := sampleDiskRecipe()
+	imageRecipe.Disk = &recipe.Disk{Size: "32G"}
+	bootstrapper := &diskOfflineFakeBootstrapper{}
+	_, err := (&Builder{Bootstrapper: bootstrapper, Tools: &fakeToolRunner{}}).Build(context.Background(), imageRecipe, options)
+	if !errors.Is(err, ErrLockMismatch) || !strings.Contains(err.Error(), "disk.size is 32G, the lock's disk was made sized to fit") {
+		t.Fatalf("Build = %v, want ErrLockMismatch naming disk.size", err)
+	}
+	if bootstrapper.treeRan || bootstrapper.runCount != 0 {
+		t.Error("work was done for a recipe the lock does not describe")
+	}
+}
+
+func TestDiskSizeDifference(t *testing.T) {
+	toFit, sixteen := "", "16G"
+	const sixteenGiB = 16 << 30
+	for _, testCase := range []struct {
+		name     string
+		recorded *string
+		wanted   string
+		want     string
+	}{
+		{"both sized to fit", &toFit, "", ""},
+		{"the size asked for", &sixteen, "16G", ""},
+		{"the size in other units", &sixteen, "16384M", ""},
+		{"a size where it fit", &toFit, "16G", "disk.size is 16G, the lock's disk was made sized to fit"},
+		{"to fit where it had a size", &sixteen, "", "disk.size is sized to fit, the lock's disk was made 16G"},
+		{"another size", &sixteen, "32G", "disk.size is 32G, the lock's disk was made 16G"},
+		// A lock that records nothing has its disk's size.
+		{"an older lock, its size asked for", nil, "16G", ""},
+		{"an older lock, to fit", nil, "", ""},
+		{"an older lock, another size", nil, "32G", "disk.size is 32G, the lock's disk is 16384M"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			lock := recipe.Lockfile{Target: recipe.TargetDisk, Disk: &recipe.LockDisk{Size: testCase.recorded, DiskBytes: sixteenGiB}}
+			imageRecipe := sampleDiskRecipe()
+			imageRecipe.Disk = &recipe.Disk{Size: testCase.wanted}
+			if got := diskSizeDifference(lock, imageRecipe); got != testCase.want {
+				t.Errorf("diskSizeDifference = %q, want %q", got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestDiskBuildOfflineFailsWhenTheTreeDiffersFromTheLock(t *testing.T) {
 	options, _ := newTestOptions(t)
 	writeVendoredDiskLock(t, options)

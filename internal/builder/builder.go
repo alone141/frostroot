@@ -364,6 +364,8 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 			lock.Target = recipe.TargetDisk
 			lock.DiskTools = tools.packages
 			locked := layout.lock()
+			requestedSize := imageRecipe.DiskSize()
+			locked.Size = &requestedSize
 			lock.Disk = &locked
 		}
 		result.PythonPackageCount = counts.python
