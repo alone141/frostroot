@@ -27,6 +27,7 @@ func (a *App) runEdit(args []string) int {
 		return exitUserError
 	}
 	indexOptions.pythonIndex = pythonIndexFor(indexOptions.pythonIndex, imageRecipe)
+	indexOptions.certificates = imageRecipe.CertificatePaths()
 	indexes, ok := a.packageIndexes(indexOptions)
 	if !ok {
 		return exitUserError

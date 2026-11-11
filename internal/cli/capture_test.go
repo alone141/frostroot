@@ -368,6 +368,27 @@ func TestCaptureLeavesAnExistingCertificateAlone(t *testing.T) {
 	}
 }
 
+// TestCaptureReadsItsCertificatesBeforeTheForm: the form's downloads trust
+// the certificate authorities the captured recipe names, as build and
+// vendor will. A file already there, which capture leaves alone, is read
+// too, and one that holds no certificate is said to.
+func TestCaptureReadsItsCertificatesBeforeTheForm(t *testing.T) {
+	recipeDir := t.TempDir()
+	root := fakeUbuntuRoot(t, "24.04")
+	withLocalAuthority(t, root, corpCertificatePEM(t))
+	ownPath := filepath.Join(recipeDir, "certs", "corp-root.pem")
+	if err := os.MkdirAll(filepath.Dir(ownPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ownPath, []byte("# not a certificate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _, stderr := runCaptureWithAnswers(recipeDir, root, answersWith(map[int]string{answerWrite: "n"}))
+	if !strings.Contains(stderr, "warning: certificate: certs/corp-root.pem") {
+		t.Errorf("capture did not read the certificate its recipe names before the form:\n%s", stderr)
+	}
+}
+
 // TestCaptureKeepsCertificatesTheWrittenRecipeNames: the form writes the
 // recipe and can still fail afterwards, saving a source's key. The recipe
 // on disk then names the certificate files, and a certificate read off a

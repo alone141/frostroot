@@ -3,10 +3,12 @@ package cli
 import (
 	"context"
 	"flag"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"frostroot/internal/builder"
 	"frostroot/internal/distro"
 	"frostroot/internal/form"
 	"frostroot/internal/index"
@@ -21,6 +23,10 @@ type indexFlags struct {
 	caBundle    string
 	insecure    bool
 	refresh     bool
+	// certificates are the certificate files the recipe already names,
+	// which the form's downloads trust as build and vendor do: edit's
+	// recipe, and capture's, whose files it wrote before the form.
+	certificates []string
 }
 
 // addIndexFlags registers the index flags on a command's flag set.
@@ -73,6 +79,11 @@ type packageIndexes struct {
 	// know as well as the indexes: a key found over an unverified connection
 	// deserves a word.
 	insecure bool
+	// caBundle is --ca-bundle, and trusted the recipe's certificate files
+	// the downloads trust: the key fetch after the form trusts what the
+	// written recipe names, which may be more.
+	caBundle string
+	trusted  []string
 
 	mutex sync.Mutex
 	// opened is the index a whole request was answered with, by its key;
@@ -105,7 +116,7 @@ func pythonIndexFor(flagValue string, imageRecipe recipe.Recipe) string {
 // cannot be honored, which has been reported.
 func (a *App) packageIndexes(parsed *indexFlags) (*packageIndexes, bool) {
 	options := index.Options{Mirror: parsed.mirror, CacheDir: index.CacheDir(a.Getenv), Refresh: parsed.refresh, Client: a.IndexClient, Insecure: parsed.insecure}
-	rootCAs, ok := a.trustPool(parsed.caBundle)
+	rootCAs, ok := a.trustPool(a.formCertificates(parsed.certificates), parsed.caBundle)
 	if !ok {
 		return nil, false
 	}
@@ -127,10 +138,38 @@ func (a *App) packageIndexes(parsed *indexFlags) (*packageIndexes, bool) {
 		pypiOptions: pypiOptions,
 		summaries:   index.NewSummaries(pypiOptions),
 		insecure:    parsed.insecure,
+		caBundle:    parsed.caBundle,
+		trusted:     parsed.certificates,
 		opened:      map[string]form.PackageIndex{},
 		archives:    map[string]*index.Index{},
 		sources:     map[string]*index.Index{},
 	}, true
+}
+
+// formCertificates reads the certificate files the recipe names as the build
+// reads them. A file that cannot be read is a warning, not a failure: the
+// form may be how the person fixes the recipe that names it.
+func (a *App) formCertificates(paths []string) []byte {
+	certificates, err := builder.ReadCertificates(a.RecipeDir, paths)
+	if err != nil {
+		a.stderrf("warning: %v; until it is fixed, frostroot's own downloads trust only the host's certificate authorities and --ca-bundle\n", err)
+		return nil
+	}
+	return certificates.PEM
+}
+
+// trustWrittenCertificates makes the key fetch that follows a written recipe
+// trust the certificate files it names, as build and vendor will: init's
+// Trust page names them only as the form ends, and edit's may add one.
+func (a *App) trustWrittenCertificates(paths []string, indexes *packageIndexes) {
+	if indexes == nil || slices.Equal(paths, indexes.trusted) {
+		return
+	}
+	// The bundle was read once already, so only a certificate can fail,
+	// and formCertificates has said so.
+	if rootCAs, ok := a.trustPool(a.formCertificates(paths), indexes.caBundle); ok {
+		a.ensureKeyClient(rootCAs, indexes.insecure)
+	}
 }
 
 // insecureTLS reports whether this run skips certificate verification. nil

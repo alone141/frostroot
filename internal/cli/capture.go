@@ -84,6 +84,7 @@ func (a *App) runCapture(args []string) int {
 	// What was read, and what a recipe cannot carry, before the questions:
 	// the packages page is answered knowing what is missing.
 	intro := []form.Field{form.NoteField(form.PageCaptured, "What capture found", captureNoteText(snapshot))}
+	indexOptions.certificates = snapshot.Recipe().CertificatePaths()
 	indexes, ok := a.packageIndexes(indexOptions)
 	if !ok {
 		removeCapturedCertificates(writtenCertificates)

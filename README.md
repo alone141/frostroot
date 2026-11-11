@@ -751,7 +751,9 @@ one or more PEM certificates. `build` installs each one into the image under
 distribution. It also trusts them while building: `pip` is given `--cert`,
 `apt` is given `Acquire::https::CaInfo` for a recipe's HTTPS sources, and
 frostroot's own downloads verify against the host's roots **plus** yours, so
-a network that inspects only some hosts still verifies the rest. That apt
+a network that inspects only some hosts still verifies the rest: `vendor`'s,
+and the package index and signing keys `edit` and `capture` fetch, and the
+keys `init` fetches once the recipe naming them is written. That apt
 setting lasts as long as the build and is not in the image: it names a file
 on the build host, and the image's own apt verifies against the image's own
 store, where your certificates now are.

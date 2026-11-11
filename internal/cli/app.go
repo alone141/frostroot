@@ -39,29 +39,35 @@ func (a *App) readCABundle(path string) ([]byte, bool) {
 	return bundle, true
 }
 
-// trustPool returns the host's root certificates with the --ca-bundle file's
-// added, or nil for the host's alone.
-func (a *App) trustPool(path string) (*x509.CertPool, bool) {
-	bundle, ok := a.readCABundle(path)
-	if !ok || len(bundle) == 0 {
-		return nil, ok
+// trustPool returns the host's root certificates with the recipe's
+// certificate authorities, extraPEM, and the --ca-bundle file's added, or
+// nil for the host's alone.
+func (a *App) trustPool(extraPEM []byte, caBundlePath string) (*x509.CertPool, bool) {
+	bundle, ok := a.readCABundle(caBundlePath)
+	if !ok {
+		return nil, false
 	}
-	trusted, err := pki.SystemPoolWith(bundle)
+	if len(extraPEM) == 0 && len(bundle) == 0 {
+		return nil, true // the host's own store, which is what a fetch uses anyway
+	}
+	trusted, err := pki.SystemPoolWith(append(append([]byte(nil), extraPEM...), bundle...))
 	if err != nil {
-		a.stderrf("frostroot: --ca-bundle %s: %v\n", path, err)
+		a.stderrf("frostroot: %v\n", err)
 		return nil, false
 	}
 	return trusted, true
 }
 
 // ensureKeyClient sets the production signing-key HTTPS client once
-// --ca-bundle and --insecure are known. Tests that inject KeyClient are left
-// alone.
+// --ca-bundle, the recipe's certificate authorities and --insecure are
+// known, and sets it again when they change. Tests that inject KeyClient are
+// left alone.
 func (a *App) ensureKeyClient(rootCAs *x509.CertPool, insecure bool) {
-	if a.KeyClient != nil {
+	if a.KeyClient != nil && !a.ownKeyClient {
 		return
 	}
 	a.KeyClient = sources.HTTPClient{UserAgent: "frostroot/" + builder.Version, RootCAs: rootCAs, Insecure: insecure}
+	a.ownKeyClient = true
 }
 
 // recipeFileName is the recipe every command works on, in App.RecipeDir.
@@ -114,6 +120,9 @@ type App struct {
 	// KeyClient fetches the signing keys of extra sources; defaults to the
 	// network. Tests answer from a map.
 	KeyClient sources.Client
+	// ownKeyClient is true once ensureKeyClient set KeyClient, which it may
+	// then set again; a KeyClient a test injected is never replaced.
+	ownKeyClient bool
 	// IndexClient fetches the package index the recipe form searches; nil
 	// means a client honoring the proxy environment. Tests answer from
 	// their own server.

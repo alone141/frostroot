@@ -138,6 +138,7 @@ func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath 
 		return exitUserError
 	}
 	a.stdoutf("\nWrote %s.\n", recipeFileName)
+	a.trustWrittenCertificates(imageRecipe.CertificatePaths(), indexes)
 	if exitCode := a.fetchMissingKeys(commandName, imageRecipe.Sources, providedKeys, indexes.insecureTLS()); exitCode != exitSuccess {
 		return exitCode
 	}
