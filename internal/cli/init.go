@@ -155,7 +155,8 @@ func (a *App) runInit(args []string) int {
 	if !ok {
 		return exitUserError
 	}
-	return a.runRecipeForm("init", initial, recipePath, *overwrite, *plain, fixed, nil, nil, indexes)
+	exitCode, _ := a.runRecipeForm("init", initial, recipePath, *overwrite, *plain, fixed, nil, nil, indexes)
+	return exitCode
 }
 
 // renderRecipe returns imageRecipe as the file init and edit write, byte

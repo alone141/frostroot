@@ -416,7 +416,7 @@ func TestCaptureKeepsCertificatesTheWrittenRecipeNames(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	exitCode, _, stderr := runCaptureWithAnswers(recipeDir, root, answersWith(nil))
+	exitCode, stdout, stderr := runCaptureWithAnswers(recipeDir, root, answersWith(nil))
 	if exitCode != exitUserError {
 		t.Fatalf("exit code = %d, want %d for a key that could not be saved; stderr %s", exitCode, exitUserError, stderr)
 	}
@@ -428,6 +428,14 @@ func TestCaptureKeepsCertificatesTheWrittenRecipeNames(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "frostroot edit fetches them again") {
 		t.Errorf("stderr does not say how to get the key:\n%s", stderr)
+	}
+	// The report is the only record of what the recipe could not carry, and
+	// the edit that fetches the key later does not write it.
+	if _, err := os.Stat(filepath.Join(recipeDir, captureReportFileName)); err != nil {
+		t.Errorf("the written recipe has no report beside it: %v", err)
+	}
+	if !strings.Contains(stdout, "Not captured (details in "+captureReportFileName+")") {
+		t.Errorf("stdout does not say what was not captured:\n%s", stdout)
 	}
 }
 

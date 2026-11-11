@@ -90,7 +90,8 @@ func (a *App) runCapture(args []string) int {
 		removeCapturedCertificates(writtenCertificates)
 		return exitUserError
 	}
-	if exitCode := a.runRecipeForm("capture", form.FromRecipe(snapshot.Recipe()), recipePath, *overwrite, *plain, form.Fixed{Family: true, Target: true}, snapshot.Keys, intro, indexes); exitCode != exitSuccess {
+	exitCode, wrote := a.runRecipeForm("capture", form.FromRecipe(snapshot.Recipe()), recipePath, *overwrite, *plain, form.Fixed{Family: true, Target: true}, snapshot.Keys, intro, indexes)
+	if exitCode != exitSuccess {
 		// The form can fail after the recipe is on disk: a key it then
 		// fetches may not come. That recipe names these files, and a
 		// certificate read off a machine cannot be fetched again the way a
@@ -98,9 +99,14 @@ func (a *App) runCapture(args []string) int {
 		// them is not this run's: one that appeared while the form was open
 		// and was left alone, beside which these files would mean nothing.
 		removeCapturedCertificates(certificatesNotNamedBy(recipePath, a.RecipeDir, writtenCertificates))
-		return exitCode
+		if !wrote {
+			return exitCode
+		}
 	}
 
+	// A written recipe gets its report, even when a key failed after it:
+	// the report is the only record of what the recipe could not carry, and
+	// the edit that fetches the key later does not write it.
 	reportPath := filepath.Join(a.RecipeDir, captureReportFileName)
 	if err := writeFileAtomically(reportPath, snapshot.Report()); err != nil {
 		a.stderrf("frostroot capture: writing the report: %v\n", err)
@@ -110,7 +116,7 @@ func (a *App) runCapture(args []string) int {
 	for _, line := range snapshot.Summary() {
 		a.stdoutf("  %s\n", line)
 	}
-	return exitSuccess
+	return exitCode
 }
 
 // captureNoteText is the first page of the capture form: where the values
