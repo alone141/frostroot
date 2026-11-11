@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -189,7 +190,34 @@ func TestBubblewrapPreflightNamesEveryMissingProgram(t *testing.T) {
 	}
 }
 
-// TestBubblewrapPreflightChecksTheUserNamespaces: unprivileged, bwrap and
+// TestShellCommandLineIsWhatAShellRuns: the line the removal's error gives
+// to paste is read as the arguments it names, whatever the work root's path
+// holds, and a flag is not quoted for nothing.
+func TestShellCommandLineIsWhatAShellRuns(t *testing.T) {
+	args := []string{"--map-root-user", "--", "rm", "-rf", "--", "/var/tmp/frostroot 1000/it's $(touch pwned) `touch pwned`/tree", ""}
+	line := shellCommandLine("printf", append([]string{`%s\n`}, args...))
+	if want := `printf '%s\n' --map-root-user -- rm -rf -- '/var/tmp/frostroot 1000/it'\''s $(touch pwned) `; !strings.HasPrefix(line, want) {
+		t.Errorf("line = %q, want it to begin %q", line, want)
+	}
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh here")
+	}
+	command := exec.Command(shell, "-c", line)
+	command.Dir = t.TempDir()
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("sh -c %q: %v", line, err)
+	}
+	if want := strings.Join(args, "\n") + "\n"; string(output) != want {
+		t.Errorf("sh read %q, want %q", output, want)
+	}
+	if _, err := os.Stat(filepath.Join(command.Dir, "pwned")); !errors.Is(err, os.ErrNotExist) {
+		t.Error("the shell ran what the path holds")
+	}
+}
+
+// TestBubblewrapPreflightChecksTheUserNamespaces:unprivileged, bwrap and
 // unshare run in user namespaces of their own. A kernel that keeps them out
 // of those, or an unshare without --map-auto, failed the build at its first
 // bwrap, after the image was built, and left a tree of subordinate ids that

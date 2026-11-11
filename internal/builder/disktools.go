@@ -238,13 +238,28 @@ func (b *Bubblewrap) RemoveTree(ctx context.Context, dir string) error {
 }
 
 // shellCommandLine returns program and args as one line a person can paste
-// into a shell, each argument quoted.
+// into a shell and read: an argument is quoted when it holds anything a
+// shell would read otherwise, such as the space in a work root, and left
+// as it is when it is a flag or a plain word.
 func shellCommandLine(program string, args []string) string {
-	quoted := []string{program}
+	words := []string{program}
 	for _, arg := range args {
-		quoted = append(quoted, shellQuote(arg))
+		if arg == "" || strings.IndexFunc(arg, needsShellQuoting) >= 0 {
+			arg = shellQuote(arg)
+		}
+		words = append(words, arg)
 	}
-	return strings.Join(quoted, " ")
+	return strings.Join(words, " ")
+}
+
+// needsShellQuoting reports whether r is a character a shell reads as
+// more than itself, or one a person would not expect bare.
+func needsShellQuoting(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return false
+	}
+	return !strings.ContainsRune("-_./:=@%+,", r)
 }
 
 // removeTreeCommand returns the program and arguments that remove the tree
