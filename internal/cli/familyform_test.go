@@ -2,10 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,7 +51,21 @@ func runFullScreen(t *testing.T, recipeDir string, keys []string, args ...string
 	return app.Run(args), stderrBuffer.String()
 }
 
-// TestTheFullScreenFormAsksTheFamilyWhereItShould: init and edit ask the
+// TestCtrlCInTheFullScreenFormIsAnInterrupt: Ctrl-C at a question of the
+// plain interface ends the process with SIGINT, 130; the same key in the
+// full-screen form exited 1.
+func TestCtrlCInTheFullScreenFormIsAnInterrupt(t *testing.T) {
+	recipeDir := t.TempDir()
+	exitCode, stderr := runFullScreen(t, recipeDir, []string{"\x03"}, "init")
+	if exitCode != exitInterrupted || !strings.Contains(stderr, "canceled; nothing written") {
+		t.Fatalf("exit code = %d, stderr %q; want %d and nothing written", exitCode, stderr, exitInterrupted)
+	}
+	if _, err := os.Stat(filepath.Join(recipeDir, recipeFileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a canceled form wrote %s: Stat error = %v", recipeFileName, err)
+	}
+}
+
+// TestTheFullScreenFormAsksTheFamilyWhereItShould:init and edit ask the
 // family on the Image page, between the name and the release, and a switch
 // there writes the other family's recipe; init --distro answers it, so the
 // page asks none.

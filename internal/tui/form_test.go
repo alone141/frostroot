@@ -228,6 +228,25 @@ func TestRunFormEndToEnd(t *testing.T) {
 			t.Errorf("err = %v, want ErrCanceled", err)
 		}
 	})
+	// No on the summary page is the plain interface's no to its last
+	// question, not an interrupt: the two exited alike only by accident.
+	t.Run("declining to write", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		var sudo []form.Field
+		for _, field := range form.Fields(noHost) {
+			if field.Key == form.KeySudo {
+				sudo = append(sudo, field)
+			}
+		}
+		values, err := RunForm(ctx, sudo, form.Defaults(noHost), nil, pacedKeys("\r", "n"), io.Discard)
+		if !errors.Is(err, ErrDeclined) {
+			t.Fatalf("err = %v, want ErrDeclined", err)
+		}
+		if values == nil || !values.Bool(form.KeySudo) {
+			t.Errorf("values = %v, want the answers given", values)
+		}
+	})
 }
 
 // TestSummaryGainsTheWarningWhenTheIndexLands: the preview, and with it the

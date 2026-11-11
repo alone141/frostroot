@@ -20,9 +20,13 @@ import (
 	"frostroot/internal/form"
 )
 
-// ErrCanceled means the user left the form without finishing it: Esc,
-// Ctrl-C, or declining to write on the summary page.
+// ErrCanceled means the user left the form without finishing it, with Esc
+// or Ctrl-C.
 var ErrCanceled = errors.New("canceled")
+
+// ErrDeclined means the user answered every page and declined, on the
+// summary page, to write the recipe. RunForm returns the answers with it.
+var ErrDeclined = errors.New("declined to write")
 
 // Heights of the scrolling lists, in rows.
 const (
@@ -65,7 +69,8 @@ type PreviewFunc func(form.Values) Preview
 
 // RunForm shows fields as a full-screen form, one page per form page,
 // starting from initial, then a summary page with the preview that asks to
-// write the recipe. It returns the answers, or ErrCanceled.
+// write the recipe. It returns the answers, the answers and ErrDeclined, or
+// ErrCanceled.
 func RunForm(ctx context.Context, fields []form.Field, initial form.Values, preview PreviewFunc, input io.Reader, output io.Writer) (form.Values, error) {
 	// The form's context ends with the form, so that a package index still
 	// being fetched when the user finishes or leaves is not fetched further.
@@ -83,8 +88,11 @@ func RunForm(ctx context.Context, fields []form.Field, initial form.Values, prev
 		return nil, fmt.Errorf("running the form: %w", err)
 	}
 	finished, isFormModel := finalModel.(*formModel)
-	if !isFormModel || finished.stage != stageDone || !finished.write {
+	if !isFormModel || finished.stage != stageDone {
 		return nil, ErrCanceled
+	}
+	if !finished.write {
+		return finished.binding.values(), ErrDeclined
 	}
 	return finished.binding.values(), nil
 }

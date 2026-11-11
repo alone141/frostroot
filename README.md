@@ -219,7 +219,7 @@ The sources come before the packages because that is the order the answers
 depend on: the picker searches the repositories the recipe has, so it can
 only find `docker-ce` once Docker's repository is one of them. A recipe that
 adds none passes the page with two keystrokes. Enter moves on, Shift-Tab
-goes back, Ctrl-C leaves without writing. The last page shows the recipe
+goes back, Ctrl-C or Esc leaves without writing (exit 130). The last page shows the recipe
 exactly as it will be written — or, for `edit`, a diff of the file against
 it, with a count and a warning when comments of your own are about to be
 replaced by the template's; when nothing would change, the question defaults
@@ -335,9 +335,9 @@ own server, which `--mirror`, an Ubuntu archive, does not replace.
 | Exit code | Meaning |
 |---|---|
 | 0 | success |
-| 1 | something you can fix: invalid or missing recipe, not Linux, mmdebstrap or ubuntu-keyring missing, a host without `mount` or one that cannot mount in the build, for Fedora mkosi or a program it runs missing, an mkosi frostroot does not know, or user namespaces restricted, for a disk image bubblewrap or uidmap missing or a `disk.size` too small for the image (the work directory is kept), unusable work directory, a `dist/` you cannot write to, a source key or certificate file that cannot be read, an unusable `SOURCE_DATE_EPOCH`, another `build` or `vendor` of yours running in the same directory; for `vendor` and `--offline`, no lock, a lock that cannot be read or holds what no build writes, a lock without checksums, a recipe that changed since the lock, an incomplete `vendor/debs/` or `vendor/rpms/` |
+| 1 | something you can fix: invalid or missing recipe, not Linux, mmdebstrap or ubuntu-keyring missing, a host without `mount` or one that cannot mount in the build, for Fedora mkosi or a program it runs missing, an mkosi frostroot does not know, or user namespaces restricted, for a disk image bubblewrap or uidmap missing or a `disk.size` too small for the image (the work directory is kept), unusable work directory, a `dist/` you cannot write to, a source key or certificate file that cannot be read, an unusable `SOURCE_DATE_EPOCH`, another `build` or `vendor` of yours running in the same directory; for `vendor` and `--offline`, no lock, a lock that cannot be read or holds what no build writes, a lock without checksums, a recipe that changed since the lock, an incomplete `vendor/debs/` or `vendor/rpms/`; for `vendor`, a pool it cannot create, write or prune; for `init`, `edit` and `capture`, declining to write the recipe |
 | 2 | the build failed: mmdebstrap or mkosi failed (unknown package, mirror unreachable), provisioning failed, the tarball could not be placed, an offline build's packages differ from the lock; for `vendor`, a download failed or a file did not match its checksum |
-| 130 | interrupted with Ctrl-C, at any step up to placing the image; nothing is written and the work directory is kept; `vendor` keeps finished downloads. A build killed outright may leave a hidden `.tmp` file in the recipe directory or `dist/`; the next build there removes it |
+| 130 | interrupted with Ctrl-C, at any step up to placing the image, or Ctrl-C or Esc in the form; nothing is written and the work directory is kept; `vendor` keeps finished downloads. A build killed outright may leave a hidden `.tmp` file in the recipe directory or `dist/`; the next build there removes it |
 
 ## The recipe
 

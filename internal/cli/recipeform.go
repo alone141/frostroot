@@ -79,8 +79,14 @@ func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath 
 		values, problems, err = a.askFieldsPlain(fields, initial)
 	}
 	if errors.Is(err, tui.ErrCanceled) {
+		// Esc or Ctrl-C, which at a question of the plain interface ends
+		// the process with SIGINT: interrupted either way.
 		a.stderrf("frostroot %s: canceled; nothing written\n", commandName)
-		return exitUserError
+		return exitInterrupted
+	}
+	if errors.Is(err, tui.ErrDeclined) {
+		// No at the summary page, as at the plain interface's last question.
+		return a.declineToWrite(commandName, preview(values).Unchanged)
 	}
 	if errors.Is(err, context.Canceled) {
 		a.stderrf("frostroot %s: interrupted; nothing written\n", commandName)

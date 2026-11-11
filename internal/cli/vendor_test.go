@@ -361,6 +361,24 @@ func TestVendorRefusals(t *testing.T) {
 	}
 }
 
+// TestVendorThatCannotWriteItsPoolIsAUserError: a vendor/ that could not be
+// created exited 2, as a failed download does, where build says 1 of a dist/
+// it cannot write; and it said so only once the downloads had started.
+func TestVendorThatCannotWriteItsPoolIsAUserError(t *testing.T) {
+	fixture := newVendorFixture(t)
+	if err := os.WriteFile(filepath.Join(fixture.recipeDir, "vendor"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor"})
+	if exitCode != exitUserError || !strings.Contains(stderr.String(), "cannot write the vendored files") {
+		t.Fatalf("exit code = %d, stderr %s; want %d saying the pool cannot be written", exitCode, stderr.String(), exitUserError)
+	}
+	if fixture.requests.Load() != 0 {
+		t.Error("vendor downloaded into a pool it cannot write")
+	}
+}
+
 // A build in the same directory may place a new lock at any moment, and
 // vendor reads it once: it waits for nothing and fetches nothing.
 func TestVendorRefusesWhileABuildHoldsTheRecipeDir(t *testing.T) {
