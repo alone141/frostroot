@@ -11,7 +11,8 @@ const editUsageText = `usage: frostroot edit [--plain] [--mirror URL] [--python-
 Open frostroot.toml in the form with its current values and write it back.
 The file is regenerated from frostroot's template, so its explanatory
 comments come back and any comments you added do not. The full-screen form
-can move the recipe to the other distribution; --plain keeps its own.
+can move the recipe to the other distribution, or to the other target, a
+WSL tarball or a disk image; --plain keeps its own.
 
 ` + indexUsageText
 
@@ -27,9 +28,11 @@ func (a *App) runEdit(args []string) int {
 		return exitUserError
 	}
 	indexOptions.pythonIndex = pythonIndexFor(indexOptions.pythonIndex, imageRecipe)
+	indexOptions.certificates = imageRecipe.CertificatePaths()
 	indexes, ok := a.packageIndexes(indexOptions)
 	if !ok {
 		return exitUserError
 	}
-	return a.runRecipeForm("edit", form.FromRecipe(imageRecipe), filepath.Join(a.RecipeDir, recipeFileName), true, *plain, form.Fixed{}, nil, nil, indexes)
+	exitCode, _ := a.runRecipeForm("edit", form.FromRecipe(imageRecipe), filepath.Join(a.RecipeDir, recipeFileName), true, *plain, form.Fixed{}, nil, nil, indexes)
+	return exitCode
 }

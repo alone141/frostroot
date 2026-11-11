@@ -237,6 +237,16 @@ func TestBubblewrapPreflightChecksTheUserNamespaces(t *testing.T) {
 	}
 
 	host = newFakeDiskHost()
+	host.kernel = map[string]string{maxUserNamespacesPath: "0"}
+	err = host.bubblewrap(1000).Preflight(context.Background())
+	if !errors.Is(err, ErrNoUserNamespaces) || !strings.Contains(err.Error(), "sudo frostroot build") {
+		t.Errorf("Preflight on a kernel that makes no user namespaces = %v, want ErrNoUserNamespaces with the way out", err)
+	}
+	if len(host.ran) != 0 {
+		t.Errorf("ran %q, want nothing run on a kernel that makes no user namespaces", host.ran)
+	}
+
+	host = newFakeDiskHost()
 	host.restriction = "0"
 	host.results["unshare"] = fakeResult{stderr: "unshare: unrecognized option '--map-auto'\n", err: errors.New("exit status 1")}
 	err = host.bubblewrap(1000).Preflight(context.Background())

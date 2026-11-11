@@ -21,6 +21,9 @@ type fakeHost struct {
 	// restriction is what the kernel says of unprivileged user
 	// namespaces; "" for a kernel that has no such switch.
 	restriction string
+	// kernel holds the other files under /proc/sys the preflight reads, by
+	// path; a path it lacks does not exist.
+	kernel map[string]string
 }
 
 type fakeResult struct {
@@ -58,6 +61,9 @@ func (h *fakeHost) run(_ context.Context, program string, args, _ []string, stdo
 }
 
 func (h *fakeHost) readFile(name string) ([]byte, error) {
+	if content, ok := h.kernel[name]; ok {
+		return []byte(content + "\n"), nil
+	}
 	if name != userNamespaceRestriction || h.restriction == "" {
 		return nil, os.ErrNotExist
 	}
@@ -66,6 +72,20 @@ func (h *fakeHost) readFile(name string) ([]byte, error) {
 
 func (h *fakeHost) mkosi(uid int) *Mkosi {
 	return &Mkosi{RunCommand: h.run, LookPath: h.lookPath, ReadFile: h.readFile, CurrentUID: func() int { return uid }}
+}
+
+// TestMkosiPreflightRefusesAKernelWithoutUserNamespaces: on WSL 1 mkosi
+// failed at its first step, with its own words and exit 2.
+func TestMkosiPreflightRefusesAKernelWithoutUserNamespaces(t *testing.T) {
+	host := newFakeHost()
+	host.kernel = map[string]string{kernelReleasePath: "4.4.0-17763-Microsoft"}
+	err := host.mkosi(1000).Preflight(context.Background(), FedoraSpec{})
+	if !errors.Is(err, ErrNoUserNamespaces) || !strings.Contains(err.Error(), "wsl --set-version") {
+		t.Errorf("Preflight on WSL 1 = %v, want ErrNoUserNamespaces with the way to WSL 2", err)
+	}
+	if err := host.mkosi(0).Preflight(context.Background(), FedoraSpec{}); err != nil {
+		t.Errorf("Preflight as root on WSL 1 = %v, want nil: root makes no user namespace", err)
+	}
 }
 
 // TestMkosiPreflightRefusesAHostThatKeepsMkosiOutOfItsNamespace: Ubuntu's

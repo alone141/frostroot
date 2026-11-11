@@ -56,8 +56,10 @@ func isCharacterDevice(stream any) bool {
 // form does not ask, because the command chose them already; what it does
 // ask decides the questions after it. The plain interface asks neither,
 // because people pipe answers into it, and asks initial's family's and
-// target's questions.
-func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath string, replace, plainRequested bool, fixed form.Fixed, providedKeys map[string][]byte, intro []form.Field, indexes *packageIndexes) int {
+// target's questions. wrote says whether the recipe was written, which it
+// can be when the exit code is a failure: a key fetched afterwards may not
+// come.
+func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath string, replace, plainRequested bool, fixed form.Fixed, providedKeys map[string][]byte, intro []form.Field, indexes *packageIndexes) (exitCode int, wrote bool) {
 	host := a.host()
 	host.OpenIndex = indexes.Open
 	host.OpenPythonIndex = indexes.OpenPython
@@ -82,19 +84,19 @@ func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath 
 		// Esc or Ctrl-C, which at a question of the plain interface ends
 		// the process with SIGINT: interrupted either way.
 		a.stderrf("frostroot %s: canceled; nothing written\n", commandName)
-		return exitInterrupted
+		return exitInterrupted, false
 	}
 	if errors.Is(err, tui.ErrDeclined) {
 		// No at the summary page, as at the plain interface's last question.
-		return a.declineToWrite(commandName, preview(values).Unchanged)
+		return a.declineToWrite(commandName, preview(values).Unchanged), false
 	}
 	if errors.Is(err, context.Canceled) {
 		a.stderrf("frostroot %s: interrupted; nothing written\n", commandName)
-		return exitInterrupted
+		return exitInterrupted, false
 	}
 	if err != nil {
 		a.stderrf("frostroot %s: %v\n", commandName, err)
-		return exitUserError
+		return exitUserError, false
 	}
 
 	imageRecipe := form.ToRecipe(values)
@@ -104,7 +106,7 @@ func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath 
 			a.stderrf("frostroot %s: %s\n", commandName, problem)
 		}
 		a.stderrf("frostroot %s: nothing written\n", commandName)
-		return exitUserError
+		return exitUserError, false
 	}
 	if !fullScreen {
 		// The full-screen form confirmed on its summary page, with the
@@ -126,20 +128,21 @@ func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath 
 		write, err := a.askYesNo(question, !shown.Unchanged)
 		if err != nil {
 			a.stderrf("frostroot %s: %v\n", commandName, err)
-			return exitUserError
+			return exitUserError, false
 		}
 		if !write {
-			return a.declineToWrite(commandName, shown.Unchanged)
+			return a.declineToWrite(commandName, shown.Unchanged), false
 		}
 	}
 
 	if err := writeRecipe(recipePath, imageRecipe, replace); err != nil {
 		a.stderrf("frostroot %s: %v\n", commandName, err)
-		return exitUserError
+		return exitUserError, false
 	}
 	a.stdoutf("\nWrote %s.\n", recipeFileName)
+	a.trustWrittenCertificates(imageRecipe.CertificatePaths(), indexes)
 	if exitCode := a.fetchMissingKeys(commandName, imageRecipe.Sources, providedKeys, indexes.insecureTLS()); exitCode != exitSuccess {
-		return exitCode
+		return exitCode, true
 	}
 	a.stdoutf("Next: frostroot validate, then frostroot build.\n")
 	// The recipe was validated before it was written, so the release is
@@ -148,7 +151,7 @@ func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath 
 	if err == nil && release.ExternallyManagedPython && slices.Contains(imageRecipe.Packages.Include, "python3-pip") {
 		a.stdoutf("Note: Ubuntu %s enforces PEP 668, so pip install outside a virtual environment fails by design. Use: python3 -m venv .venv\n", imageRecipe.Image.Release)
 	}
-	return exitSuccess
+	return exitSuccess, true
 }
 
 // declineToWrite reports that the recipe was not written. Declining to

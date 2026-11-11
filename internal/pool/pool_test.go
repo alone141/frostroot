@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -593,6 +594,32 @@ func TestFetchMismatchLeavesNothing(t *testing.T) {
 			}
 			assertPoolHolds(t, options.Dir)
 		})
+	}
+}
+
+// TestFetchDoesNotRetryAPoolItCannotWrite: a full disk or a directory its
+// owner cannot write fails every attempt the same way. It was retried,
+// then reported as a failed download, which vendor exits 2 for.
+func TestFetchDoesNotRetryAPoolItCannotWrite(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("a directory without write permission keeps its owner out on Unix only, and never root")
+	}
+	entry := entryFor("curl", "1")
+	mirror := newFakeMirror(t, entry)
+	options := fetchOptions(t, mirror, entry)
+	if err := os.MkdirAll(options.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(options.Dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(options.Dir, 0o755) })
+	_, err := Fetch(context.Background(), options)
+	if !errors.Is(err, ErrPoolWrite) || !strings.Contains(err.Error(), "curl 1") {
+		t.Fatalf("err = %v, want ErrPoolWrite naming the package", err)
+	}
+	if mirror.requestCount() != 1 {
+		t.Errorf("requests = %d, want no retry for a pool that cannot be written", mirror.requestCount())
 	}
 }
 

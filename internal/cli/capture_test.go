@@ -368,6 +368,27 @@ func TestCaptureLeavesAnExistingCertificateAlone(t *testing.T) {
 	}
 }
 
+// TestCaptureReadsItsCertificatesBeforeTheForm: the form's downloads trust
+// the certificate authorities the captured recipe names, as build and
+// vendor will. A file already there, which capture leaves alone, is read
+// too, and one that holds no certificate is said to.
+func TestCaptureReadsItsCertificatesBeforeTheForm(t *testing.T) {
+	recipeDir := t.TempDir()
+	root := fakeUbuntuRoot(t, "24.04")
+	withLocalAuthority(t, root, corpCertificatePEM(t))
+	ownPath := filepath.Join(recipeDir, "certs", "corp-root.pem")
+	if err := os.MkdirAll(filepath.Dir(ownPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ownPath, []byte("# not a certificate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _, stderr := runCaptureWithAnswers(recipeDir, root, answersWith(map[int]string{answerWrite: "n"}))
+	if !strings.Contains(stderr, "warning: certificate: certs/corp-root.pem") {
+		t.Errorf("capture did not read the certificate its recipe names before the form:\n%s", stderr)
+	}
+}
+
 // TestCaptureKeepsCertificatesTheWrittenRecipeNames: the form writes the
 // recipe and can still fail afterwards, saving a source's key. The recipe
 // on disk then names the certificate files, and a certificate read off a
@@ -395,7 +416,7 @@ func TestCaptureKeepsCertificatesTheWrittenRecipeNames(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	exitCode, _, stderr := runCaptureWithAnswers(recipeDir, root, answersWith(nil))
+	exitCode, stdout, stderr := runCaptureWithAnswers(recipeDir, root, answersWith(nil))
 	if exitCode != exitUserError {
 		t.Fatalf("exit code = %d, want %d for a key that could not be saved; stderr %s", exitCode, exitUserError, stderr)
 	}
@@ -407,6 +428,14 @@ func TestCaptureKeepsCertificatesTheWrittenRecipeNames(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "frostroot edit fetches them again") {
 		t.Errorf("stderr does not say how to get the key:\n%s", stderr)
+	}
+	// The report is the only record of what the recipe could not carry, and
+	// the edit that fetches the key later does not write it.
+	if _, err := os.Stat(filepath.Join(recipeDir, captureReportFileName)); err != nil {
+		t.Errorf("the written recipe has no report beside it: %v", err)
+	}
+	if !strings.Contains(stdout, "Not captured (details in "+captureReportFileName+")") {
+		t.Errorf("stdout does not say what was not captured:\n%s", stdout)
 	}
 }
 

@@ -15,7 +15,6 @@ import (
 
 	"frostroot/internal/builder"
 	"frostroot/internal/export"
-	"frostroot/internal/pki"
 	"frostroot/internal/pool"
 	"frostroot/internal/recipe"
 	"frostroot/internal/tui"
@@ -164,7 +163,7 @@ func (a *App) runVendor(args []string) int {
 	case errors.Is(outcome.Err, context.Canceled) || outcome.Interrupted:
 		a.stderrf("frostroot: vendor interrupted; finished downloads are kept, so rerunning resumes\n")
 		return exitInterrupted
-	case errors.Is(outcome.Err, errVendorFiles):
+	case errors.Is(outcome.Err, errVendorFiles), errors.Is(outcome.Err, pool.ErrPoolWrite):
 		a.stderrf("frostroot vendor: %v\n", outcome.Err)
 		return exitUserError
 	case outcome.Err != nil:
@@ -476,10 +475,6 @@ func (r *vendorRun) fetchPool(ctx context.Context, report func(builder.ProgressE
 // [certificates] could build and then fail TLS on the very URLs the lock had
 // just recorded. Nothing is installed here: vendor only downloads.
 func (a *App) vendorTrustPool(lock recipe.Lockfile, caBundlePath string) (*x509.CertPool, bool) {
-	bundle, ok := a.readCABundle(caBundlePath)
-	if !ok {
-		return nil, false
-	}
 	var paths []string
 	for _, certificate := range lock.Certificates {
 		paths = append(paths, certificate.Path)
@@ -490,14 +485,5 @@ func (a *App) vendorTrustPool(lock recipe.Lockfile, caBundlePath string) (*x509.
 		a.stderrf("frostroot: %v\n", err)
 		return nil, false
 	}
-	extraPEM := append(append([]byte(nil), certificates.PEM...), bundle...)
-	if len(extraPEM) == 0 {
-		return nil, true // the host's own store, which is what a fetch uses anyway
-	}
-	trusted, err := pki.SystemPoolWith(extraPEM)
-	if err != nil {
-		a.stderrf("frostroot: %v\n", err)
-		return nil, false
-	}
-	return trusted, true
+	return a.trustPool(certificates.PEM, caBundlePath)
 }

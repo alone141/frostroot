@@ -105,7 +105,8 @@ It asks the target after the release: a tarball for WSL, or a disk image
 that boots a PC or a VM, whose questions have no systemd and a Disk page
 instead. --target answers it, and --plain writes a WSL recipe unless
 --target says disk. No password is asked for a disk image's user: it is set
-at the first boot.
+at the first boot. A disk image is built for Ubuntu only so far, so
+--distro fedora --target disk is refused before any question.
 
 ` + indexUsageText
 
@@ -136,6 +137,15 @@ func (a *App) runInit(args []string) int {
 		}
 		initial[form.KeyTarget] = *targetName
 	}
+	// Neither page can change what the flags answered, so a family that
+	// builds no disk image would cost every answer and still write nothing.
+	if fixed.Family && *targetName == recipe.TargetDisk {
+		if family, err := distro.FamilyOf(*distroName); err == nil && len(distro.DiskVersions(family)) == 0 {
+			a.stderrf("frostroot init: a %s disk image comes in a later version of frostroot; a disk image is built for Ubuntu %s\n",
+				family.Name(), strings.Join(distro.DiskVersions(distro.Ubuntu), " or "))
+			return exitUserError
+		}
+	}
 	recipePath := filepath.Join(a.RecipeDir, recipeFileName)
 	if _, err := os.Stat(recipePath); err == nil && !*overwrite {
 		a.stderrf("frostroot: %s already exists; use --force to overwrite it, or frostroot edit to change it\n", recipePath)
@@ -145,7 +155,8 @@ func (a *App) runInit(args []string) int {
 	if !ok {
 		return exitUserError
 	}
-	return a.runRecipeForm("init", initial, recipePath, *overwrite, *plain, fixed, nil, nil, indexes)
+	exitCode, _ := a.runRecipeForm("init", initial, recipePath, *overwrite, *plain, fixed, nil, nil, indexes)
+	return exitCode
 }
 
 // renderRecipe returns imageRecipe as the file init and edit write, byte

@@ -260,7 +260,7 @@ func TestBuildFedoraLocksTheOneFileDnfCanHaveInstalled(t *testing.T) {
 
 	writeCached("updates-89abcdef", "an earlier configuration's other git")
 	_, err = (&Builder{Fedora: newFakeFedoraBootstrapper()}).Build(context.Background(), sampleFedoraRecipe(), options)
-	if err == nil || !strings.Contains(err.Error(), "twice, with different contents") || !strings.Contains(err.Error(), "updates-89abcdef") {
+	if !errors.Is(err, ErrPackageCacheConflict) || !strings.Contains(err.Error(), "twice, with different contents") || !strings.Contains(err.Error(), "updates-89abcdef") {
 		t.Fatalf("Build error = %v, want both of the cache's different copies named", err)
 	}
 }

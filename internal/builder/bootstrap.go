@@ -25,6 +25,7 @@ type Mmdebstrap struct {
 	Mode       string                       // "unshare", "root", or "" to choose from the current uid
 	CurrentUID func() int                   // defaults to os.Getuid
 	LookPath   func(string) (string, error) // defaults to exec.LookPath
+	ReadFile   func(string) ([]byte, error) // defaults to os.ReadFile; reads whether the kernel makes user namespaces
 }
 
 // errorTailBytes is how much of mmdebstrap's output is repeated in a build
@@ -57,7 +58,17 @@ func (m *Mmdebstrap) Preflight(spec BootstrapSpec) error {
 	if err := checkKeyring(spec); err != nil {
 		return err
 	}
-	if m.bootstrapMode() == "unshare" && spec.WorkDir != "" {
+	if m.bootstrapMode() != "unshare" {
+		return nil
+	}
+	readFile := m.ReadFile
+	if readFile == nil {
+		readFile = os.ReadFile
+	}
+	if err := checkUserNamespaces(readFile); err != nil {
+		return err
+	}
+	if spec.WorkDir != "" {
 		return checkReachableFromUserNamespace("mmdebstrap", spec.WorkDir)
 	}
 	return nil
