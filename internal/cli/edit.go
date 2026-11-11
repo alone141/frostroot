@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"path/filepath"
 
 	"frostroot/internal/form"
@@ -33,6 +34,6 @@ func (a *App) runEdit(args []string) int {
 	if !ok {
 		return exitUserError
 	}
-	exitCode, _ := a.runRecipeForm("edit", form.FromRecipe(imageRecipe), filepath.Join(a.RecipeDir, recipeFileName), true, *plain, form.Fixed{}, nil, nil, indexes)
+	exitCode, _ := a.runRecipeForm(context.Background(), "edit", form.FromRecipe(imageRecipe), filepath.Join(a.RecipeDir, recipeFileName), true, *plain, form.Fixed{}, nil, nil, indexes)
 	return exitCode
 }
