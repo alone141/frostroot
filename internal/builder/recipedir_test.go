@@ -78,7 +78,7 @@ func TestHoldRecipeDirSharesTheHoldAcrossPathsToOneDirectory(t *testing.T) {
 	recipeDir := t.TempDir()
 	link := filepath.Join(t.TempDir(), "recipe")
 	if err := os.Symlink(recipeDir, link); err != nil {
-		t.Fatal(err)
+		t.Skipf("cannot make a symbolic link here: %v", err)
 	}
 	hold, err := HoldRecipeDir(getenv, recipeDir, "vendor")
 	if err != nil {

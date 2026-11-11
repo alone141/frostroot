@@ -265,7 +265,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if disk {
 		placePhase, outputNoun, outputPath = PhasePlaceImage, "image", imagePath
 	}
-	removeLeftovers(options.RecipeDir, tarballPath, imagePath)
+	removeLeftovers(options.RecipeDir, currentUID, tarballPath, imagePath)
 	if offline != nil {
 		if err := offline.checkLockUnchanged(); err != nil {
 			return Result{}, err

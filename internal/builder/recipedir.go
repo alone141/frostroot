@@ -97,15 +97,15 @@ func holdRecipeDir(workRoot, recipeDir, command string) (*RecipeDirHold, error) 
 // one of outputPaths, under the names export.CreateTemp gives them. Those
 // are gigabytes on a Windows drive, and nothing else removes them. Only a
 // run of this user in this directory makes them, and none is running: the
-// caller holds the directory. A file another user owns is a run of theirs,
-// and stays. Best effort: what cannot be removed is in no build's way.
-func removeLeftovers(recipeDir string, outputPaths ...string) {
+// caller holds the directory. A file another user than uid owns is a run
+// of theirs, which the hold does not keep out, and stays. Best effort: what
+// cannot be removed is in no build's way.
+func removeLeftovers(recipeDir string, uid int, outputPaths ...string) {
 	type leftoverName struct{ dir, prefix string }
 	names := []leftoverName{{recipeDir, "." + LockFileName + "."}}
 	for _, outputPath := range outputPaths {
 		names = append(names, leftoverName{filepath.Dir(outputPath), "." + filepath.Base(outputPath) + "."})
 	}
-	uid := os.Getuid()
 	for _, name := range names {
 		entries, err := os.ReadDir(name.dir)
 		if err != nil {
