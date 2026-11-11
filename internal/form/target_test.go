@@ -40,6 +40,43 @@ func TestTheTargetIsAskedAfterTheRelease(t *testing.T) {
 	}
 }
 
+// TestADiskImageIsOfferedWhereOneIsBuilt: BuildsDisk follows
+// distro.DiskVersions, and the target asked of a release without a disk
+// image offers WSL alone and names the releases that have one.
+func TestADiskImageIsOfferedWhereOneIsBuilt(t *testing.T) {
+	for _, test := range []struct {
+		family  distro.Family
+		release string
+		want    bool
+	}{
+		{distro.Ubuntu, "20.04", false},
+		{distro.Ubuntu, "22.04", false},
+		{distro.Ubuntu, "24.04", true},
+		{distro.Ubuntu, "26.04", true},
+		{distro.Fedora, "44", false},
+	} {
+		if got := BuildsDisk(test.family, test.release); got != test.want {
+			t.Errorf("BuildsDisk(%s, %s) = %v, want %v", test.family, test.release, got, test.want)
+		}
+	}
+	var target Field
+	for _, field := range Fields(noHost) {
+		if field.Key == KeyTarget {
+			target = field
+		}
+	}
+	narrowed := WithoutDisk(target)
+	if len(narrowed.Options) != 1 || narrowed.Options[0].Value != recipe.TargetWSL {
+		t.Errorf("without a disk image the target offers %+v, want WSL alone", narrowed.Options)
+	}
+	if !strings.Contains(narrowed.Description, "Ubuntu 24.04 or 26.04") {
+		t.Errorf("without a disk image the target says %q, want the releases that have one", narrowed.Description)
+	}
+	if len(target.Options) != 2 {
+		t.Errorf("WithoutDisk changed the field it was given: %+v", target.Options)
+	}
+}
+
 // TestADiskRecipesPlainQuestions: a disk recipe asks no systemd question,
 // which is wsl.conf's, and asks the disk's size after the locale, and no
 // format besides the raw image, which is the only one built so far; its

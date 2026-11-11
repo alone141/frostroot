@@ -413,8 +413,12 @@ type formBinding struct {
 	texts   map[bindingKey]*string
 	flags   map[bindingKey]*bool
 	lists   map[bindingKey]*[]string
-	ctx     context.Context // ends with the form
-	glyphs  glyphSet
+	// withoutDisk is the target as answered where no disk image is built,
+	// apart from the target's own variable, so that a disk image answered
+	// before the release moved is there again when it moves back.
+	withoutDisk *string
+	ctx         context.Context // ends with the form
+	glyphs      glyphSet
 }
 
 // bindingKey names a field's variable: its key, and the families and
@@ -443,8 +447,10 @@ func newFormBinding(ctx context.Context, fields []form.Field, initial form.Value
 		texts:   map[bindingKey]*string{},
 		flags:   map[bindingKey]*bool{},
 		lists:   map[bindingKey]*[]string{},
-		ctx:     ctx,
-		glyphs:  glyphs,
+		// huh writes the widget's one option into it as it is built.
+		withoutDisk: new(string),
+		ctx:         ctx,
+		glyphs:      glyphs,
 	}
 	initialFamily := form.Family(initial)
 	for _, field := range fields {
@@ -492,12 +498,26 @@ func (b *formBinding) variants() []form.Variant {
 	return variants
 }
 
-// answeredTarget is the target as answered so far.
+// answeredTarget is the target as answered so far: the one the widget
+// shown for the family and release answered says. A target the form does
+// not ask, such as init's --target, is the person's, and stays theirs for
+// recipe.Validate to judge.
 func (b *formBinding) answeredTarget() string {
-	if answer, isAsked := b.texts[targetKey]; isAsked {
-		return form.Target(form.Values{form.KeyTarget: *answer})
+	answer, isAsked := b.texts[targetKey]
+	if !isAsked {
+		return form.Target(b.initial)
 	}
-	return form.Target(b.initial)
+	if !b.buildsDisk() {
+		answer = b.withoutDisk
+	}
+	return form.Target(form.Values{form.KeyTarget: *answer})
+}
+
+// buildsDisk reports whether the family and release answered so far have a
+// disk image.
+func (b *formBinding) buildsDisk() bool {
+	family := b.answeredFamily()
+	return form.BuildsDisk(family, b.releaseOf(family))
 }
 
 // answeredVariant is the family and the target as answered so far.
@@ -623,7 +643,7 @@ func (b *formBinding) sharedPage(onPage []form.Field, variants []form.Variant) (
 			widgets = append(widgets, b.huhField(field))
 			continue
 		}
-		shared := &variantField{key: field.Key, of: of, answered: b.answeredVariant}
+		shared := &variantField{key: field.Key, pick: shownFor(of, b.answeredVariant)}
 		for _, candidate := range distinct {
 			shared.widgets = append(shared.widgets, b.huhField(candidate))
 		}
@@ -644,26 +664,10 @@ func (b *formBinding) huhField(field form.Field) huh.Field {
 		}
 		return input
 	case form.KindSelect:
-		options := make([]huh.Option[string], 0, len(field.Options))
-		for _, option := range field.Options {
-			label := option.DisplayLabel()
-			if option.Description != "" {
-				label += "  (" + option.Description + ")"
-			}
-			options = append(options, huh.NewOption(label, option.Value))
+		if field.Key == form.KeyTarget {
+			return b.targetField(field)
 		}
-		selectField := huh.NewSelect[string]().Key(field.Key).Title(field.Title).Description(field.Description).
-			Options(options...).Value(b.texts[key])
-		switch {
-		case len(options) <= inlineSelectOptions:
-			selectField.Inline(true)
-		case field.Filterable || len(options) > selectListHeight:
-			selectField.Height(selectListHeight)
-		}
-		if field.Filterable {
-			selectField.Filtering(true)
-		}
-		return selectField
+		return b.selectField(field, b.texts[key])
 	case form.KindMultiSelect:
 		options := make([]huh.Option[string], 0, len(field.Options))
 		for _, option := range field.Options {
@@ -686,6 +690,47 @@ func (b *formBinding) huhField(field form.Field) huh.Field {
 	return huh.NewNote().Title(field.Title).Description("unsupported field kind")
 }
 
+// targetField is the target question as two widgets, one offering a disk
+// image and one, for a family or release no disk image is built for,
+// without it and saying so. Each has its own variable, as a variantField's
+// widgets do.
+func (b *formBinding) targetField(field form.Field) huh.Field {
+	return &variantField{
+		key:     field.Key,
+		widgets: []huh.Field{b.selectField(field, b.texts[bindingKeyOf(field)]), b.selectField(form.WithoutDisk(field), b.withoutDisk)},
+		pick: func() int {
+			if b.buildsDisk() {
+				return 0
+			}
+			return 1
+		},
+	}
+}
+
+// selectField renders a select field as a huh select writing into value.
+func (b *formBinding) selectField(field form.Field, value *string) huh.Field {
+	options := make([]huh.Option[string], 0, len(field.Options))
+	for _, option := range field.Options {
+		label := option.DisplayLabel()
+		if option.Description != "" {
+			label += "  (" + option.Description + ")"
+		}
+		options = append(options, huh.NewOption(label, option.Value))
+	}
+	selectField := huh.NewSelect[string]().Key(field.Key).Title(field.Title).Description(field.Description).
+		Options(options...).Value(value)
+	switch {
+	case len(options) <= inlineSelectOptions:
+		selectField.Inline(true)
+	case field.Filterable || len(options) > selectListHeight:
+		selectField.Height(selectListHeight)
+	}
+	if field.Filterable {
+		selectField.Filtering(true)
+	}
+	return selectField
+}
+
 // requestFor is what a search field opens its index of: the family and
 // release and, for a field whose index covers them, the sources as answered
 // so far. Those pages come before the picker's, so a source chosen a moment
@@ -703,9 +748,14 @@ func (b *formBinding) requestFor(field form.Field) func() form.IndexRequest {
 
 // answeredRelease is the answered family's release as answered so far.
 func (b *formBinding) answeredRelease() string {
-	variant := b.answeredVariant()
+	return b.releaseOf(b.answeredFamily())
+}
+
+// releaseOf is family's release as answered so far. It goes by the family
+// alone, because the target answered goes by the release.
+func (b *formBinding) releaseOf(family distro.Family) string {
 	for _, field := range b.fields {
-		if field.Key == form.KeyRelease && field.AskedFor(variant) {
+		if field.Key == form.KeyRelease && (len(field.Families) == 0 || slices.Contains(field.Families, family)) {
 			return *b.texts[bindingKeyOf(field)]
 		}
 	}
@@ -752,6 +802,9 @@ func (b *formBinding) values() form.Values {
 			values[field.Key] = slices.Clone(*b.lists[key])
 		case form.KindNote:
 		}
+	}
+	if _, isAsked := b.texts[targetKey]; isAsked {
+		values[form.KeyTarget] = variant.Target
 	}
 	return values
 }

@@ -90,6 +90,25 @@ func Targets() []string {
 	return []string{recipe.TargetWSL, recipe.TargetDisk}
 }
 
+// BuildsDisk reports whether a disk image is built for the release of
+// family, which is what decides whether the form offers one: a target
+// offered for a release that cannot have it would only be refused after
+// every other question.
+func BuildsDisk(family distro.Family, release string) bool {
+	return slices.Contains(distro.DiskVersions(family), release)
+}
+
+// WithoutDisk returns the target question as asked of a release no disk
+// image is built for: without the disk image, and saying why it is
+// missing.
+func WithoutDisk(target Field) Field {
+	target.Options = slices.DeleteFunc(slices.Clone(target.Options), func(option Option) bool {
+		return option.Value == recipe.TargetDisk
+	})
+	target.Description = "A disk image is built for Ubuntu " + strings.Join(distro.DiskVersions(distro.Ubuntu), " or ")
+	return target
+}
+
 // AskedFor reports whether the field is a question of variant: of its
 // family and of its target.
 func (f Field) AskedFor(variant Variant) bool {

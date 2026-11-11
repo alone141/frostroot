@@ -228,8 +228,9 @@ exactly as it will be written — or, for `edit`, a diff of the file against
 it, with a count and a warning when comments of your own are about to be
 replaced by the template's; when nothing would change, the question defaults
 to not writing. Answers that cannot be built, such as a disk image of Ubuntu
-22.04 or of Fedora, are named on that page, and Write takes you back to the
-form with every answer kept and the problem at the top of the first page.
+22.04 after `--target disk`, are named on that page, and Write takes you
+back to the form with every answer kept and the problem at the top of the
+first page.
 `capture` opens with a page of what it found and what a
 recipe cannot carry. You type an image name, a user name and, if you want,
 extra package names or PPAs; everything else is a choice. The signing keys
@@ -387,8 +388,8 @@ file's size, by default the content with room to spare. The raw image is the
 only format so far: a qcow2 comes in a later version, and `formats` refuses
 it until then. `init
 --target disk` writes one, the full-screen form asks the target after the
-release, and `edit` moves a recipe between the two targets, carrying every
-answer.
+release and offers a disk image only for Ubuntu 24.04 and 26.04, and `edit`
+moves a recipe between the two targets, carrying every answer.
 
 Beyond a WSL image, the disk holds the kernel with its modules and
 firmware, the signed shim and GRUB that boot under Secure Boot with

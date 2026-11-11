@@ -20,26 +20,28 @@ import (
 // cursor and its own variable, so switching the family or the target and
 // back finds the answer where it was left. Variants that ask the question
 // the same way share a widget: Ubuntu's release is one question, whatever
-// the target.
+// the target. The target itself is a variantField too, of a widget that
+// offers a disk image and one that does not, picked by the release.
 type variantField struct {
-	key      string
-	widgets  []huh.Field          // one per way of asking, in the order the fields are listed
-	of       map[form.Variant]int // the widget each variant is shown
-	answered func() form.Variant
+	key     string
+	widgets []huh.Field // one per way of asking, in the order the fields are listed
+	pick    func() int  // the widget of the answers so far
 }
 
-// currentIndex is the widget of the variant answered so far. A variant the
-// field has no widget for cannot be answered on a page every variant
-// shares; the first widget stands in, so that the field is never without
-// one.
-func (f *variantField) currentIndex() int {
-	if index, found := f.of[f.answered()]; found {
-		return index
+// shownFor returns the pick of the widget each variant is shown, by the
+// variant answered so far. A variant the field has no widget for cannot be
+// answered on a page every variant shares; the first widget stands in, so
+// that the field is never without one.
+func shownFor(of map[form.Variant]int, answered func() form.Variant) func() int {
+	return func() int {
+		if index, found := of[answered()]; found {
+			return index
+		}
+		return 0
 	}
-	return 0
 }
 
-func (f *variantField) current() huh.Field { return f.widgets[f.currentIndex()] }
+func (f *variantField) current() huh.Field { return f.widgets[f.pick()] }
 
 // each calls do with every widget, in order, and keeps what it returns.
 func (f *variantField) each(do func(huh.Field) huh.Field) {
@@ -61,7 +63,7 @@ func (f *variantField) Init() tea.Cmd {
 // else to every widget, so that one shown after a switch is as up to date
 // as the one it replaces.
 func (f *variantField) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	current := f.currentIndex()
+	current := f.pick()
 	_, isKey := msg.(tea.KeyMsg)
 	var cmds []tea.Cmd
 	for index, widget := range f.widgets {
