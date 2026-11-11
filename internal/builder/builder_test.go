@@ -859,6 +859,20 @@ func TestBuildRecordsFileNameFromTheNewestPocket(t *testing.T) {
 // writeVendoredLock builds sampleRecipe online into options.RecipeDir and
 // then fills vendor/debs with real .deb files matching the lock's names,
 // rewriting the lock's checksums to those files. It returns the lock.
+// editVendoredLock returns a prepare step of TestBuildOfflineRefusesBeforeAnyWork:
+// a vendored lock with edit applied to it, and the sample recipe.
+func editVendoredLock(edit func(lock *recipe.Lockfile)) func(t *testing.T, options Options) recipe.Recipe {
+	return func(t *testing.T, options Options) recipe.Recipe {
+		t.Helper()
+		lock := writeVendoredLock(t, options)
+		edit(&lock)
+		if err := recipe.SaveLock(filepath.Join(options.RecipeDir, LockFileName), lock); err != nil {
+			t.Fatal(err)
+		}
+		return sampleRecipe()
+	}
+}
+
 func writeVendoredLock(t *testing.T, options Options) recipe.Lockfile {
 	t.Helper()
 	if _, err := buildWith(&fakeBootstrapper{}, options); err != nil {
@@ -1204,6 +1218,59 @@ func TestBuildOfflineRefusesBeforeAnyWork(t *testing.T) {
 			},
 			wantError: pool.ErrBadLock,
 			wantText:  "records no sources",
+		},
+		// What an offline build hands apt, pip and the image as it is: a
+		// lock is a text file anyone can edit, and these used to pass.
+		{
+			name:      "a package name that is an apt option",
+			prepare:   editVendoredLock(func(lock *recipe.Lockfile) { lock.Packages[0].Name = "-oAPT::Get::AllowUnauthenticated=true" }),
+			wantError: pool.ErrBadLock,
+			wantText:  "invalid package name",
+		},
+		{
+			name:      "a package name with a version",
+			prepare:   editVendoredLock(func(lock *recipe.Lockfile) { lock.Packages[0].Name = "git=1:2.0" }),
+			wantError: pool.ErrBadLock,
+			wantText:  "invalid package name",
+		},
+		{
+			name:      "a package version over two lines",
+			prepare:   editVendoredLock(func(lock *recipe.Lockfile) { lock.Packages[0].Version += "\nPackage: evil" }),
+			wantError: pool.ErrBadLock,
+			wantText:  "not a .deb's",
+		},
+		{
+			name: "a wheel version that adds pip options",
+			prepare: editVendoredLock(func(lock *recipe.Lockfile) {
+				lock.PyPI = append(lock.PyPI, recipe.LockPyPI{
+					Name: "requests", Version: "2.32.3 --hash=sha256:" + strings.Repeat("a", 64) + "\n--find-links https://evil.example/",
+					SHA256: strings.Repeat("b", 64), Filename: "requests-2.32.3-py3-none-any.whl", URL: "https://files.pythonhosted.org/requests-2.32.3-py3-none-any.whl",
+				})
+			}),
+			wantError: pool.ErrBadLock,
+			wantText:  "pip would not read as one requirement",
+		},
+		{
+			name: "a source line that trusts anything",
+			prepare: editVendoredLock(func(lock *recipe.Lockfile) {
+				lock.Sources[0] = "deb [trusted=yes] http://archive.example/ubuntu jammy main universe"
+			}),
+			wantError: pool.ErrBadLock,
+			wantText:  "not a deb line frostroot writes",
+		},
+		{
+			name: "a source line with credentials",
+			prepare: editVendoredLock(func(lock *recipe.Lockfile) {
+				lock.Sources[0] = "deb http://mirror:s3cret@archive.example/ubuntu jammy main universe"
+			}),
+			wantError: pool.ErrBadLock,
+			wantText:  "carries credentials",
+		},
+		{
+			name:      "a source line over two lines",
+			prepare:   editVendoredLock(func(lock *recipe.Lockfile) { lock.Sources[0] += "\ndeb http://evil.example/ubuntu jammy main" }),
+			wantError: pool.ErrBadLock,
+			wantText:  "not a deb line frostroot writes",
 		},
 		{
 			name: "pool incomplete",

@@ -111,6 +111,90 @@ func checkDiskToolsLock(lock recipe.Lockfile) error {
 	return nil
 }
 
+// The shapes of what an Ubuntu lock records and an offline build hands on:
+// the package names to apt's --include and the image's extended_states,
+// each wheel's name, version and digest to the requirements file pip reads,
+// line by line, as options too, and the source lines to the image's
+// sources.list. None needs more than these characters, and none may hold a
+// space, a newline or an option of apt's own.
+var (
+	lockDebVersionPattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+~:-]*$`)
+	lockDebArchPattern       = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+	lockPythonVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+!_-]*$`)
+	lockSHA256Pattern        = regexp.MustCompile(`^[0-9A-Fa-f]{64}$`)
+	// lockSourceLinePattern is a line SourceLines renders: the archive's,
+	// or an extra source's with its keyring under ImageKeyringDir.
+	// The URL may not start with "[", so that an option of any other kind
+	// is no URL either.
+	lockSourceLinePattern = regexp.MustCompile(`^deb (\[signed-by=` + regexp.QuoteMeta(ImageKeyringDir) + `/frostroot-[a-z0-9][a-z0-9-]*\.gpg\] )?([^\s\[]\S*) (\S+)((?: \S+)+)$`)
+)
+
+// checkUbuntuLockEntries checks what an Ubuntu lock says that an offline
+// build passes on without looking again: every package's name, version and
+// architecture, every wheel's name, version and digest, and every source
+// line, which becomes the image's sources.list as it is. A lock is a text
+// file anyone can edit, and Fedora's offline build checks its own the same
+// way (checkFedoraLockPackages).
+func checkUbuntuLockEntries(lock recipe.Lockfile) error {
+	for _, locked := range lock.Packages {
+		if err := recipe.CheckPackageName(locked.Name); err != nil {
+			return fmt.Errorf("%w: %w", pool.ErrBadLock, err)
+		}
+		if !lockDebVersionPattern.MatchString(locked.Version) || !lockDebArchPattern.MatchString(locked.Arch) {
+			return fmt.Errorf("%w: package %s has version %q and arch %q, which are not a .deb's", pool.ErrBadLock, locked.Name, locked.Version, locked.Arch)
+		}
+	}
+	for _, wheel := range lock.PyPI {
+		if err := recipe.CheckPythonPackageName(wheel.Name); err != nil {
+			return fmt.Errorf("%w: %w", pool.ErrBadLock, err)
+		}
+		if !lockPythonVersionPattern.MatchString(wheel.Version) || !lockSHA256Pattern.MatchString(wheel.SHA256) {
+			return fmt.Errorf("%w: python package %s has version %q and sha256 %q, which pip would not read as one requirement", pool.ErrBadLock, wheel.Name, wheel.Version, wheel.SHA256)
+		}
+	}
+	if lock.Python != nil && lock.Python.PipVersion != "" && !lockPythonVersionPattern.MatchString(lock.Python.PipVersion) {
+		return fmt.Errorf("%w: pip_version %q is not a version", pool.ErrBadLock, lock.Python.PipVersion)
+	}
+	for _, line := range lock.Sources {
+		if err := checkLockSourceLine(line); err != nil {
+			return fmt.Errorf("%w: source line %q: %w", pool.ErrBadLock, redactLineCredentials(line), err)
+		}
+	}
+	return nil
+}
+
+// redactLineCredentials is RedactURLCredentials of every word of line.
+func redactLineCredentials(line string) string {
+	words := strings.Fields(line)
+	for index, word := range words {
+		words[index] = recipe.RedactURLCredentials(word)
+	}
+	return strings.Join(words, " ")
+}
+
+// checkLockSourceLine reports why line is not a deb line SourceLines could
+// have written, or nil: an http or https URL with no credentials, a suite
+// and components, and no option but an extra source's signed-by keyring,
+// so no [trusted=yes].
+func checkLockSourceLine(line string) error {
+	parts := lockSourceLinePattern.FindStringSubmatch(line)
+	if parts == nil {
+		return errors.New("not a deb line frostroot writes")
+	}
+	if err := recipe.CheckSourceURL(parts[2]); err != nil {
+		return err
+	}
+	if err := recipe.CheckSuite(parts[3]); err != nil {
+		return err
+	}
+	for _, component := range strings.Fields(parts[4]) {
+		if err := recipe.CheckComponent(component); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // checkLockTarget refuses a lock made for the other target. A disk image's
 // lock names a kernel, a bootloader and the disk's layout, which a tarball
 // for WSL has none of, and the other way round, so nothing else in it is
@@ -170,6 +254,9 @@ func planOffline(recipeDir string, imageRecipe recipe.Recipe, release distro.Rel
 	// lines, so an empty list is an edited lock.
 	if len(lock.Sources) == 0 {
 		return nil, fmt.Errorf("%w: it records no sources, so the image's sources.list cannot be written; run frostroot build online, then frostroot vendor", pool.ErrBadLock)
+	}
+	if err := checkUbuntuLockEntries(lock); err != nil {
+		return nil, err
 	}
 	var differences []string
 	if lock.Release != imageRecipe.Image.Release || lock.Suite != release.Suite {

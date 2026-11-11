@@ -228,8 +228,10 @@ func (f *fetcher) primary(plan rpmPlan) ([]Entry, error) {
 		return nil, fmt.Errorf("%s: %w: %w", url, errChanged, err)
 	}
 	defer closeText()
+	// The open-size comes from the same unsigned repomd.xml as everything
+	// else, so it is believed only up to maxBodyBytes.
 	openLimit := plan.primary.openSize
-	if openLimit == 0 {
+	if openLimit <= 0 || openLimit > f.maxBodyBytes {
 		openLimit = f.maxBodyBytes
 	}
 	opened := &boundedReader{reader: text, limit: openLimit + 1}

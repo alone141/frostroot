@@ -449,14 +449,15 @@ func TestReducePrimary(t *testing.T) {
 			rpm("tool", "i686", `<version epoch="0" ver="2.0" rel="1.fc44"/>`, "another architecture"),
 			rpm("tool-src", "src", `<version epoch="0" ver="1" rel="1"/>`, "a source package"),
 			rpm("noversion", "noarch", ``, "no version"),
-			rpm("spaced", "noarch", `<version epoch="3" ver="1" rel="1"/>`, "tabs\tand\nnewlines &amp; entities"),
+			rpm("spaced", "noarch", `<version epoch="3" ver="1" rel="1"/>`, "tabs\tand\nnewlines &amp; entities\u009b2J\x7f"),
 			`<package type="srpm"><name>srpm</name><arch>noarch</arch><version ver="1" rel="1"/></package>`,
 		)))
 		if err != nil {
 			t.Fatal(err)
 		}
 		want := []Entry{
-			{Name: "spaced", Version: "3:1-1", Description: "tabs and newlines & entities"},
+			// The C1 CSI and DEL that XML lets through are dropped.
+			{Name: "spaced", Version: "3:1-1", Description: "tabs and newlines & entities2J"},
 			{Name: "tool", Version: "1.10-1.fc44", Description: "the newer"},
 		}
 		if !slices.Equal(entries, want) {

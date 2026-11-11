@@ -170,6 +170,32 @@ func TestStageReportsCopyProgress(t *testing.T) {
 	}
 }
 
+// TestStageReportsACopyChunkByChunk: a tarball is one run of data, and the
+// copy that keeps holes reported a run once it was copied, so the bar for a
+// copy onto a Windows drive sat at 0 until the end. It reports a chunk at a
+// time now, whether the copy keeps holes or not.
+func TestStageReportsACopyChunkByChunk(t *testing.T) {
+	size := 3*copyChunkBytes + 17
+	sourcePath := writeSourceFile(t, strings.Repeat("x", size))
+	var reports []int64
+	onProgress := func(copiedBytes, totalBytes int64) {
+		if totalBytes != int64(size) {
+			t.Errorf("total = %d, want %d", totalBytes, size)
+		}
+		reports = append(reports, copiedBytes)
+	}
+	if _, err := stage(sourcePath, filepath.Join(t.TempDir(), "dist", "out.tar.gz"), renameAcrossFilesystems, onProgress); err != nil {
+		t.Fatal(err)
+	}
+	distinct := slices.Compact(slices.Clone(reports))
+	if !slices.IsSorted(reports) || len(distinct) < 4 {
+		t.Errorf("reports = %v, want at least one a chunk, never going back", reports)
+	}
+	if len(reports) == 0 || reports[len(reports)-1] != int64(size) {
+		t.Errorf("reports = %v, want the last at %d", reports, size)
+	}
+}
+
 func TestStageAcrossFilesystemsRespectsUmaskWithoutChmod(t *testing.T) {
 	// dist/ is routinely on a drvfs mount of a Windows drive, where chmod
 	// fails with EPERM. The copy must not depend on chmod: the temporary file

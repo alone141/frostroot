@@ -64,7 +64,9 @@ func (a *App) runRecipeForm(commandName string, initial form.Values, recipePath 
 	if !fullScreen {
 		fixed = form.Fixed{Family: true, Target: true}
 	}
-	questions := form.FieldsFor(form.Fields(host), form.VariantOf(initial), fixed)
+	// A recipe, or the machine capture reads, may hold a timezone or a
+	// locale the form's lists lack; it is offered too, so that it survives.
+	questions := form.KeepCurrentChoices(form.FieldsFor(form.Fields(host), form.VariantOf(initial), fixed), initial)
 	fields := slices.Concat(intro, questions)
 	preview := recipePreview(recipePath, indexes)
 	var values form.Values

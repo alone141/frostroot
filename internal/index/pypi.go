@@ -269,9 +269,12 @@ func fetchPyPI(ctx context.Context, options Options) ([]Project, error) {
 		ceiling = total
 	}
 	bounded := &boundedReader{reader: response.Body, limit: ceiling + 1}
+	// onRead is handed one read's size; the bar wants the bytes so far.
+	var doneBytes int64
 	counted := &countingReader{reader: bounded, onRead: func(count int64) {
+		doneBytes += count
 		if options.Progress != nil {
-			options.Progress(count, total)
+			options.Progress(doneBytes, total)
 		}
 	}}
 	var body io.Reader = bufio.NewReaderSize(counted, 256<<10)
@@ -280,7 +283,11 @@ func fetchPyPI(ctx context.Context, options Options) ([]Project, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", url, err)
 		}
-		body = unzipped
+		// The ceiling above counts bytes on the wire, and a few megabytes
+		// of gzip can expand to anything. PyPI declares no uncompressed
+		// size, so what they expand to is bounded by maxExpansion times
+		// the body, and never past DefaultMaxBodyBytes.
+		body = &boundedReader{reader: unzipped, limit: expandedLimit(ceiling, DefaultMaxBodyBytes) + 1}
 	}
 	projects, err := readSimpleIndex(body)
 	if err != nil {

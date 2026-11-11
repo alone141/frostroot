@@ -108,6 +108,34 @@ func TestEditPreselectsCurrentValues(t *testing.T) {
 	}
 }
 
+// TestEditKeepsATimezoneAndLocaleTheListsLack: Etc/UTC, Ubuntu's server
+// default, is not in zone1970.tab, and sv_SE.UTF-8 is not among the
+// locales the form offers. Both are valid, and edit --plain used to refuse
+// them as unknown when Enter kept them.
+func TestEditKeepsATimezoneAndLocaleTheListsLack(t *testing.T) {
+	recipeDir := newRecipeDir(t, "valid.toml")
+	original := loadWrittenRecipe(t, recipeDir)
+	original.Locale.Timezone, original.Locale.Lang = "Etc/UTC", "sv_SE.UTF-8"
+	text, err := renderRecipe(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(recipeDir, "frostroot.toml"), []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	exitCode, _, stderr, prompt := runEditWithAnswers(recipeDir, nil)
+	if exitCode != exitSuccess {
+		t.Fatalf("exit code = %d, stderr %s", exitCode, stderr)
+	}
+	if got := prompt.defaultsOffered[answerTimezone]; got != "Etc/UTC" {
+		t.Errorf("the timezone question offered %q, want the recipe's Etc/UTC", got)
+	}
+	written := loadWrittenRecipe(t, recipeDir)
+	if written.Locale.Timezone != "Etc/UTC" || written.Locale.Lang != "sv_SE.UTF-8" {
+		t.Errorf("written locale = %+v, want Etc/UTC and sv_SE.UTF-8 kept", written.Locale)
+	}
+}
+
 func TestEditChangesOnlyWhatWasAnswered(t *testing.T) {
 	recipeDir := newRecipeDir(t, "valid.toml")
 	answers := answersWith(map[int]string{answerRelease: "24.04", answerOtherPackages: "ninja-build"})

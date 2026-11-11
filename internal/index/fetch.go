@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/ulikunitz/xz"
 
@@ -62,6 +63,29 @@ type listedFile struct {
 	path   string // below dists/<pocket>/
 	size   int64
 	sha256 string
+	// openSize is what a compressed index expands to: the size Release
+	// lists for the same index uncompressed, or 0 when it lists none.
+	openSize int64
+}
+
+// maxReleaseBytes bounds an InRelease or Release file, which nothing
+// declares a size for: Ubuntu's are well under a megabyte, and a server
+// that kept sending well-formed checksum lines would otherwise grow the
+// list of files until the form ran out of memory.
+const maxReleaseBytes = 16 << 20
+
+// maxExpansion bounds what a compressed index may expand to when nothing
+// declares its uncompressed size: this many times its compressed size.
+// Package indexes compress about five to ten times; a body that expands
+// further than this is not an index.
+const maxExpansion = 64
+
+// expandedLimit is maxExpansion times compressedBytes, at most ceiling.
+func expandedLimit(compressedBytes, ceiling int64) int64 {
+	if compressedBytes <= 0 || compressedBytes >= ceiling/maxExpansion {
+		return ceiling
+	}
+	return maxExpansion * compressedBytes
 }
 
 // pocketPlan is what to download from one pocket.
@@ -188,8 +212,11 @@ func (f *fetcher) plan(pocket string) (pocketPlan, error) {
 			}
 			continue
 		}
-		listed, err = parseRelease(body)
+		listed, err = parseRelease(&boundedReader{reader: body, limit: maxReleaseBytes + 1})
 		_ = body.Close()
+		if errors.Is(err, errTooLarge) {
+			return pocketPlan{}, fmt.Errorf("%s %s: more than %d bytes: %w", pocket, name, maxReleaseBytes, err)
+		}
 		if err != nil {
 			return pocketPlan{}, fmt.Errorf("%s %s: %w", pocket, name, err)
 		}
@@ -200,8 +227,10 @@ func (f *fetcher) plan(pocket string) (pocketPlan, error) {
 	}
 	plan := pocketPlan{pocket: pocket}
 	for _, component := range f.components {
+		uncompressed := component + "/binary-" + distro.SupportedArch + "/Packages"
 		for _, extension := range []string{".xz", ".gz", ""} {
-			if file, isListed := listed[component+"/binary-"+distro.SupportedArch+"/Packages"+extension]; isListed {
+			if file, isListed := listed[uncompressed+extension]; isListed {
+				file.openSize = listed[uncompressed].size
 				plan.files = append(plan.files, file)
 				break
 			}
@@ -271,6 +300,12 @@ func (f *fetcher) pocket(plan pocketPlan) ([]Entry, error) {
 // the end: an index whose 1.7 MB expanded to 144 MB of stanzas once took
 // 278 MB of heap before the size was ever compared, and a larger one would
 // have ended the process, not the source.
+//
+// What it expands to is bounded too, as Fedora's metadata is: by the size
+// Release lists for the uncompressed index, or maxExpansion times the
+// compressed one when it lists none, and never past maxBodyBytes, since the
+// same unsigned Release declares both. A small file that honestly matches
+// its size and digest could otherwise expand without end.
 func (f *fetcher) file(pocket, component string, file listedFile) ([]Entry, error) {
 	url := f.baseURL + "/dists/" + pocket + "/" + file.path
 	body, err := f.get(url)
@@ -293,8 +328,13 @@ func (f *fetcher) file(pocket, component string, file listedFile) ([]Entry, erro
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", url, err)
 	}
+	openLimit := file.openSize
+	if openLimit <= 0 {
+		openLimit = expandedLimit(file.size, f.maxBodyBytes)
+	}
+	opened := &boundedReader{reader: text, limit: min(openLimit, f.maxBodyBytes) + 1}
 	var entries []Entry
-	err = deb.ReadStanzas(text, func(stanza deb.Stanza) error {
+	err = deb.ReadStanzas(opened, func(stanza deb.Stanza) error {
 		if entry, isPackage := reduce(stanza, component); isPackage {
 			entries = append(entries, entry)
 		}
@@ -360,12 +400,29 @@ func reduce(stanza deb.Stanza, component string) (Entry, bool) {
 	}, true
 }
 
-// oneLine makes text safe for a tab-separated line: a tab would split the
-// line and a newline would end it. deb.ReadStanzas joins a continuation
-// line to its field with a newline, and a vendor's stanza may fold any
-// field that way, not only the description.
+// oneLine makes text safe for a tab-separated line and for a terminal: a
+// tab would split the line and a newline would end it, and deb.ReadStanzas
+// joins a continuation line to its field with a newline, as a vendor's
+// stanza may fold any field that way, not only the description.
 func oneLine(text string) string {
-	return strings.TrimSpace(strings.NewReplacer("\t", " ", "\r", " ", "\n", " ").Replace(text))
+	return strings.TrimSpace(strings.Map(lineSafeRune, text))
+}
+
+// lineSafeRune turns a tab, a carriage return or a line feed into a space
+// and drops every other control character, C0, DEL and C1 alike. An index
+// is read without verifying its signature, often over plain http, so these
+// bytes are whoever is on the path's to choose; the picker draws them, and
+// an escape sequence on a terminal is a command to it: moving the cursor,
+// retitling the window, writing the clipboard. strings.Map has already
+// turned a byte that is not UTF-8, a lone 0x9B among them, into U+FFFD.
+func lineSafeRune(character rune) rune {
+	switch {
+	case character == '\t' || character == '\r' || character == '\n':
+		return ' '
+	case unicode.IsControl(character):
+		return -1
+	}
+	return character
 }
 
 // countingReader reports every read.

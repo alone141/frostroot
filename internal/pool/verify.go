@@ -115,9 +115,10 @@ func checkFile(path string, entry Entry) (fileState, error) {
 	return filePresent, nil
 }
 
-// isPackageFile reports whether name is a package file, .deb or .whl.
+// isPackageFile reports whether name is a package file of one of the
+// pools: .deb, .rpm or .whl.
 func isPackageFile(name string) bool {
-	return strings.HasSuffix(name, ".deb") || strings.HasSuffix(name, ".whl")
+	return strings.HasSuffix(name, ".deb") || strings.HasSuffix(name, ".rpm") || strings.HasSuffix(name, ".whl")
 }
 
 // isPartialDownload reports whether name is a download of Fetch's that was

@@ -130,8 +130,26 @@ func copyInto(sourcePath string, destination *os.File, onCopyProgress CopyProgre
 // copyWhole copies size bytes of source into destination as they are,
 // reporting as it goes.
 func copyWhole(source, destination *os.File, size int64, report func(copied int64)) error {
-	_, err := io.Copy(&progressWriter{writer: destination, report: report}, io.LimitReader(source, size))
-	return err
+	return copyChunks(&progressWriter{writer: destination, report: report}, io.LimitReader(source, size), size, make([]byte, copyChunkBytes))
+}
+
+// copyChunkBytes is how much a copy moves between two progress reports: a
+// report a mebibyte keeps a bar moving on a slow drive without sending tens
+// of thousands of events a gigabyte.
+const copyChunkBytes = 1 << 20
+
+// copyChunks copies exactly size bytes from source to destination through
+// buffer, one buffer at a time. Fewer bytes than size is an error, as for
+// io.CopyN.
+func copyChunks(destination io.Writer, source io.Reader, size int64, buffer []byte) error {
+	copied, err := io.CopyBuffer(destination, source, buffer)
+	if err != nil {
+		return err
+	}
+	if copied < size {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
 }
 
 // progressWriter reports the running total of bytes written through it.

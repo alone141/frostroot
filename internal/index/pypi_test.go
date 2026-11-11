@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -114,6 +115,56 @@ func TestOpenPyPIFetchesAndCaches(t *testing.T) {
 	// The cache keeps PyPI's own spelling, which is what the picker shows.
 	if !slices.Contains(projectNames(again.projects), "Flask-SQLAlchemy") {
 		t.Errorf("the cache lost PyPI's spelling: %v", projectNames(again.projects))
+	}
+}
+
+// TestOpenPyPIReportsTheBytesSoFar is the bar that never moved: the
+// progress passed on was the size of the last read, not the bytes read so
+// far, which the test above could not see because its excerpt arrives in
+// one read. Here it arrives in many, as the real 9.7 MB index does.
+func TestOpenPyPIReportsTheBytesSoFar(t *testing.T) {
+	served := newSimpleIndex(t)
+	document, err := os.ReadFile(filepath.Join("testdata", "pypi-simple.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compressed := gzipped(t, string(document))
+	const chunkBytes = 64
+	served.answer = func(writer http.ResponseWriter) bool {
+		writer.Header().Set("Content-Encoding", "gzip")
+		writer.Header().Set("Content-Length", strconv.Itoa(len(compressed)))
+		flusher, canFlush := writer.(http.Flusher)
+		for start := 0; start < len(compressed); start += chunkBytes {
+			_, _ = writer.Write(compressed[start:min(start+chunkBytes, len(compressed))])
+			if canFlush {
+				flusher.Flush()
+			}
+			// Long enough that the client reads each chunk on its own.
+			time.Sleep(5 * time.Millisecond)
+		}
+		return true
+	}
+	options := pypiOptionsFor(t, served)
+	var reported []int64
+	var reportedTotal int64
+	options.Progress = func(done, total int64) {
+		reported = append(reported, done)
+		reportedTotal = total
+	}
+	if _, err := OpenPyPI(context.Background(), options); err != nil {
+		t.Fatal(err)
+	}
+	wireBytes := int64(len(compressed))
+	if len(reported) < 2 {
+		t.Fatalf("progress was reported %d times for %d bytes in %d-byte chunks", len(reported), wireBytes, chunkBytes)
+	}
+	for i := 1; i < len(reported); i++ {
+		if reported[i] <= reported[i-1] {
+			t.Fatalf("progress went %v: each report should be the bytes so far", reported)
+		}
+	}
+	if last := reported[len(reported)-1]; last != wireBytes || reportedTotal != wireBytes {
+		t.Errorf("progress ended at %d of %d, want %d of %d", last, reportedTotal, wireBytes, wireBytes)
 	}
 }
 
@@ -348,6 +399,22 @@ func TestOpenPyPIRefusesABodyPastTheCeiling(t *testing.T) {
 	}
 	if read.Load() > options.MaxBodyBytes+1 {
 		t.Errorf("the client read %d bytes of a body it should have stopped reading at %d", read.Load(), options.MaxBodyBytes+1)
+	}
+
+	// A small gzip body that expands without end: within its
+	// Content-Length, and a few kilobytes on the wire, but its projects
+	// would fill memory. What it expands to is bounded by maxExpansion
+	// times its size.
+	repetitive := gzipped(t, `{"meta":{"api-version":"1.0"},"projects":[`+strings.Repeat(`{"name":"filler"},`, 200_000)+`{"name":"last"}]}`)
+	served.answer = func(response http.ResponseWriter) bool {
+		response.Header().Set("Content-Type", pypiSimpleJSON)
+		response.Header().Set("Content-Encoding", "gzip")
+		response.Header().Set("Content-Length", strconv.Itoa(len(repetitive)))
+		_, _ = response.Write(repetitive)
+		return true
+	}
+	if _, err := OpenPyPI(context.Background(), options); !errors.Is(err, ErrUnavailable) || !errors.Is(err, errTooLarge) {
+		t.Fatalf("OpenPyPI of %d gzipped bytes that expand to 3.6 MB = %v, want ErrUnavailable wrapping errTooLarge", len(repetitive), err)
 	}
 
 	// The same document, whole, with a Content-Length: a body of exactly

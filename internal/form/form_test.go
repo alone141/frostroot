@@ -474,6 +474,46 @@ func TestLocales(t *testing.T) {
 	}
 }
 
+// TestKeepCurrentChoices: a recipe may name any zone tzdata has and any
+// locale glibc builds, while the form's lists are zone1970.tab's zones and
+// twenty locales. A valid value the lists lack is offered first; anything
+// else is left as it was.
+func TestKeepCurrentChoices(t *testing.T) {
+	fields := Fields(Host{})
+	optionsOf := func(fields []Field, key string) []Option {
+		t.Helper()
+		index := slices.IndexFunc(fields, func(field Field) bool { return field.Key == key })
+		if index < 0 {
+			t.Fatalf("no %s field", key)
+		}
+		return fields[index].Options
+	}
+	before := len(optionsOf(fields, KeyTimezone))
+
+	kept := KeepCurrentChoices(fields, Values{KeyTimezone: "Etc/UTC", KeyLocale: "sv_SE.UTF-8"})
+	for key, want := range map[string]string{KeyTimezone: "Etc/UTC", KeyLocale: "sv_SE.UTF-8"} {
+		if first := optionsOf(kept, key)[0]; first.Value != want || !strings.Contains(first.DisplayLabel(), "current") {
+			t.Errorf("%s: first option = %+v, want %s marked as the current one", key, first, want)
+		}
+	}
+	if len(optionsOf(fields, KeyTimezone)) != before {
+		t.Error("KeepCurrentChoices changed the fields it was given")
+	}
+
+	for name, values := range map[string]Values{
+		"already offered":   {KeyTimezone: "Europe/Istanbul", KeyLocale: "tr_TR.UTF-8"},
+		"not a valid value": {KeyTimezone: "Not A Zone", KeyLocale: "sv_SE"},
+		"no value":          {},
+	} {
+		unchanged := KeepCurrentChoices(fields, values)
+		for _, key := range []string{KeyTimezone, KeyLocale} {
+			if !reflect.DeepEqual(optionsOf(unchanged, key), optionsOf(fields, key)) {
+				t.Errorf("%s: the %s options changed", name, key)
+			}
+		}
+	}
+}
+
 func TestValuesAccessors(t *testing.T) {
 	values := Values{"text": "hi", "flag": true, "list": []string{"a"}}
 	if values.String("text") != "hi" || values.String("flag") != "" || !values.Bool("flag") || values.Bool("text") {
