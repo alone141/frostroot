@@ -35,6 +35,7 @@ Build frostroot.lock and dist/<name>-<distro>-<release>-amd64.tar.gz from frostr
 Needs Linux, network, and user namespaces or root: mmdebstrap for Ubuntu, and
 for Fedora mkosi 20.2, dnf, rpm, createrepo_c and bubblewrap, which make a
 Fedora tools tree that then makes the image. Never prompts.
+WSL 1 makes no user namespaces; under WSL, build in a WSL 2 distribution.
 mmdebstrap mounts /proc, /sys and /dev in the image as it installs, which takes
 mount and, as root, CAP_SYS_ADMIN: a container has it only when started with
 it. A host where it cannot is refused (exit 1) rather than given an incomplete
@@ -340,7 +341,7 @@ func (a *App) reportBuildFailure(err error, interrupted bool, archiveURL, keptWo
 	case errors.Is(err, builder.ErrNotLinux), errors.Is(err, builder.ErrNoMmdebstrap),
 		errors.Is(err, builder.ErrNoMount), errors.Is(err, builder.ErrNoFedoraTool), errors.Is(err, builder.ErrMkosiVersion),
 		errors.Is(err, builder.ErrFedoraOption), errors.Is(err, builder.ErrUserNamespacesRestricted),
-		errors.Is(err, builder.ErrNoDiskTool),
+		errors.Is(err, builder.ErrNoUserNamespaces), errors.Is(err, builder.ErrNoDiskTool),
 		errors.Is(err, builder.ErrNoKeyring), errors.Is(err, builder.ErrBadWorkRoot),
 		errors.Is(err, builder.ErrUnwritableOutput), errors.Is(err, builder.ErrNoLock), errors.Is(err, builder.ErrRecipeDirBusy),
 		errors.Is(err, builder.ErrLockMismatch), errors.Is(err, builder.ErrPoolIncomplete),

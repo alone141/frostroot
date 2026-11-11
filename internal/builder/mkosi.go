@@ -158,6 +158,9 @@ func (m *Mkosi) Preflight(ctx context.Context, spec FedoraSpec) error {
 	if readFile == nil {
 		readFile = os.ReadFile
 	}
+	if err := checkUserNamespaces(readFile); err != nil {
+		return err
+	}
 	// mkosi would fail inside its namespace, with a traceback.
 	if restricted, err := readFile(userNamespaceRestriction); err == nil && strings.TrimSpace(string(restricted)) == "1" {
 		return fmt.Errorf("%w: AppArmor lets only a program with a profile of its own use the user namespace it makes (kernel.apparmor_restrict_unprivileged_userns = 1), and mkosi has none; build as root with sudo frostroot build, or lift the restriction: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",

@@ -127,6 +127,9 @@ func (b *Bubblewrap) Preflight(ctx context.Context) error {
 	if readFile == nil {
 		readFile = os.ReadFile
 	}
+	if err := checkUserNamespaces(readFile); err != nil {
+		return err
+	}
 	// mmdebstrap has an AppArmor profile of its own and gets through; bwrap
 	// and unshare would not, as mkosi's preflight says for mkosi.
 	if restricted, err := readFile(userNamespaceRestriction); err == nil && strings.TrimSpace(string(restricted)) == "1" {

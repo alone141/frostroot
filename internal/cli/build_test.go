@@ -797,6 +797,7 @@ func TestBuildPreflightFailuresAreUserErrors(t *testing.T) {
 		fmt.Errorf("%w: mkosi, createrepo_c; install with: sudo apt install mkosi createrepo-c", builder.ErrNoFedoraTool),
 		fmt.Errorf("%w: this host has mkosi %q, and frostroot builds Fedora with 20.2", builder.ErrMkosiVersion, "25.3"),
 		fmt.Errorf("%w: bwrap; install with: sudo apt install bubblewrap", builder.ErrNoDiskTool),
+		fmt.Errorf("%w: this is WSL 1, which has none", builder.ErrNoUserNamespaces),
 	}
 	for _, preflightErr := range preflightErrors {
 		t.Run(preflightErr.Error(), func(t *testing.T) {

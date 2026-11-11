@@ -94,6 +94,18 @@ func recordingRunner(record *commandRecord) CommandRunner {
 // uidFunc returns a CurrentUID function that always reports uid.
 func uidFunc(uid int) func() int { return func() int { return uid } }
 
+// kernelFiles returns a ReadFile that reads files, by path, in place of the
+// host's /proc/sys, so that a preflight's result does not depend on the
+// kernel the tests run on; a path files lacks does not exist.
+func kernelFiles(files map[string]string) func(string) ([]byte, error) {
+	return func(path string) ([]byte, error) {
+		if content, ok := files[path]; ok {
+			return []byte(content + "\n"), nil
+		}
+		return nil, os.ErrNotExist
+	}
+}
+
 func TestMmdebstrapCommandLine(t *testing.T) {
 	bootstrapper := Mmdebstrap{CurrentUID: uidFunc(1000)}
 	args, environment := bootstrapper.commandLine(BootstrapSpec{
@@ -492,7 +504,7 @@ func TestMmdebstrapTrustedSpecNeedsNoKeyring(t *testing.T) {
 	// An offline build's local repository carries [trusted=yes]; frostroot
 	// verified its files against the lock, and no keyring is involved.
 	var record commandRecord
-	bootstrapper := Mmdebstrap{CurrentUID: uidFunc(1000), RunCommand: recordingRunner(&record), LookPath: func(string) (string, error) { return "/usr/bin/mmdebstrap", nil }}
+	bootstrapper := Mmdebstrap{CurrentUID: uidFunc(1000), RunCommand: recordingRunner(&record), LookPath: func(string) (string, error) { return "/usr/bin/mmdebstrap", nil }, ReadFile: kernelFiles(nil)}
 	spec := runnableSpec(t)
 	spec.Trusted = true
 	spec.KeyringPath = ""
@@ -542,10 +554,49 @@ func TestMmdebstrapPreflight(t *testing.T) {
 		name        string
 		mode        string // mmdebstrap's --mode; unshare when empty, as for uid 1000
 		lookPath    func(string) (string, error)
+		kernel      map[string]string // the files under /proc/sys it reads; nil has none
 		spec        BootstrapSpec
 		wantError   error
 		wantInError string
 	}{
+		{
+			// mmdebstrap failed at once, in its own words, with exit 2.
+			name:        "WSL 1",
+			lookPath:    mmdebstrapFound,
+			kernel:      map[string]string{kernelReleasePath: "4.4.0-17763-Microsoft"},
+			spec:        BootstrapSpec{KeyringPath: createKeyringFile(t), WorkDir: reachableWorkRoot},
+			wantError:   ErrNoUserNamespaces,
+			wantInError: "wsl --set-version DISTRIBUTION 2",
+		},
+		{
+			name:     "WSL 2",
+			lookPath: mmdebstrapFound,
+			kernel:   map[string]string{kernelReleasePath: "6.6.87.2-microsoft-standard-WSL2", maxUserNamespacesPath: "63353"},
+			spec:     BootstrapSpec{KeyringPath: createKeyringFile(t), WorkDir: reachableWorkRoot},
+		},
+		{
+			name:     "WSL 1 as root",
+			mode:     "root",
+			lookPath: mmdebstrapFound,
+			kernel:   map[string]string{kernelReleasePath: "4.4.0-17763-Microsoft"},
+			spec:     BootstrapSpec{KeyringPath: createKeyringFile(t), WorkDir: reachableWorkRoot},
+		},
+		{
+			name:        "user namespaces switched off",
+			lookPath:    mmdebstrapFound,
+			kernel:      map[string]string{kernelReleasePath: "6.8.0-48-generic", maxUserNamespacesPath: "0"},
+			spec:        BootstrapSpec{KeyringPath: createKeyringFile(t), WorkDir: reachableWorkRoot},
+			wantError:   ErrNoUserNamespaces,
+			wantInError: "sudo frostroot build",
+		},
+		{
+			name:        "Debian's switch off",
+			lookPath:    mmdebstrapFound,
+			kernel:      map[string]string{unprivilegedCloneSwitchPath: "0"},
+			spec:        BootstrapSpec{KeyringPath: createKeyringFile(t), WorkDir: reachableWorkRoot},
+			wantError:   ErrNoUserNamespaces,
+			wantInError: "kernel.unprivileged_userns_clone=1",
+		},
 		{
 			name:        "mmdebstrap missing",
 			lookPath:    mmdebstrapMissing,
@@ -589,7 +640,7 @@ func TestMmdebstrapPreflight(t *testing.T) {
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			bootstrapper := Mmdebstrap{LookPath: testCase.lookPath, CurrentUID: uidFunc(1000), Mode: testCase.mode}
+			bootstrapper := Mmdebstrap{LookPath: testCase.lookPath, ReadFile: kernelFiles(testCase.kernel), CurrentUID: uidFunc(1000), Mode: testCase.mode}
 			err := bootstrapper.Preflight(testCase.spec)
 			if testCase.wantError == nil {
 				if err != nil {
