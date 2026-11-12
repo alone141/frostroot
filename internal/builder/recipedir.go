@@ -23,18 +23,21 @@ const maxHolderBytes = 256
 // RecipeDirHold keeps every other build and vendor of this user out of one
 // recipe directory until it is released.
 type RecipeDirHold struct {
-	file *os.File
+	files []*os.File // locked, in the order holdFileNames gives
 }
 
 // Release lets the next build or vendor in. A nil hold, or one of a system
 // that does not lock, releases nothing.
 func (h *RecipeDirHold) Release() {
-	if h == nil || h.file == nil {
+	if h == nil {
 		return
 	}
-	// Closing drops the lock. The file only names its holder, and a close
-	// that lost that line loses nothing anyone needs.
-	_ = h.file.Close()
+	for _, file := range h.files {
+		// Closing drops the lock. The file only names its holder, and a
+		// close that lost that line loses nothing anyone needs.
+		_ = file.Close()
+	}
+	h.files = nil
 }
 
 // HoldRecipeDir takes the hold that a build keeps from before it first
@@ -96,25 +99,54 @@ func holdRecipeDir(holdRoot, recipeDir, command string) (*RecipeDirHold, error) 
 		return nil, fmt.Errorf("%w: %w", ErrBadWorkRoot, err)
 	}
 	resolvedDir := resolveRecipeDir(recipeDir)
-	digest := sha256.Sum256([]byte(resolvedDir))
-	holdPath := filepath.Join(holdDir, hex.EncodeToString(digest[:12])+".lock")
-	file, held, err := lockExclusive(holdPath)
-	if err != nil {
-		return nil, fmt.Errorf("%w: locking %s: %w", ErrBadWorkRoot, holdPath, err)
-	}
-	if !held {
-		holder := readHolder(holdPath)
-		if holder != "" {
-			holder = " (" + holder + ")"
+	hold := &RecipeDirHold{}
+	for _, holdName := range holdFileNames(resolvedDir) {
+		holdPath := filepath.Join(holdDir, holdName)
+		file, held, err := lockExclusive(holdPath)
+		if err != nil {
+			hold.Release()
+			return nil, fmt.Errorf("%w: locking %s: %w", ErrBadWorkRoot, holdPath, err)
 		}
-		return nil, fmt.Errorf("%w%s: %s; let it finish, then run this again", ErrRecipeDirBusy, holder, resolvedDir)
+		if !held {
+			hold.Release()
+			holder := readHolder(holdPath)
+			if holder != "" {
+				holder = " (" + holder + ")"
+			}
+			return nil, fmt.Errorf("%w%s: %s; let it finish, then run this again", ErrRecipeDirBusy, holder, resolvedDir)
+		}
+		hold.files = append(hold.files, file)
+		// Who holds it, for the message the next one gets. Best effort: the
+		// lock is what keeps others out, not this line.
+		if err := file.Truncate(0); err == nil {
+			_, _ = file.WriteAt([]byte(fmt.Sprintf("frostroot %s, process %d", command, os.Getpid())), 0)
+		}
 	}
-	// Who holds it, for the message the next one gets. Best effort: the
-	// lock is what keeps others out, not this line.
-	if err := file.Truncate(0); err == nil {
-		_, _ = file.WriteAt([]byte(fmt.Sprintf("frostroot %s, process %d", command, os.Getpid())), 0)
+	return hold, nil
+}
+
+// holdFileNames returns the names of the files that hold resolvedDir, in
+// the order they are locked, which every run keeps so that two cannot each
+// hold one and refuse the other. The first is named for the path, the second
+// for the directory's device and inode numbers, when it can be stat'ed. The
+// path alone names one directory twice on a case-insensitive Windows drive,
+// where /mnt/c/Proj and /mnt/c/proj are one; the numbers alone are not
+// enough either, since a few filesystems make them up on each lookup.
+// Holding both keeps out a second run that agrees with the first on either.
+func holdFileNames(resolvedDir string) []string {
+	names := []string{holdFileName(resolvedDir)}
+	if identity, known := directoryIdentity(resolvedDir); known {
+		names = append(names, holdFileName(identity))
 	}
-	return &RecipeDirHold{file: file}, nil
+	return names
+}
+
+// holdFileName names the hold file of key: a resolved path, which starts
+// with a slash, or a directory identity, which does not, so the two never
+// share a file.
+func holdFileName(key string) string {
+	digest := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(digest[:12]) + ".lock"
 }
 
 // removeLeftovers removes what a build in recipeDir that was killed left

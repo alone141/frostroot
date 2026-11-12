@@ -101,6 +101,83 @@ func TestHoldRecipeDirSharesTheHoldAcrossPathsToOneDirectory(t *testing.T) {
 	again.Release()
 }
 
+// On a case-insensitive Windows drive two paths that differ in case are one
+// directory, and only the lock named for its device and inode numbers is
+// shared. A run that finds it busy lets go of the one named for its path.
+func TestHoldRecipeDirRefusesWhenTheDirectoryIsHeldByAnotherPath(t *testing.T) {
+	if !recipeDirLocking {
+		t.Skip("recipe directories are held on Linux only")
+	}
+	holdRoot := t.TempDir()
+	recipeDir := t.TempDir()
+	holdNames := holdFileNames(resolveRecipeDir(recipeDir))
+	if len(holdNames) != 2 {
+		t.Fatalf("holdFileNames(%s) = %q, want a path's and a device and inode's", recipeDir, holdNames)
+	}
+	holdDir := filepath.Join(holdRoot, "holds")
+	if err := os.Mkdir(holdDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	identityPath := filepath.Join(holdDir, holdNames[1])
+	other, held, err := lockExclusive(identityPath)
+	if err != nil || !held {
+		t.Fatalf("locking %s by hand: held %v, %v", identityPath, held, err)
+	}
+	if _, err := other.WriteString("frostroot build, process 1"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = holdRecipeDir(holdRoot, recipeDir, "vendor")
+	if !errors.Is(err, ErrRecipeDirBusy) || !strings.Contains(err.Error(), "frostroot build, process 1") {
+		t.Errorf("holdRecipeDir while the device and inode lock is held = %v, want ErrRecipeDirBusy naming its holder", err)
+	}
+	pathPath := filepath.Join(holdDir, holdNames[0])
+	pathFile, held, err := lockExclusive(pathPath)
+	if err != nil || !held {
+		t.Errorf("the refused hold kept the path's lock: held %v, %v", held, err)
+	} else {
+		_ = pathFile.Close() // a lock only
+	}
+
+	_ = other.Close() // a lock only
+	hold, err := holdRecipeDir(holdRoot, recipeDir, "vendor")
+	if err != nil {
+		t.Fatalf("holdRecipeDir once the hand lock is closed: %v", err)
+	}
+	hold.Release()
+}
+
+func TestRecipeDirHoldReleaseFreesEveryFile(t *testing.T) {
+	if !recipeDirLocking {
+		t.Skip("recipe directories are held on Linux only")
+	}
+	holdRoot := t.TempDir()
+	recipeDir := t.TempDir()
+	hold, err := holdRecipeDir(holdRoot, recipeDir, "build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	holdNames := holdFileNames(resolveRecipeDir(recipeDir))
+	for _, holdName := range holdNames {
+		holdPath := filepath.Join(holdRoot, "holds", holdName)
+		if holder := readHolder(holdPath); !strings.Contains(holder, "frostroot build") {
+			t.Errorf("hold file %s names %q, want the build", holdName, holder)
+		}
+		if _, held, err := lockExclusive(holdPath); err != nil || held {
+			t.Errorf("hold file %s could be locked while held: held %v, %v", holdName, held, err)
+		}
+	}
+	hold.Release()
+	for _, holdName := range holdNames {
+		file, held, err := lockExclusive(filepath.Join(holdRoot, "holds", holdName))
+		if err != nil || !held {
+			t.Errorf("hold file %s after Release: held %v, %v", holdName, held, err)
+			continue
+		}
+		_ = file.Close() // a lock only
+	}
+}
+
 // Two runs of one user started from different environments, a snap's
 // terminal and a plain one, name different work roots and must still hold
 // one file: otherwise each removes the other's staged tarball as a leftover.
