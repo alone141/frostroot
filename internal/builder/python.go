@@ -678,13 +678,18 @@ func ParsePinReport(reader io.Reader) (recipe.LockPyPI, error) {
 // withResolvedPin replaces the pip recorded from the compile-time constant
 // with the one an index actually served. The constant's checksum still
 // decided which file was accepted, so only where it came from differs.
+// A pip that is another file is one the recipe resolved itself: it is the
+// truth about the image, so it stays, and the pin is not added beside it.
 func withResolvedPin(wheels []recipe.LockPyPI, pin recipe.LockPyPI) []recipe.LockPyPI {
 	replaced := slices.Clone(wheels)
 	for index, wheel := range replaced {
-		if recipe.NormalizePythonName(wheel.Name) == "pip" {
-			replaced[index] = pin
-			return replaced
+		if recipe.NormalizePythonName(wheel.Name) != "pip" {
+			continue
 		}
+		if wheel.Version == PinnedPip.Version && wheel.SHA256 == PinnedPip.SHA256 {
+			replaced[index] = pin
+		}
+		return replaced
 	}
 	return append(replaced, pin)
 }

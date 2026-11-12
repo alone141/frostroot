@@ -719,6 +719,50 @@ func TestPinnedPipIsRecordedFromTheIndexThatServedIt(t *testing.T) {
 	}
 }
 
+// A recipe that asks for pip gets the pip its index resolved, and that entry
+// is the truth about the image: the pin's URL must not overwrite it.
+func TestWithResolvedPinKeepsAPipTheRecipeResolved(t *testing.T) {
+	pin := PinnedPip
+	pin.URL = "https://nexus.example.com/repository/pypi/pip.whl"
+	own := recipe.LockPyPI{Name: "pip", Version: "99.0", SHA256: "bb", URL: "https://x/pip-99.0.whl"}
+	wheels := []recipe.LockPyPI{own, {Name: "requests", Version: "2.32.3"}}
+
+	got := withResolvedPin(wheels, pin)
+	if !slices.Equal(got, wheels) {
+		t.Errorf("wheels = %+v, want them unchanged: %+v", got, wheels)
+	}
+	pipEntries := 0
+	for _, wheel := range got {
+		if wheel.Name == "pip" {
+			pipEntries++
+		}
+	}
+	if pipEntries != 1 {
+		t.Errorf("%d pip entries, want exactly one", pipEntries)
+	}
+}
+
+func TestWithResolvedPinReplacesTheConstantsPipWithTheIndexsURL(t *testing.T) {
+	pin := PinnedPip
+	pin.URL = "https://nexus.example.com/repository/pypi/pip.whl"
+
+	got := withResolvedPin([]recipe.LockPyPI{PinnedPip}, pin)
+	if len(got) != 1 || got[0].URL != pin.URL {
+		t.Errorf("wheels = %+v, want the one pip with the pin's url", got)
+	}
+}
+
+func TestWithResolvedPinAppendsThePinWhenThereIsNoPip(t *testing.T) {
+	pin := PinnedPip
+	pin.URL = "https://nexus.example.com/repository/pypi/pip.whl"
+	wheels := []recipe.LockPyPI{{Name: "requests", Version: "2.32.3"}}
+
+	got := withResolvedPin(wheels, pin)
+	if len(got) != 2 || got[1] != pin {
+		t.Errorf("wheels = %+v, want the pin appended", got)
+	}
+}
+
 func TestParsePinReportRefusesAReportWithoutPip(t *testing.T) {
 	noPip := `{"version":"1","pip_version":"24.3.1","install":[{"metadata":{"name":"requests","version":"2.32.3"},
 "download_info":{"url":"https://x/requests.whl","archive_info":{"hashes":{"sha256":"aa"}}}}]}`
