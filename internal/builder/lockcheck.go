@@ -203,6 +203,110 @@ func checkLockSourceLine(line string) error {
 	return nil
 }
 
+// archivePocketSuffixes are the archive's pockets every build enables, as
+// suffixes of the release's suite.
+var archivePocketSuffixes = []string{"", "-updates", "-security"}
+
+// checkLockSourceLines refuses an Ubuntu lock whose source lines are not the
+// ones a build of that lock writes. They become the image's sources.list as
+// they are, and repositoryDifferences compares the recipe with the lock's
+// repositories, never with these lines, so an edited lock could otherwise
+// ship a pocket no build enables, an archive on another host, an image
+// without -security, or a keyring trusted for a URL no repository names.
+// A repository named twice is refused too: no recipe can name a source
+// twice, and repositoryDifferences compares only the first of a name, so a
+// second one could carry the URL of a signed line unseen.
+// The lines must already have passed checkLockSourceLine. An archive line
+// may have any of the release's components, not all of them: a lock written
+// before v0.10 has main and universe only, and still rebuilds.
+func checkLockSourceLines(lock recipe.Lockfile, release distro.Release) error {
+	archiveURL := release.ArchiveURL
+	if lock.Mirror != "" {
+		archiveURL = lock.Mirror
+	}
+	archiveURL = strings.TrimRight(archiveURL, "/")
+	repositoryByKeyring := map[string]recipe.LockRepository{}
+	for _, repository := range lock.Repositories {
+		if _, named := repositoryByKeyring[KeyringFileName(repository.Name)]; named {
+			return fmt.Errorf("%w: it names repository %s twice", pool.ErrBadLock, repository.Name)
+		}
+		repositoryByKeyring[KeyringFileName(repository.Name)] = repository
+	}
+	seenPockets, seenRepositories := map[string]bool{}, map[string]bool{}
+	for _, line := range lock.Sources {
+		parts := lockSourceLinePattern.FindStringSubmatch(line)
+		if parts == nil {
+			return fmt.Errorf("%w: source line %q: not a deb line frostroot writes", pool.ErrBadLock, redactLineCredentials(line))
+		}
+		signedBy, lineURL, suite, components := parts[1], strings.TrimRight(parts[2], "/"), parts[3], strings.Fields(parts[4])
+		var err error
+		if signedBy == "" {
+			err = checkArchiveSourceLine(lineURL, suite, components, archiveURL, release, seenPockets)
+		} else {
+			keyring := strings.TrimSuffix(strings.TrimPrefix(signedBy, "[signed-by="+ImageKeyringDir+"/"), "] ")
+			err = checkRepositorySourceLine(lineURL, suite, components, keyring, repositoryByKeyring, seenRepositories)
+		}
+		if err != nil {
+			return fmt.Errorf("%w: source line %q: %w", pool.ErrBadLock, redactLineCredentials(line), err)
+		}
+	}
+	for _, suffix := range archivePocketSuffixes {
+		if !seenPockets[release.Suite+suffix] {
+			return fmt.Errorf("%w: it records no source line for the archive's %s pocket", pool.ErrBadLock, release.Suite+suffix)
+		}
+	}
+	for _, repository := range lock.Repositories {
+		if !seenRepositories[repository.Name] {
+			return fmt.Errorf("%w: it records no source line for repository %s", pool.ErrBadLock, repository.Name)
+		}
+	}
+	return nil
+}
+
+// checkArchiveSourceLine reports why an unsigned source line is not one of
+// the archive's three a build of the lock writes, or nil, and marks its
+// pocket seen.
+func checkArchiveSourceLine(lineURL, suite string, components []string, archiveURL string, release distro.Release, seenPockets map[string]bool) error {
+	if lineURL != archiveURL {
+		return fmt.Errorf("the archive is %s in the lock, not %s", recipe.RedactURLCredentials(archiveURL), recipe.RedactURLCredentials(lineURL))
+	}
+	if !slices.ContainsFunc(archivePocketSuffixes, func(suffix string) bool { return suite == release.Suite+suffix }) {
+		return fmt.Errorf("suite %s is none of the archive's pockets %s, %s-updates and %s-security", suite, release.Suite, release.Suite, release.Suite)
+	}
+	if seenPockets[suite] {
+		return fmt.Errorf("the %s pocket has a line already", suite)
+	}
+	seenPockets[suite] = true
+	// lockSourceLinePattern requires at least one component.
+	for index, component := range components {
+		if !slices.Contains(release.Components, component) {
+			return fmt.Errorf("component %s is none of the release's %s", component, strings.Join(release.Components, ", "))
+		}
+		if slices.Contains(components[:index], component) {
+			return fmt.Errorf("component %s appears twice", component)
+		}
+	}
+	return nil
+}
+
+// checkRepositorySourceLine reports why a line signed by keyring is not the
+// line SourceLines writes for the lock repository that keyring belongs to,
+// or nil, and marks that repository seen.
+func checkRepositorySourceLine(lineURL, suite string, components []string, keyring string, repositoryByKeyring map[string]recipe.LockRepository, seenRepositories map[string]bool) error {
+	repository, found := repositoryByKeyring[keyring]
+	if !found {
+		return fmt.Errorf("its keyring %s belongs to no repository of the lock", keyring)
+	}
+	if seenRepositories[repository.Name] {
+		return fmt.Errorf("repository %s has a line already", repository.Name)
+	}
+	seenRepositories[repository.Name] = true
+	if lineURL != strings.TrimRight(repository.URL, "/") || suite != repository.Suite || !slices.Equal(components, repository.Components) {
+		return fmt.Errorf("its URL, suite or components are not those of repository %s", repository.Name)
+	}
+	return nil
+}
+
 // checkLockTarget refuses a lock made for the other target. A disk image's
 // lock names a kernel, a bootloader and the disk's layout, which a tarball
 // for WSL has none of, and the other way round, so nothing else in it is
@@ -344,6 +448,9 @@ func planOffline(recipeDir string, imageRecipe recipe.Recipe, release distro.Rel
 	}
 	if len(differences) > 0 {
 		return nil, fmt.Errorf("%w: %s; run frostroot build online, then frostroot vendor", ErrLockMismatch, strings.Join(differences, "; "))
+	}
+	if err := checkLockSourceLines(lock, release); err != nil {
+		return nil, err
 	}
 	wheelEntries, err := pool.WheelManifest(lock)
 	if err != nil {

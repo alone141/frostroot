@@ -343,7 +343,7 @@ own server, which `--mirror`, an Ubuntu archive, does not replace.
 | Exit code | Meaning |
 |---|---|
 | 0 | success |
-| 1 | something you can fix: invalid or missing recipe, not Linux, mmdebstrap or ubuntu-keyring missing, a host without `mount` or one that cannot mount in the build, for Fedora mkosi or a program it runs missing, an mkosi frostroot does not know, or user namespaces restricted, or a package in its package cache twice with different contents (the work directory is kept), a kernel without user namespaces (WSL 1) when building as yourself, for a disk image bubblewrap or uidmap missing or a `disk.size` too small for the image (the work directory is kept), unusable work directory, a `dist/` you cannot write to, a source key or certificate file that cannot be read, an unusable `SOURCE_DATE_EPOCH`, another `build` or `vendor` of yours running in the same directory; for `vendor` and `--offline`, no lock, a lock that cannot be read or holds what no build writes, a lock without checksums, a recipe that changed since the lock, an incomplete `vendor/debs/` or `vendor/rpms/`, or a file in it that cannot be read; for `vendor`, a pool it cannot create, write or prune; for `init`, `edit` and `capture`, declining to write the recipe |
+| 1 | something you can fix: invalid or missing recipe, not Linux, mmdebstrap or ubuntu-keyring missing, a host without `mount` or one that cannot mount in the build, for Fedora mkosi or a program it runs missing, an mkosi frostroot does not know, or user namespaces restricted, or a package in its package cache twice with different contents (the work directory is kept), a kernel without user namespaces (WSL 1) when building as yourself, for a disk image bubblewrap or uidmap missing or a `disk.size` too small for the image (the work directory is kept), unusable work directory, a `dist/` you cannot write to or a directory where the lock or the image goes, a source key or certificate file that cannot be read, an unusable `SOURCE_DATE_EPOCH`, another `build` or `vendor` of yours running in the same directory; for `vendor` and `--offline`, no lock, a lock that cannot be read or holds what no build writes, a lock without checksums, a recipe that changed since the lock, an incomplete `vendor/debs/` or `vendor/rpms/`, or a file in it that cannot be read; for `vendor`, a pool it cannot create, write or prune; for `init`, `edit` and `capture`, declining to write the recipe |
 | 2 | the build failed: mmdebstrap or mkosi failed (unknown package, mirror unreachable), provisioning failed, the tarball could not be placed, an offline build's packages differ from the lock; for `vendor`, a download failed or a file did not match its checksum |
 | 130 | interrupted with Ctrl-C, at any step up to placing the image, or Ctrl-C or Esc in the form; nothing is written and the work directory is kept; `vendor` keeps finished downloads; `capture --plain` interrupted while it fetches signing keys keeps the recipe it wrote and its report, and names the keys still missing. A build killed outright may leave a hidden `.tmp` file in the recipe directory or `dist/`; the next build there removes it |
 
@@ -1154,9 +1154,13 @@ of the way of unprivileged builds.
 **One build per recipe directory at a time.** A `build` or `vendor` holds
 its recipe directory until it is done, and a second one started there
 meanwhile stops at once with exit 1, naming the one that is running. The
-hold is a lock file under your work directory, so it keeps out your own
-runs only: a build of another user, or one under `sudo`, is not seen, and
-two of those in one directory can still leave a lock and a tarball of
+hold is a lock file under `/var/tmp/frostroot-<uid>/holds`, whatever
+`XDG_CACHE_HOME` says, so that two of your runs started from different
+environments still see each other; only where that directory cannot be
+used is it under your work directory instead, and then two runs with
+different `XDG_CACHE_HOME` are not kept apart. It keeps out your own runs
+only: a build of another user, or one under `sudo`, is not seen, and two
+of those in one directory can still leave a lock and a tarball of
 different builds.
 
 **20.04 images ship known, unfixed CVEs.** Focal's standard support ended in

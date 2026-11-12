@@ -88,14 +88,14 @@ func newUbuntuBuild(bootstrapper Bootstrapper, imageRecipe recipe.Recipe, option
 }
 
 func (u *ubuntuBuild) preflight(_ context.Context, workRoot string, instant frozenInstant, disk *diskLayout) error {
-	// Apt splits a "deb" line on whitespace and reads options out of
-	// brackets, and every build hands it a path under the work root: the
-	// signed-by path of an extra source, and the copy:// URL of the
-	// vendored pool an offline build installs from. Neither can be quoted,
-	// so a work root holding one of these characters is refused before
-	// anything is built, whatever the recipe asks for.
-	if strings.ContainsAny(workRoot, " \t[]") {
-		return fmt.Errorf("%w: %s contains a space or a bracket, which an apt source line cannot carry; set XDG_CACHE_HOME to another directory", ErrBadWorkRoot, workRoot)
+	// Apt splits a "deb" line on whitespace, reads options out of
+	// brackets and cuts the line at a "#", and every build hands it a path
+	// under the work root: the signed-by path of an extra source, and the
+	// copy:// URL of the vendored pool an offline build installs from.
+	// Neither can be quoted, so a work root holding one of these characters
+	// is refused before anything is built, whatever the recipe asks for.
+	if strings.ContainsAny(workRoot, " \t[]#") {
+		return fmt.Errorf("%w: %s contains a space, a bracket or a #, which an apt source line cannot carry; set XDG_CACHE_HOME to another directory", ErrBadWorkRoot, workRoot)
 	}
 	u.instant, u.disk = instant, disk
 	// The lines the image keeps: keys under /etc/apt/keyrings. The lines

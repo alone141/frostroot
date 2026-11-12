@@ -23,73 +23,130 @@ const maxHolderBytes = 256
 // RecipeDirHold keeps every other build and vendor of this user out of one
 // recipe directory until it is released.
 type RecipeDirHold struct {
-	file *os.File
+	files []*os.File // locked, in the order holdFileNames gives
 }
 
 // Release lets the next build or vendor in. A nil hold, or one of a system
 // that does not lock, releases nothing.
 func (h *RecipeDirHold) Release() {
-	if h == nil || h.file == nil {
+	if h == nil {
 		return
 	}
-	// Closing drops the lock. The file only names its holder, and a close
-	// that lost that line loses nothing anyone needs.
-	_ = h.file.Close()
+	for _, file := range h.files {
+		// Closing drops the lock. The file only names its holder, and a
+		// close that lost that line loses nothing anyone needs.
+		_ = file.Close()
+	}
+	h.files = nil
 }
 
-// HoldRecipeDir takes the hold that vendor keeps for its whole run, as a
-// build does, before it first reads the lock. The hold is an advisory lock
-// on a file under the work root, named for the resolved recipe directory:
-// the work root is on the Linux filesystem even when the recipe sits on a
+// HoldRecipeDir takes the hold that a build keeps from before it first
+// places anything, and vendor for its whole run. The hold is an advisory
+// lock on a file under holdRoot, named for the resolved recipe directory:
+// holdRoot is on the Linux filesystem even when the recipe sits on a
 // Windows drive, where locking is doubtful, and the lock goes with the
-// process however it ends. Another user's run, or one under sudo, has a
-// work root of its own and is not kept out. command names the run in the
-// message the next one gets. Where frostroot does not build, nothing is
-// held.
-func HoldRecipeDir(getenv func(string) string, recipeDir, command string) (*RecipeDirHold, error) {
+// process however it ends. holdRoot is DefaultWorkRoot when "", whatever
+// XDG_CACHE_HOME says, so that every run of this user holds one file
+// whichever environment it was started from; tests name their own.
+// Another user's run, or one under sudo, has a directory of its own and is
+// not kept out. command names the run in the message the next one gets.
+// Where frostroot does not build, nothing is held.
+func HoldRecipeDir(getenv func(string) string, holdRoot, recipeDir, command string) (*RecipeDirHold, error) {
 	if !recipeDirLocking {
 		return &RecipeDirHold{}, nil
 	}
 	uid := os.Getuid()
-	workRoot, err := WorkRoot(getenv, uid)
+	if holdRoot == "" {
+		holdRoot = DefaultWorkRoot(uid)
+	}
+	holdRoot, err := prepareHoldRoot(getenv, holdRoot, uid)
 	if err != nil {
 		return nil, err
 	}
-	if err := prepareWorkRoot(workRoot, uid); err != nil {
-		return nil, err
-	}
-	return holdRecipeDir(workRoot, recipeDir, command)
+	return holdRecipeDir(holdRoot, recipeDir, command)
 }
 
-// holdRecipeDir takes the hold under a work root already prepared.
-func holdRecipeDir(workRoot, recipeDir, command string) (*RecipeDirHold, error) {
+// prepareHoldRoot prepares holdRoot as a work root is prepared and returns
+// it. Only when that fails, on a read-only /var/tmp or under a directory
+// someone else planted there, is the work root XDG_CACHE_HOME names used
+// instead: such a host could not build without XDG_CACHE_HOME either, and
+// it keeps working, but two runs of it with different XDG_CACHE_HOME are
+// then not kept apart. When the work root is holdRoot, or cannot be used
+// either, the error is holdRoot's, which a work root under /mnt would only
+// hide.
+func prepareHoldRoot(getenv func(string) string, holdRoot string, uid int) (string, error) {
+	holdRootErr := prepareWorkRoot(holdRoot, uid)
+	if holdRootErr == nil {
+		return holdRoot, nil
+	}
+	workRoot, err := WorkRoot(getenv, uid)
+	if err != nil || workRoot == holdRoot {
+		return "", holdRootErr
+	}
+	if err := prepareWorkRoot(workRoot, uid); err != nil {
+		return "", errors.Join(holdRootErr, err)
+	}
+	return workRoot, nil
+}
+
+// holdRecipeDir takes the hold under a hold root already prepared.
+func holdRecipeDir(holdRoot, recipeDir, command string) (*RecipeDirHold, error) {
 	if !recipeDirLocking {
 		return &RecipeDirHold{}, nil
 	}
-	holdDir := filepath.Join(workRoot, "holds")
+	holdDir := filepath.Join(holdRoot, "holds")
 	if err := os.Mkdir(holdDir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
 		return nil, fmt.Errorf("%w: %w", ErrBadWorkRoot, err)
 	}
 	resolvedDir := resolveRecipeDir(recipeDir)
-	digest := sha256.Sum256([]byte(resolvedDir))
-	holdPath := filepath.Join(holdDir, hex.EncodeToString(digest[:12])+".lock")
-	file, held, err := lockExclusive(holdPath)
-	if err != nil {
-		return nil, fmt.Errorf("%w: locking %s: %w", ErrBadWorkRoot, holdPath, err)
-	}
-	if !held {
-		holder := readHolder(holdPath)
-		if holder != "" {
-			holder = " (" + holder + ")"
+	hold := &RecipeDirHold{}
+	for _, holdName := range holdFileNames(resolvedDir) {
+		holdPath := filepath.Join(holdDir, holdName)
+		file, held, err := lockExclusive(holdPath)
+		if err != nil {
+			hold.Release()
+			return nil, fmt.Errorf("%w: locking %s: %w", ErrBadWorkRoot, holdPath, err)
 		}
-		return nil, fmt.Errorf("%w%s: %s; let it finish, then run this again", ErrRecipeDirBusy, holder, resolvedDir)
+		if !held {
+			hold.Release()
+			holder := readHolder(holdPath)
+			if holder != "" {
+				holder = " (" + holder + ")"
+			}
+			return nil, fmt.Errorf("%w%s: %s; let it finish, then run this again", ErrRecipeDirBusy, holder, resolvedDir)
+		}
+		hold.files = append(hold.files, file)
+		// Who holds it, for the message the next one gets. Best effort: the
+		// lock is what keeps others out, not this line.
+		if err := file.Truncate(0); err == nil {
+			_, _ = file.WriteAt([]byte(fmt.Sprintf("frostroot %s, process %d", command, os.Getpid())), 0)
+		}
 	}
-	// Who holds it, for the message the next one gets. Best effort: the
-	// lock is what keeps others out, not this line.
-	if err := file.Truncate(0); err == nil {
-		_, _ = file.WriteAt([]byte(fmt.Sprintf("frostroot %s, process %d", command, os.Getpid())), 0)
+	return hold, nil
+}
+
+// holdFileNames returns the names of the files that hold resolvedDir, in
+// the order they are locked, which every run keeps so that two cannot each
+// hold one and refuse the other. The first is named for the path, the second
+// for the directory's device and inode numbers, when it can be stat'ed. The
+// path alone names one directory twice on a case-insensitive Windows drive,
+// where /mnt/c/Proj and /mnt/c/proj are one; the numbers alone are not
+// enough either, since a few filesystems make them up on each lookup.
+// Holding both keeps out a second run that agrees with the first on either.
+func holdFileNames(resolvedDir string) []string {
+	names := []string{holdFileName(resolvedDir)}
+	if identity, known := directoryIdentity(resolvedDir); known {
+		names = append(names, holdFileName(identity))
 	}
-	return &RecipeDirHold{file: file}, nil
+	return names
+}
+
+// holdFileName names the hold file of key: a resolved path, which starts
+// with a slash, or a directory identity, which does not, so the two never
+// share a file.
+func holdFileName(key string) string {
+	digest := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(digest[:12]) + ".lock"
 }
 
 // removeLeftovers removes what a build in recipeDir that was killed left

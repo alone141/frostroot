@@ -4,6 +4,7 @@ package builder
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"syscall"
 )
@@ -38,4 +39,19 @@ func lockExclusive(path string) (file *os.File, held bool, err error) {
 		return nil, false, lockErr
 	}
 	return file, true, nil
+}
+
+// directoryIdentity returns the device and inode numbers of the directory
+// at path, which no two directories share at one time, and false when it
+// cannot be stat'ed.
+func directoryIdentity(path string) (string, bool) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", false
+	}
+	status, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "", false
+	}
+	return fmt.Sprintf("device %d inode %d", status.Dev, status.Ino), true
 }

@@ -137,8 +137,8 @@ func (f *fakeToolRunner) Run(_ context.Context, run builder.ToolRun) error {
 func (f *fakeToolRunner) RemoveTree(_ context.Context, dir string) error { return os.RemoveAll(dir) }
 
 // newBuildApp returns an App that builds the recipe in recipeDir with
-// bootstrapper, on Linux, outside WSL, with its work root in a temporary
-// directory.
+// bootstrapper, on Linux, outside WSL, with its work root and its hold root
+// in temporary directories.
 func newBuildApp(t *testing.T, recipeDir string, bootstrapper builder.Bootstrapper, stdout, stderr *bytes.Buffer) *App {
 	t.Helper()
 	cacheDir := t.TempDir()
@@ -153,8 +153,9 @@ func newBuildApp(t *testing.T, recipeDir string, bootstrapper builder.Bootstrapp
 			}
 			return ""
 		},
-		WSLPath: func(string) (string, error) { return "", errors.New("not running under WSL") },
-		Builder: &builder.Builder{Bootstrapper: bootstrapper, Tools: &fakeToolRunner{}},
+		WSLPath:  func(string) (string, error) { return "", errors.New("not running under WSL") },
+		Builder:  &builder.Builder{Bootstrapper: bootstrapper, Tools: &fakeToolRunner{}},
+		holdRoot: t.TempDir(),
 	}
 }
 

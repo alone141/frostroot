@@ -26,7 +26,8 @@ import (
 // vendorFixture is a lock with two packages and a server holding their files.
 type vendorFixture struct {
 	recipeDir string
-	cacheHome string // XDG_CACHE_HOME, where vendor's hold on the recipe directory is
+	cacheHome string // XDG_CACHE_HOME
+	holdRoot  string // where vendor holds the recipe directory, out of /var/tmp
 	lock      recipe.Lockfile
 	server    *httptest.Server
 	files     map[string][]byte // URL path to content; read only once the server runs
@@ -38,7 +39,7 @@ type vendorFixture struct {
 // names; a nil entry in files answers 404.
 func newVendorFixture(t *testing.T) *vendorFixture {
 	t.Helper()
-	fixture := &vendorFixture{recipeDir: t.TempDir(), cacheHome: t.TempDir(), files: map[string][]byte{}}
+	fixture := &vendorFixture{recipeDir: t.TempDir(), cacheHome: t.TempDir(), holdRoot: t.TempDir(), files: map[string][]byte{}}
 	fixture.lock = recipe.Lockfile{Version: 1, Distro: "ubuntu", Release: "24.04", Suite: "noble", Arch: "amd64", FrostrootVersion: "0.4.0", Requested: []string{"curl"}}
 	for _, name := range []string{"curl", "libc6"} {
 		content := []byte("deb " + name + strings.Repeat(".", 50))
@@ -218,6 +219,7 @@ func newVendorApp(fixture *vendorFixture, stdout, stderr *bytes.Buffer) *App {
 		Getenv:         environmentWith(map[string]string{"XDG_CACHE_HOME": fixture.cacheHome}),
 		VendorFallback: func(pool.Entry) string { return "" },
 		VendorClient:   fixture.server.Client(),
+		holdRoot:       fixture.holdRoot,
 	}
 }
 
@@ -429,7 +431,7 @@ func TestVendorRefusesWhileABuildHoldsTheRecipeDir(t *testing.T) {
 		t.Skip("recipe directories are held on Linux only")
 	}
 	fixture := newVendorFixture(t)
-	hold, err := builder.HoldRecipeDir(environmentWith(map[string]string{"XDG_CACHE_HOME": fixture.cacheHome}), fixture.recipeDir, "build")
+	hold, err := builder.HoldRecipeDir(environmentWith(map[string]string{"XDG_CACHE_HOME": fixture.cacheHome}), fixture.holdRoot, fixture.recipeDir, "build")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,6 +450,18 @@ func TestVendorRefusesWhileABuildHoldsTheRecipeDir(t *testing.T) {
 	stderr.Reset()
 	if exitCode := newVendorApp(fixture, &stdout, &stderr).Run([]string{"vendor"}); exitCode != exitSuccess {
 		t.Errorf("vendor once the build is done: exit code = %d, stderr %s", exitCode, stderr.String())
+	}
+}
+
+// vendor builds nothing, so a work root no build could use is not its
+// concern: it holds the recipe directory elsewhere.
+func TestVendorIgnoresAWorkRootUnderMnt(t *testing.T) {
+	fixture := newVendorFixture(t)
+	var stdout, stderr bytes.Buffer
+	app := newVendorApp(fixture, &stdout, &stderr)
+	app.Getenv = environmentWith(map[string]string{"XDG_CACHE_HOME": "/mnt/c/cache"})
+	if exitCode := app.Run([]string{"vendor"}); exitCode != exitSuccess {
+		t.Fatalf("vendor with XDG_CACHE_HOME under /mnt: exit code = %d, stderr %s", exitCode, stderr.String())
 	}
 }
 

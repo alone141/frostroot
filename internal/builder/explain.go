@@ -2,9 +2,10 @@ package builder
 
 import (
 	"bufio"
+	"bytes"
 	"os"
 	"path/filepath"
-	"strings"
+	"slices"
 )
 
 // ErrorLine is the first line of a build log that explains its failure.
@@ -24,9 +25,10 @@ var explanationPrefixes = []string{"E: ", "dpkg: error", "ERROR: ", "frostroot: 
 // rpm a scriptlet that failed, and frostroot's own scripts say "frostroot:".
 var mkosiExplanationPrefixes = []string{"No match for argument", "Failed to resolve the transaction", "Problem: ", "error: ", "frostroot: "}
 
-// maxExplanationLineBytes bounds a log line; pip has been seen to print a
-// single-line dependency report longer than that, which is not the
-// explanation anyone wants.
+// maxExplanationLineBytes bounds an explanation, with its newline; pip has
+// been seen to print a single-line dependency report longer than that, which
+// is not the explanation anyone wants. A longer line is never held in
+// memory whole, and still counts as one line.
 const maxExplanationLineBytes = 1 << 16
 
 // FirstErrorLine returns the first line of the log at path that carries one
@@ -35,7 +37,11 @@ const maxExplanationLineBytes = 1 << 16
 // worth a second error message. The whole log is read, not its tail,
 // because the line that explains a failure is often followed by more
 // output than the tail holds — pip's traceback, apt's cleanup — and that is
-// exactly when it is needed.
+// exactly when it is needed. A line too long to be an explanation that
+// announces no error is passed over, and the lines after it are read. One
+// that does announce an error is the first error line, and too long to
+// show: then there is no explanation, rather than a later error line
+// presented as the first, which may only be a consequence of it.
 func FirstErrorLine(path string) (ErrorLine, bool) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -47,17 +53,35 @@ func FirstErrorLine(path string) (ErrorLine, bool) {
 	if filepath.Base(path) == MkosiLogFileName {
 		prefixes = mkosiExplanationPrefixes
 	}
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64<<10), maxExplanationLineBytes)
+	announcesError := func(text []byte) bool {
+		return slices.ContainsFunc(prefixes, func(prefix string) bool { return bytes.HasPrefix(text, []byte(prefix)) })
+	}
+	reader := bufio.NewReaderSize(file, maxExplanationLineBytes)
 	number := 0
-	for scanner.Scan() {
+	for {
+		// ReadLine drops the "\n" or "\r\n", and returns a last line that
+		// has no newline as any other. A line longer than its buffer comes
+		// in fragments, the first of them its start.
+		fragment, isPrefix, err := reader.ReadLine()
+		if err != nil {
+			return ErrorLine{}, false
+		}
 		number++
-		line := strings.TrimRight(scanner.Text(), "\r")
-		for _, prefix := range prefixes {
-			if strings.HasPrefix(line, prefix) {
-				return ErrorLine{Number: number, Text: line}, true
+		if isPrefix {
+			if announcesError(fragment) {
+				return ErrorLine{}, false
 			}
+			for isPrefix && err == nil {
+				_, isPrefix, err = reader.ReadLine()
+			}
+			if err != nil {
+				return ErrorLine{}, false
+			}
+			continue
+		}
+		line := bytes.TrimRight(fragment, "\r")
+		if announcesError(line) {
+			return ErrorLine{Number: number, Text: string(line)}, true
 		}
 	}
-	return ErrorLine{}, false
 }

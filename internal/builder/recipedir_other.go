@@ -16,3 +16,8 @@ const recipeDirLocking = false
 func lockExclusive(string) (*os.File, bool, error) {
 	return nil, false, errors.New("recipe directory holds are taken on Linux only")
 }
+
+// directoryIdentity is never called where recipeDirLocking is false.
+func directoryIdentity(string) (string, bool) {
+	return "", false
+}

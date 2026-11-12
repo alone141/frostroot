@@ -162,6 +162,45 @@ func TestCheckOutputWritable(t *testing.T) {
 	}
 }
 
+// A rename cannot replace a directory, and a build that found one in its
+// way only when it placed its files spent minutes and failed as a build.
+func TestBuildRefusesADirectoryWhereItPlacesAFile(t *testing.T) {
+	tests := []struct {
+		name     string
+		disk     bool
+		inTheWay func(options Options) string
+	}{
+		{"the lock", false, func(options Options) string { return filepath.Join(options.RecipeDir, LockFileName) }},
+		{"the tarball", false, expectedTarballPath},
+		{"the disk image", true, expectedDiskImagePath},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			options, _ := newTestOptions(t)
+			inTheWay := test.inTheWay(options)
+			if err := os.MkdirAll(inTheWay, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			bootstrapper := &fakeBootstrapper{}
+			var err error
+			if test.disk {
+				_, err = buildDiskWith(bootstrapper, &fakeToolRunner{}, options)
+			} else {
+				_, err = buildWith(bootstrapper, options)
+			}
+			if !errors.Is(err, ErrUnwritableOutput) || !strings.Contains(err.Error(), inTheWay) {
+				t.Errorf("Build error = %v, want ErrUnwritableOutput naming %s", err, inTheWay)
+			}
+			if bootstrapper.runCount != 0 || bootstrapper.treeRan {
+				t.Error("a build that cannot place its files bootstrapped")
+			}
+			if info, err := os.Stat(inTheWay); err != nil || !info.IsDir() {
+				t.Errorf("the directory in the way: %v, want it left as it was", err)
+			}
+		})
+	}
+}
+
 func TestCheckOutputWritableRejectsDistFile(t *testing.T) {
 	recipeDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(recipeDir, "dist"), []byte("not a directory"), 0o644); err != nil {

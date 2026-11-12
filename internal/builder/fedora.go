@@ -411,15 +411,26 @@ func (f *fedoraBuild) lockTools() ([]recipe.LockPackage, error) {
 }
 
 // cachedRepository returns the repository whose download of fileName the
-// package manager's cache holds.
+// package manager's cache holds. Only a file a repository's directories lack
+// moves on to the next repository: a conflict in the cache, or a file that
+// cannot be read, is the answer.
 func (f *fedoraBuild) cachedRepository(packageManager, fileName string) (string, error) {
 	for _, repository := range f.release.Repositories {
-		if _, _, err := f.cachedPackage(packageManager, repository.ID, fileName); err == nil {
+		_, _, err := f.cachedPackage(packageManager, repository.ID, fileName)
+		if err == nil {
 			return repository.ID, nil
+		}
+		if !errors.Is(err, errNotCached) {
+			return "", err
 		}
 	}
 	return "", fmt.Errorf("the tools tree holds %s, which no repository's download in %s is", fileName, f.cacheDir)
 }
+
+// errNotCached means none of a repository's directories in the package
+// cache holds a file. Its text is the middle of the message that wraps it,
+// "dnf5-....rpm from updates is not in /path/to/cache".
+var errNotCached = errors.New("not in")
 
 // cachedPackage returns the digest and size of fileName as the package
 // manager downloaded it from repository into mkosi's cache: the very file
@@ -457,7 +468,7 @@ func (f *fedoraBuild) cachedPackage(packageManager, repository, fileName string)
 		found = append(found, cachedFile{path: path, digest: digest, size: size})
 	}
 	if len(found) == 0 {
-		return "", 0, fmt.Errorf("%s from %s is not in %s", fileName, repository, f.cacheDir)
+		return "", 0, fmt.Errorf("%s from %s is %w %s", fileName, repository, errNotCached, f.cacheDir)
 	}
 	for _, other := range found[1:] {
 		if other.digest != found[0].digest {

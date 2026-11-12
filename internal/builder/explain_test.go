@@ -99,6 +99,69 @@ func TestFirstErrorLineSaysNothingRatherThanTheWrongThing(t *testing.T) {
 	})
 }
 
+// TestFirstErrorLineReadsPastALongLine: the log was read with a scanner that
+// gave up at a line longer than an explanation can be, such as pip's
+// single-line dependency report, and a failure explained further down got
+// no explanation. A long line that announces an error is still the first
+// error line, and too long to show, so a later one is not presented as the
+// first.
+func TestFirstErrorLineReadsPastALongLine(t *testing.T) {
+	longLine := strings.Repeat("x", maxExplanationLineBytes+1)
+	tests := []struct {
+		name       string
+		lines      []string
+		wantNumber int
+		wantText   string
+	}{
+		{
+			name:       "a long first line",
+			lines:      []string{longLine, "E: Unable to locate package nosuch"},
+			wantNumber: 2,
+			wantText:   "E: Unable to locate package nosuch",
+		},
+		{
+			name:       "a long line that only contains a prefix later",
+			lines:      []string{"I: running apt-get update...", longLine + "E: inside", "I: cleaning up", "E: after"},
+			wantNumber: 4,
+			wantText:   "E: after",
+		},
+		{
+			name:       "several long lines, with Windows line endings",
+			lines:      []string{longLine + "\r", longLine + longLine + "\r", "E: with a carriage return\r"},
+			wantNumber: 3,
+			wantText:   "E: with a carriage return",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			line, found := FirstErrorLine(writeLog(t, test.lines...))
+			if !found {
+				t.Fatal("FirstErrorLine found nothing")
+			}
+			if line.Number != test.wantNumber || line.Text != test.wantText {
+				t.Errorf("FirstErrorLine = line %d %.40q, want line %d %q", line.Number, line.Text, test.wantNumber, test.wantText)
+			}
+		})
+	}
+
+	t.Run("a last line without a newline", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), LogFileName)
+		if err := os.WriteFile(path, []byte(longLine+"\nI: cleaning up\nE: Unable to locate package nosuch"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		line, found := FirstErrorLine(path)
+		if !found || line.Number != 3 || line.Text != "E: Unable to locate package nosuch" {
+			t.Errorf("FirstErrorLine = %+v, %t, want line 3", line, found)
+		}
+	})
+
+	t.Run("a long line with a prefix, after a long line without one", func(t *testing.T) {
+		if line, found := FirstErrorLine(writeLog(t, longLine, "I: running apt-get update...", "E: "+longLine, "E: after")); found {
+			t.Errorf("FirstErrorLine = line %d %.40q, want nothing", line.Number, line.Text)
+		}
+	})
+}
+
 func TestBootstrapErrorRendersTheTailAndUnwraps(t *testing.T) {
 	cause := os.ErrPermission
 	err := &BootstrapError{Err: cause, Tail: "E: apt-get update failed\nI: cleaning up"}
