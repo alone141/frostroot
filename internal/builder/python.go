@@ -239,11 +239,14 @@ rm -f {{shellQuote .CertPath}} {{shellQuote .ExtraTrustPath}}
 # pip compiles as it installs, and what it writes depends on the pip and the
 # Python of the release: on 20.04 a few hundred caches came out different
 # between two rebuilds of one lock. Recompiling every module with hash-based
-# invalidation makes the caches depend on their sources alone. A module that
-# cannot be compiled is not an error here: nothing imports it during the
-# build, and Python compiles what it needs at import time anyway. That, and
-# only that, is compileall's status 1; any other failure, of the interpreter
-# itself, fails the build.
+# invalidation makes the caches depend on their sources alone. Status 1 is
+# let through: it means a file could not be compiled or its cache written,
+# but also an interrupted run or an uncaught Python error, compileall not
+# being found among them. A package that ships a module that does not
+# compile (tests with deliberate syntax errors, files for another Python) is
+# common, and nothing imports it during the build. The cost is that a
+# compileall that itself failed with status 1 is let through too. A status
+# above 1 still fails the build.
 compileStatus=0
 "$venv"/bin/python -m compileall -q --invalidation-mode checked-hash "$venv" || compileStatus=$?
 if [ "$compileStatus" -gt 1 ]; then
