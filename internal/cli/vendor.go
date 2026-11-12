@@ -62,7 +62,7 @@ func (a *App) runVendor(args []string) int {
 	// No build or other vendor of this user runs in the directory until
 	// this one is done: one that placed a new lock while this one read the
 	// old one would leave a pool for neither.
-	hold, err := builder.HoldRecipeDir(a.Getenv, a.RecipeDir, "vendor")
+	hold, err := builder.HoldRecipeDir(a.Getenv, a.holdRoot, a.RecipeDir, "vendor")
 	if err != nil {
 		a.stderrf("frostroot: %v\n", err)
 		return exitUserError

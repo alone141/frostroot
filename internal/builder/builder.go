@@ -113,7 +113,11 @@ type Options struct {
 	KeepWork  bool                // keep the work directory after a successful build
 	GOOS      string              // operating system; defaults to runtime.GOOS
 	Getenv    func(string) string // environment lookup; defaults to os.Getenv
-	Progress  Progress            // receives the build's phases and output; nil discards them
+	// HoldRoot is the directory whose holds directory keeps a second run
+	// out of the recipe directory; "" means DefaultWorkRoot, whatever
+	// XDG_CACHE_HOME says (see HoldRecipeDir). Tests name their own.
+	HoldRoot string
+	Progress Progress // receives the build's phases and output; nil discards them
 	// Offline rebuilds the lock's exact package set from vendor/debs, with no
 	// archive, no network and no keyring, and leaves the lock unchanged.
 	Offline bool
@@ -253,7 +257,7 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	// held the directory, so that a recipe a build cannot use is refused
 	// without touching the work root; it checks that no other run replaced
 	// the lock meanwhile.
-	hold, err := holdRecipeDir(workRoot, options.RecipeDir, "build")
+	hold, err := HoldRecipeDir(getenv, options.HoldRoot, options.RecipeDir, "build")
 	if err != nil {
 		return Result{}, err
 	}

@@ -134,6 +134,10 @@ type App struct {
 	// plain interface; nil means SIGINT, SIGTERM and SIGHUP. Tests end
 	// the context themselves instead of sending a signal.
 	interruptContext func() (context.Context, context.CancelFunc)
+	// holdRoot is where build and vendor hold the recipe directory; ""
+	// means builder.DefaultWorkRoot. Tests keep it in their temporary
+	// directory, out of /var/tmp.
+	holdRoot string
 }
 
 // New returns an App wired to the real process.

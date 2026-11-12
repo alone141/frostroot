@@ -37,36 +37,61 @@ func (h *RecipeDirHold) Release() {
 	_ = h.file.Close()
 }
 
-// HoldRecipeDir takes the hold that vendor keeps for its whole run, as a
-// build does, before it first reads the lock. The hold is an advisory lock
-// on a file under the work root, named for the resolved recipe directory:
-// the work root is on the Linux filesystem even when the recipe sits on a
+// HoldRecipeDir takes the hold that a build keeps from before it first
+// places anything, and vendor for its whole run. The hold is an advisory
+// lock on a file under holdRoot, named for the resolved recipe directory:
+// holdRoot is on the Linux filesystem even when the recipe sits on a
 // Windows drive, where locking is doubtful, and the lock goes with the
-// process however it ends. Another user's run, or one under sudo, has a
-// work root of its own and is not kept out. command names the run in the
-// message the next one gets. Where frostroot does not build, nothing is
-// held.
-func HoldRecipeDir(getenv func(string) string, recipeDir, command string) (*RecipeDirHold, error) {
+// process however it ends. holdRoot is DefaultWorkRoot when "", whatever
+// XDG_CACHE_HOME says, so that every run of this user holds one file
+// whichever environment it was started from; tests name their own.
+// Another user's run, or one under sudo, has a directory of its own and is
+// not kept out. command names the run in the message the next one gets.
+// Where frostroot does not build, nothing is held.
+func HoldRecipeDir(getenv func(string) string, holdRoot, recipeDir, command string) (*RecipeDirHold, error) {
 	if !recipeDirLocking {
 		return &RecipeDirHold{}, nil
 	}
 	uid := os.Getuid()
-	workRoot, err := WorkRoot(getenv, uid)
+	if holdRoot == "" {
+		holdRoot = DefaultWorkRoot(uid)
+	}
+	holdRoot, err := prepareHoldRoot(getenv, holdRoot, uid)
 	if err != nil {
 		return nil, err
 	}
-	if err := prepareWorkRoot(workRoot, uid); err != nil {
-		return nil, err
-	}
-	return holdRecipeDir(workRoot, recipeDir, command)
+	return holdRecipeDir(holdRoot, recipeDir, command)
 }
 
-// holdRecipeDir takes the hold under a work root already prepared.
-func holdRecipeDir(workRoot, recipeDir, command string) (*RecipeDirHold, error) {
+// prepareHoldRoot prepares holdRoot as a work root is prepared and returns
+// it. Only when that fails, on a read-only /var/tmp or under a directory
+// someone else planted there, is the work root XDG_CACHE_HOME names used
+// instead: such a host could not build without XDG_CACHE_HOME either, and
+// it keeps working, but two runs of it with different XDG_CACHE_HOME are
+// then not kept apart. When the work root is holdRoot, or cannot be used
+// either, the error is holdRoot's, which a work root under /mnt would only
+// hide.
+func prepareHoldRoot(getenv func(string) string, holdRoot string, uid int) (string, error) {
+	holdRootErr := prepareWorkRoot(holdRoot, uid)
+	if holdRootErr == nil {
+		return holdRoot, nil
+	}
+	workRoot, err := WorkRoot(getenv, uid)
+	if err != nil || workRoot == holdRoot {
+		return "", holdRootErr
+	}
+	if err := prepareWorkRoot(workRoot, uid); err != nil {
+		return "", errors.Join(holdRootErr, err)
+	}
+	return workRoot, nil
+}
+
+// holdRecipeDir takes the hold under a hold root already prepared.
+func holdRecipeDir(holdRoot, recipeDir, command string) (*RecipeDirHold, error) {
 	if !recipeDirLocking {
 		return &RecipeDirHold{}, nil
 	}
-	holdDir := filepath.Join(workRoot, "holds")
+	holdDir := filepath.Join(holdRoot, "holds")
 	if err := os.Mkdir(holdDir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
 		return nil, fmt.Errorf("%w: %w", ErrBadWorkRoot, err)
 	}

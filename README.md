@@ -1154,9 +1154,13 @@ of the way of unprivileged builds.
 **One build per recipe directory at a time.** A `build` or `vendor` holds
 its recipe directory until it is done, and a second one started there
 meanwhile stops at once with exit 1, naming the one that is running. The
-hold is a lock file under your work directory, so it keeps out your own
-runs only: a build of another user, or one under `sudo`, is not seen, and
-two of those in one directory can still leave a lock and a tarball of
+hold is a lock file under `/var/tmp/frostroot-<uid>/holds`, whatever
+`XDG_CACHE_HOME` says, so that two of your runs started from different
+environments still see each other; only where that directory cannot be
+used is it under your work directory instead, and then two runs with
+different `XDG_CACHE_HOME` are not kept apart. It keeps out your own runs
+only: a build of another user, or one under `sudo`, is not seen, and two
+of those in one directory can still leave a lock and a tarball of
 different builds.
 
 **20.04 images ship known, unfixed CVEs.** Focal's standard support ended in

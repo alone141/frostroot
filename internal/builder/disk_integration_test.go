@@ -79,6 +79,7 @@ func TestIntegrationResoluteDisk(t *testing.T) {
 		RecipeDir: t.TempDir(),
 		GOOS:      "linux",
 		Getenv:    fakeEnvironment(map[string]string{"XDG_CACHE_HOME": workRoot}),
+		HoldRoot:  t.TempDir(),
 		Progress:  progress,
 	})
 	if err != nil {
@@ -228,7 +229,7 @@ func TestIntegrationDiskOfflineRebuild(t *testing.T) {
 	workRoot := newIntegrationWorkRoot(t)
 	recipeDir := t.TempDir()
 	imageRecipe := resoluteDiskRecipe(t)
-	options := Options{RecipeDir: recipeDir, GOOS: "linux", Getenv: fakeEnvironment(map[string]string{"XDG_CACHE_HOME": workRoot})}
+	options := Options{RecipeDir: recipeDir, GOOS: "linux", Getenv: fakeEnvironment(map[string]string{"XDG_CACHE_HOME": workRoot}), HoldRoot: t.TempDir()}
 	builder := Builder{Bootstrapper: &Mmdebstrap{}, Tools: &Bubblewrap{}}
 
 	t.Log("online build")

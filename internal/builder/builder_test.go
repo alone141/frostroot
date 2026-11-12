@@ -233,8 +233,8 @@ func (p *preflightingBootstrapper) Preflight(spec BootstrapSpec) error {
 	return p.preflightErr
 }
 
-// newTestOptions returns build options that keep the work root inside the
-// test's temporary directory, and that work root.
+// newTestOptions returns build options that keep the work root and the
+// hold root inside the test's temporary directory, and that work root.
 func newTestOptions(t *testing.T) (options Options, workRoot string) {
 	t.Helper()
 	cacheHome := t.TempDir()
@@ -242,6 +242,7 @@ func newTestOptions(t *testing.T) (options Options, workRoot string) {
 		RecipeDir: t.TempDir(),
 		GOOS:      "linux",
 		Getenv:    fakeEnvironment(map[string]string{"XDG_CACHE_HOME": cacheHome}),
+		HoldRoot:  t.TempDir(),
 	}
 	return options, filepath.Join(cacheHome, "frostroot")
 }

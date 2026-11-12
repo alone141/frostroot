@@ -88,6 +88,7 @@ func testTinyImage(t *testing.T, release, suite string) {
 		RecipeDir: t.TempDir(),
 		GOOS:      "linux",
 		Getenv:    fakeEnvironment(map[string]string{"XDG_CACHE_HOME": cacheHome}),
+		HoldRoot:  t.TempDir(),
 		Progress:  progress,
 		// What --ca-bundle passes: an authority to trust while building and
 		// never to ship. It makes this build point apt at a bundle in the
@@ -276,7 +277,7 @@ func TestIntegrationOfflineRebuild(t *testing.T) {
 		Locale:   recipe.Locale{Lang: "en_US.UTF-8", Timezone: "UTC"},
 		Packages: recipe.Packages{Include: []string{"curl"}},
 	}
-	options := Options{RecipeDir: recipeDir, GOOS: "linux", Getenv: fakeEnvironment(map[string]string{"XDG_CACHE_HOME": cacheHome})}
+	options := Options{RecipeDir: recipeDir, GOOS: "linux", Getenv: fakeEnvironment(map[string]string{"XDG_CACHE_HOME": cacheHome}), HoldRoot: t.TempDir()}
 	builder := Builder{Bootstrapper: &Mmdebstrap{}}
 
 	t.Log("online build")
@@ -432,7 +433,7 @@ func TestIntegrationPython(t *testing.T) {
 		Locale: recipe.Locale{Lang: "en_US.UTF-8", Timezone: "UTC"},
 		Python: &recipe.Python{Include: []string{"requests"}},
 	}
-	options := Options{RecipeDir: recipeDir, GOOS: "linux", Getenv: fakeEnvironment(map[string]string{"XDG_CACHE_HOME": cacheHome})}
+	options := Options{RecipeDir: recipeDir, GOOS: "linux", Getenv: fakeEnvironment(map[string]string{"XDG_CACHE_HOME": cacheHome}), HoldRoot: t.TempDir()}
 	builder := Builder{Bootstrapper: &Mmdebstrap{}}
 	progress := &testLogProgress{t: t}
 	options.Progress = progress
@@ -630,6 +631,7 @@ func TestIntegrationUnreachableWorkRootFailsFast(t *testing.T) {
 		RecipeDir: t.TempDir(),
 		GOOS:      "linux",
 		Getenv:    fakeEnvironment(map[string]string{"XDG_CACHE_HOME": filepath.Join(privateHome, ".cache")}),
+		HoldRoot:  t.TempDir(),
 	})
 	if !errors.Is(err, ErrBadWorkRoot) {
 		t.Fatalf("Build error = %v, want ErrBadWorkRoot", err)
@@ -687,6 +689,7 @@ func TestIntegrationHostThatCannotMountFailsFast(t *testing.T) {
 		RecipeDir: recipeDir,
 		GOOS:      "linux",
 		Getenv:    fakeEnvironment(map[string]string{"XDG_CACHE_HOME": cacheHome}),
+		HoldRoot:  t.TempDir(),
 		Progress:  progress,
 	})
 	t.Logf("the build ended after %s", time.Since(started).Round(time.Millisecond))

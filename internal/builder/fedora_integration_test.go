@@ -95,6 +95,7 @@ func TestIntegrationFedoraTiny(t *testing.T) {
 		RecipeDir: t.TempDir(),
 		GOOS:      "linux",
 		Getenv:    fakeEnvironment(map[string]string{"XDG_CACHE_HOME": cacheHome}),
+		HoldRoot:  t.TempDir(),
 		Progress:  progress,
 		// An authority to trust while building and never to ship: dnf
 		// verifies with it from the package manager tree, which is not the
@@ -270,7 +271,7 @@ func TestIntegrationFedoraOfflineRebuild(t *testing.T) {
 	recipeDir := t.TempDir()
 	imageRecipe := fedoraTinyRecipe(t)
 	imageRecipe.Packages.Include = []string{"jq"}
-	options := Options{RecipeDir: recipeDir, GOOS: "linux", Getenv: fakeEnvironment(map[string]string{"XDG_CACHE_HOME": cacheHome})}
+	options := Options{RecipeDir: recipeDir, GOOS: "linux", Getenv: fakeEnvironment(map[string]string{"XDG_CACHE_HOME": cacheHome}), HoldRoot: t.TempDir()}
 	builder := Builder{Fedora: &Mkosi{}}
 
 	t.Log("online build")
