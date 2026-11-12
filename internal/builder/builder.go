@@ -248,6 +248,22 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 	if err := checkOutputWritable(options.RecipeDir); err != nil {
 		return Result{}, err
 	}
+	placePhase, outputNoun := PhasePlaceTarball, "tarball"
+	tarballPath := filepath.Join(options.RecipeDir, export.TarballRelPath(imageRecipe.Image.Name, string(family), imageRecipe.Image.Release, imageRecipe.Image.Arch))
+	imagePath := filepath.Join(options.RecipeDir, export.ImageRelPath(imageRecipe.Image.Name, string(family), imageRecipe.Image.Release, imageRecipe.Image.Arch))
+	outputPath := tarballPath
+	if disk {
+		placePhase, outputNoun, outputPath = PhasePlaceImage, "image", imagePath
+	}
+	lockPath := filepath.Join(options.RecipeDir, LockFileName)
+	// What the build renames into place: the output, and online the lock.
+	renameTargets := []string{outputPath}
+	if offline == nil {
+		renameTargets = append(renameTargets, lockPath)
+	}
+	if err := checkNoDirectoryInTheWay(renameTargets...); err != nil {
+		return Result{}, err
+	}
 	if err := prepareWorkRoot(workRoot, currentUID); err != nil {
 		return Result{}, err
 	}
@@ -262,13 +278,6 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 		return Result{}, err
 	}
 	defer hold.Release()
-	placePhase, outputNoun := PhasePlaceTarball, "tarball"
-	tarballPath := filepath.Join(options.RecipeDir, export.TarballRelPath(imageRecipe.Image.Name, string(family), imageRecipe.Image.Release, imageRecipe.Image.Arch))
-	imagePath := filepath.Join(options.RecipeDir, export.ImageRelPath(imageRecipe.Image.Name, string(family), imageRecipe.Image.Release, imageRecipe.Image.Arch))
-	outputPath := tarballPath
-	if disk {
-		placePhase, outputNoun, outputPath = PhasePlaceImage, "image", imagePath
-	}
 	removeLeftovers(options.RecipeDir, currentUID, tarballPath, imagePath)
 	if offline != nil {
 		if err := offline.checkLockUnchanged(); err != nil {
@@ -347,7 +356,6 @@ func (b *Builder) Build(ctx context.Context, imageRecipe recipe.Recipe, options 
 			return failBuild(err)
 		}
 	}
-	lockPath := filepath.Join(options.RecipeDir, LockFileName)
 	var counts packageCounts
 	if offline != nil {
 		progress.Report(ProgressEvent{Phase: PhaseCheckLock, Kind: EventPhaseStarted})

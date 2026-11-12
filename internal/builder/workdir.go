@@ -73,6 +73,21 @@ func checkOwnedBy(path string, info os.FileInfo, uid int) error {
 	return nil
 }
 
+// checkNoDirectoryInTheWay fails before minutes are spent bootstrapping
+// when one of paths, which the build renames its lock or its output onto,
+// is a directory. A rename replaces a file, a symbolic link or anything
+// else, but not a directory, and the build would fail only at the end, as
+// a failed build rather than something the person can fix. Lstat, not
+// Stat: a symbolic link to a directory is replaced, not followed.
+func checkNoDirectoryInTheWay(paths ...string) error {
+	for _, path := range paths {
+		if info, err := os.Lstat(path); err == nil && info.IsDir() {
+			return fmt.Errorf("%w: %s is a directory, where the build places a file; remove or rename it", ErrUnwritableOutput, path)
+		}
+	}
+	return nil
+}
+
 // checkOutputWritable fails before minutes are spent bootstrapping when the
 // lock or the tarball could not be placed afterwards. The usual cause is an
 // earlier `sudo frostroot build` in the same directory, which leaves dist/

@@ -1474,15 +1474,13 @@ func TestBuildCanceledKeepsWorkDirAndWritesNothing(t *testing.T) {
 // describing a tarball that was gone, and destroyed the only copy of the
 // one just built. The tarball is staged under a temporary name now and goes
 // into place after the lock, so the previous tarball is whole and the new
-// one is back in the kept work directory. A directory in the lock's place
-// is what stops the lock here: it is refused when the previous lock is
-// read, before anything is renamed.
+// one is back in the kept work directory. A directory in the lock's place,
+// made while the image bootstraps (one there before is refused before
+// anything is built), is what stops the lock here: it is refused when the
+// previous lock is read, before anything is renamed.
 func TestBuildLeavesThePreviousImageWhenTheLockCannotBePlaced(t *testing.T) {
 	options, _ := newTestOptions(t)
 	lockPath := filepath.Join(options.RecipeDir, LockFileName)
-	if err := os.MkdirAll(filepath.Join(lockPath, "occupied"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	previousTarball := expectedTarballPath(options)
 	if err := os.MkdirAll(filepath.Dir(previousTarball), 0o755); err != nil {
 		t.Fatal(err)
@@ -1490,7 +1488,7 @@ func TestBuildLeavesThePreviousImageWhenTheLockCannotBePlaced(t *testing.T) {
 	if err := os.WriteFile(previousTarball, []byte("previous image"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	result, err := buildWith(&fakeBootstrapper{}, options)
+	result, err := buildWith(&occupyingBootstrapper{occupiedPath: lockPath}, options)
 	if err == nil {
 		t.Fatal("a build whose lock cannot be placed must fail")
 	}
@@ -1592,16 +1590,28 @@ func TestRestoreLockSaysWhenItCannot(t *testing.T) {
 	}
 }
 
+// occupyingBootstrapper puts a directory at occupiedPath while the image
+// bootstraps. One there before the build is refused before anything is
+// built; one that appears meanwhile only the rename finds.
+type occupyingBootstrapper struct {
+	fakeBootstrapper
+	occupiedPath string
+}
+
+func (o *occupyingBootstrapper) Run(ctx context.Context, spec BootstrapSpec) error {
+	if err := os.MkdirAll(filepath.Join(o.occupiedPath, "occupied"), 0o755); err != nil {
+		return err
+	}
+	return o.fakeBootstrapper.Run(ctx, spec)
+}
+
 func TestBuildRestoresThePreviousLockWhenTheTarballCannotBePlaced(t *testing.T) {
 	options, _ := newTestOptions(t)
 	lockPath := filepath.Join(options.RecipeDir, LockFileName)
 	if err := os.WriteFile(lockPath, []byte("previous lock"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(expectedTarballPath(options), "occupied"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	result, err := buildWith(&fakeBootstrapper{}, options)
+	result, err := buildWith(&occupyingBootstrapper{occupiedPath: expectedTarballPath(options)}, options)
 	if err == nil || !strings.Contains(err.Error(), "placing tarball") {
 		t.Fatalf("error = %v, want the tarball's rename to fail", err)
 	}
@@ -1614,10 +1624,7 @@ func TestBuildRestoresThePreviousLockWhenTheTarballCannotBePlaced(t *testing.T) 
 	assertNoTemporaryFiles(t, options.RecipeDir)
 
 	options, _ = newTestOptions(t)
-	if err := os.MkdirAll(filepath.Join(expectedTarballPath(options), "occupied"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := buildWith(&fakeBootstrapper{}, options); err == nil {
+	if _, err := buildWith(&occupyingBootstrapper{occupiedPath: expectedTarballPath(options)}, options); err == nil {
 		t.Fatal("a build whose tarball cannot be placed must fail")
 	}
 	if _, err := os.Stat(filepath.Join(options.RecipeDir, LockFileName)); !errors.Is(err, os.ErrNotExist) {
