@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -263,6 +265,86 @@ func TestBuildFedoraLocksTheOneFileDnfCanHaveInstalled(t *testing.T) {
 	if !errors.Is(err, ErrPackageCacheConflict) || !strings.Contains(err.Error(), "twice, with different contents") || !strings.Contains(err.Error(), "updates-89abcdef") {
 		t.Fatalf("Build error = %v, want both of the cache's different copies named", err)
 	}
+}
+
+// TestCachedRepositoryOnlyPassesOverAMissingFile: every error from a
+// repository's directories meant "not this repository", so a conflict in
+// the cache, or a file that could not be read, was reported as a tools
+// package no repository's download holds, and exited 2.
+func TestCachedRepositoryOnlyPassesOverAMissingFile(t *testing.T) {
+	release, err := distro.LookupFedora("44", "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(release.Repositories) < 2 {
+		t.Fatalf("Fedora 44 has %d repositories, want at least two", len(release.Repositories))
+	}
+	first, second := release.Repositories[0].ID, release.Repositories[1].ID
+	fileName := "dnf5-5.4.6.0-1.fc44.x86_64.rpm"
+	newBuild := func(t *testing.T) (*fedoraBuild, func(directory, content string) string) {
+		t.Helper()
+		build := &fedoraBuild{release: release, cacheDir: t.TempDir()}
+		writeCached := func(directory, content string) string {
+			t.Helper()
+			path := filepath.Join(build.cacheDir, "cache", "dnf", directory, "packages", fileName)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return path
+		}
+		return build, writeCached
+	}
+
+	t.Run("conflict", func(t *testing.T) {
+		build, writeCached := newBuild(t)
+		writeCached(first+"-0123abcd", "dnf5 rpm")
+		writeCached(first+"-4567cdef", "another dnf5 rpm")
+		writeCached(second+"-89abcdef", "dnf5 rpm")
+		repository, err := build.cachedRepository("dnf", fileName)
+		if !errors.Is(err, ErrPackageCacheConflict) || strings.Contains(err.Error(), "no repository's download") {
+			t.Errorf("cachedRepository = %q, %v, want ErrPackageCacheConflict", repository, err)
+		}
+	})
+
+	t.Run("second repository", func(t *testing.T) {
+		build, writeCached := newBuild(t)
+		writeCached(second+"-89abcdef", "dnf5 rpm")
+		repository, err := build.cachedRepository("dnf", fileName)
+		if err != nil || repository != second {
+			t.Errorf("cachedRepository = %q, %v, want %q", repository, err, second)
+		}
+	})
+
+	t.Run("in no repository", func(t *testing.T) {
+		build, _ := newBuild(t)
+		repository, err := build.cachedRepository("dnf", fileName)
+		if err == nil || !strings.Contains(err.Error(), "no repository's download") {
+			t.Errorf("cachedRepository = %q, %v, want the file named as in no repository's download", repository, err)
+		}
+	})
+
+	t.Run("unreadable", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("Windows does not refuse to read a file of mode 0000")
+		}
+		if os.Getuid() == 0 {
+			t.Skip("root can read anything")
+		}
+		build, writeCached := newBuild(t)
+		unreadable := writeCached(first+"-0123abcd", "dnf5 rpm")
+		if err := os.Chmod(unreadable, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(unreadable, 0o644) })
+		writeCached(second+"-89abcdef", "dnf5 rpm")
+		repository, err := build.cachedRepository("dnf", fileName)
+		if !errors.Is(err, fs.ErrPermission) {
+			t.Errorf("cachedRepository = %q, %v, want the read error", repository, err)
+		}
+	})
 }
 
 func TestBuildFedoraWritesMkosiItsConfiguration(t *testing.T) {
