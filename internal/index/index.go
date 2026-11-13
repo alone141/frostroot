@@ -164,8 +164,7 @@ func openTarget(ctx context.Context, options Options, what target) (*Index, erro
 	}
 	cached := readCache(options, what)
 	if cached != nil {
-		fresh := options.Now().Sub(cached.fetched) < options.MaxAge
-		if options.Offline || (fresh && !options.Refresh) {
+		if options.Offline || (isFresh(options.Now(), cached.fetched, options.MaxAge) && !options.Refresh) {
 			return cached, nil
 		}
 	}
@@ -200,6 +199,15 @@ func openTarget(ctx context.Context, options Options, what target) (*Index, erro
 	// one nothing.
 	_ = writeCache(options, what, fetched)
 	return fetched, nil
+}
+
+// isFresh says whether a cache fetched at fetched is young enough at now to
+// be served without asking the repository. One dated after now was written
+// while the clock was ahead, and an age below zero would keep it fresh until
+// the clock passed its date and the whole age besides.
+func isFresh(now, fetched time.Time, maxAge time.Duration) bool {
+	age := now.Sub(fetched)
+	return age >= 0 && age < maxAge
 }
 
 // stampOrigin marks entries as the source's. The archive's origin is "", so
@@ -245,9 +253,13 @@ func (x *Index) Describe() string {
 	return description
 }
 
-// ago renders an age the way people say it.
+// ago renders an age the way people say it. A negative one is a cache
+// written while the clock was ahead, which is served only offline or when
+// the repository cannot be reached.
 func ago(age time.Duration) string {
 	switch {
+	case age < 0:
+		return "later than this clock's time"
 	case age < time.Hour:
 		return "just now"
 	case age < 2*time.Hour:

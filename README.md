@@ -496,7 +496,8 @@ Kitware together took under two seconds and added 15 packages to the 85,574
 of `noble`. `--mirror` is an Ubuntu mirror and is never applied to a source. It is reduced to names, versions,
 sections and one-line descriptions and kept as one 1.7 MB file a release under
 `$XDG_CACHE_HOME/frostroot/index/` (or `~/.cache/frostroot/index/`) for a
-week; `--refresh-index` fetches it sooner. The recipe directory is never
+week, or fetched again at once if it is dated later than the clock;
+`--refresh-index` fetches it sooner. The recipe directory is never
 written to. `--mirror` fetches from another archive, `--ca-bundle` trusts an
 authority for an HTTPS one, and `http_proxy` is honored as everywhere else.
 

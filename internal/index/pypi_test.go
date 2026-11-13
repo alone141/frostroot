@@ -508,3 +508,19 @@ func TestOpenPyPIKeepsACacheAPrivateIndexCannotBreak(t *testing.T) {
 		t.Errorf("from the cache, projects = %q", names)
 	}
 }
+
+// TestOpenPyPIRefetchesACacheDatedLaterThanTheClock: PyPI's cache kept the
+// archive's rule, so one written while the clock was ahead stayed fresh
+// until the clock passed its date and a week besides.
+func TestOpenPyPIRefetchesACacheDatedLaterThanTheClock(t *testing.T) {
+	served := newSimpleIndex(t)
+	options := pypiOptionsFor(t, served)
+	if _, err := OpenPyPI(context.Background(), options); err != nil {
+		t.Fatal(err)
+	}
+	options.Now = func() time.Time { return testNow.Add(-3 * time.Hour) }
+	before := served.requests.Load()
+	if _, err := OpenPyPI(context.Background(), options); err != nil || served.requests.Load() == before {
+		t.Errorf("a cache dated later than the clock: err %v, %d new requests, want a fetch", err, served.requests.Load()-before)
+	}
+}

@@ -62,8 +62,7 @@ func OpenPyPI(ctx context.Context, options Options) (*PyPIIndex, error) {
 	}
 	cached := readPyPICache(options)
 	if cached != nil {
-		fresh := options.Now().Sub(cached.fetched) < options.MaxAge
-		if options.Offline || (fresh && !options.Refresh) {
+		if options.Offline || (isFresh(options.Now(), cached.fetched, options.MaxAge) && !options.Refresh) {
 			return cached, nil
 		}
 	}

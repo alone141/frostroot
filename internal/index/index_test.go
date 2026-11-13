@@ -954,3 +954,41 @@ func TestOpenFailsAPocketWhoseReleaseFails(t *testing.T) {
 		}
 	}
 }
+
+// TestOpenRefetchesACacheDatedLaterThanTheClock: a cache written while the
+// clock was ahead had a negative age, which is less than any MaxAge, so it
+// stayed fresh until the clock passed its date and a week besides, and
+// Describe said "fetched just now" of it all along.
+func TestOpenRefetchesACacheDatedLaterThanTheClock(t *testing.T) {
+	served := newArchive(t, ".gz")
+	options := optionsFor(t, served)
+	if _, err := Open(context.Background(), options); err != nil {
+		t.Fatal(err)
+	}
+	options.Now = func() time.Time { return testNow.Add(-3 * time.Hour) }
+
+	// Offline it is still the only index there is, and it says what is true.
+	offline := options
+	offline.Offline = true
+	opened, err := Open(context.Background(), offline)
+	if err != nil {
+		t.Fatalf("offline with a cache dated later than the clock: %v", err)
+	}
+	if got := opened.Describe(); got != "noble · 17 packages · fetched later than this clock's time" {
+		t.Errorf("Describe = %q", got)
+	}
+
+	before := served.requests()
+	refetched, err := Open(context.Background(), options)
+	if err != nil || served.requests() == before {
+		t.Fatalf("a cache dated later than the clock: err %v, %d new requests, want a fetch", err, served.requests()-before)
+	}
+	if got := refetched.Describe(); !strings.HasSuffix(got, "fetched just now") {
+		t.Errorf("Describe = %q after the refetch", got)
+	}
+	// The refetch dated the cache by this clock, so it is fresh again.
+	before = served.requests()
+	if _, err := Open(context.Background(), options); err != nil || served.requests() != before {
+		t.Errorf("the refetched cache: err %v, %d new requests, want none", err, served.requests()-before)
+	}
+}
