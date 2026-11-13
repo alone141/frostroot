@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -88,15 +89,26 @@ func (a *App) checkIndexFlags(command string, parsed *indexFlags) bool {
 // validatePythonIndexFlag applies the source URL rule to --python-index. It
 // is not the [python] index_url rule, which asks for https: the form only
 // searches the index for names, and an http one has always been accepted
-// here. The URL is not quoted, because the source URL rule quotes it whole
-// for some refusals, a query and all, and a query is where a token usually
-// goes.
+// here. The refusal never quotes the URL, not even redacted: it names the
+// rule the URL breaks, and only the scheme as written, so that nothing a
+// person typed after it can reach the terminal.
 func validatePythonIndexFlag(indexURL string) error {
 	if recipe.CheckSourceURL(indexURL) == nil {
 		return nil
 	}
 	if recipe.RedactURLCredentials(indexURL) != indexURL {
 		return fmt.Errorf("--python-index: the URL carries credentials, which the index cache would keep and an error would print")
+	}
+	// The source URL rule's own checks, in its order, each said without
+	// the URL.
+	parsed, err := url.Parse(indexURL)
+	if err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" && !strings.ContainsAny(indexURL, " \t\r\n\v\f[]#") {
+		if written := indexURL[:len(parsed.Scheme)]; written != parsed.Scheme {
+			return fmt.Errorf("--python-index: the scheme %q must be written in lower case, as %q", written, parsed.Scheme)
+		}
+		if parsed.RawQuery != "" || parsed.ForceQuery {
+			return fmt.Errorf("--python-index: the URL has a query, a \"?\" part, which the index's paths cannot be appended to")
+		}
 	}
 	return fmt.Errorf("--python-index: not a simple index URL frostroot can search (expected http or https in lower case, with a host and no space, bracket, # or query, such as https://nexus.example.com/repository/pypi/simple)")
 }

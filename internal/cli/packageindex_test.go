@@ -900,3 +900,32 @@ func TestMirrorRefusalsQuoteNothingOfAQueryOrFragment(t *testing.T) {
 		}
 	}
 }
+
+// TestPythonIndexFlagSaysWhyWithoutQuotingTheURL: --python-index gave one
+// message for every refusal but credentials; it says which rule now, as
+// --mirror does, and still quotes nothing of the URL but its scheme.
+func TestPythonIndexFlagSaysWhyWithoutQuotingTheURL(t *testing.T) {
+	for indexURL, wantText := range map[string]string{
+		"HTTPS://index.example/simple":              `scheme "HTTPS" must be written in lower case`,
+		"Http://index.example/simple":               `scheme "Http" must be written in lower case`,
+		"https://index.example/simple?token=s3cret": "has a query",
+		"https://index.example/simple?":             "has a query",
+		"HTTPS://index.example/simple?token=s3cret": "lower case",
+		"ftp://index.example/simple?token=s3cret":   "not a simple index URL",
+		"https://index.example/simple#s3cret":       "not a simple index URL",
+		"https://index.example/s3 cret":             "not a simple index URL",
+		"https://user:s3cret@index.example/simple":  "carries credentials",
+	} {
+		err := validatePythonIndexFlag(indexURL)
+		if err == nil {
+			t.Errorf("validatePythonIndexFlag(%q) = nil, want a refusal", indexURL)
+			continue
+		}
+		if !strings.Contains(err.Error(), wantText) || !strings.HasPrefix(err.Error(), "--python-index: ") {
+			t.Errorf("validatePythonIndexFlag(%q) = %v, want it to say %q", indexURL, err, wantText)
+		}
+		if strings.Contains(err.Error(), "index.example") || strings.Contains(err.Error(), "s3") {
+			t.Errorf("validatePythonIndexFlag(%q) = %v, which quotes the URL", indexURL, err)
+		}
+	}
+}
