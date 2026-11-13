@@ -13,10 +13,12 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/klauspost/compress/zstd"
-	"github.com/ulikunitz/xz"
 
+	"frostroot/internal/deb"
 	"frostroot/internal/distro"
 )
 
@@ -235,7 +237,7 @@ func (f *fetcher) primary(plan rpmPlan) ([]Entry, error) {
 		openLimit = f.maxBodyBytes
 	}
 	opened := &boundedReader{reader: text, limit: openLimit + 1}
-	entries, err := reducePrimary(opened)
+	entries, err := reducePrimary(f.ctx, f.maxEntries, opened)
 	if err == nil {
 		// What follows the document is whitespace at most, and it counts
 		// toward both bounds like the rest.
@@ -245,11 +247,16 @@ func (f *fetcher) primary(plan rpmPlan) ([]Entry, error) {
 		if f.ctx.Err() != nil {
 			return nil, f.ctx.Err()
 		}
+		if tooMany := (tooManyEntriesError{}); errors.As(err, &tooMany) {
+			return nil, fmt.Errorf("%s: %w", url, tooMany)
+		}
 		if errors.Is(err, errTooLarge) || counted.count > plan.primary.size {
 			return nil, fmt.Errorf("%s: %w", url, errTooLarge)
 		}
-		// A server that went quiet is not one that published anew.
-		if errors.Is(err, errStalled) {
+		// A server that went quiet is not one that published anew, nor is a
+		// file whose xz dictionaries deb's reader refuses: it would ask for
+		// them again.
+		if errors.Is(err, errStalled) || isRefusedXZDictionary(err) {
 			return nil, fmt.Errorf("%s: %w", url, err)
 		}
 		// A cut download fails in the decompressor or the parser before
@@ -270,7 +277,10 @@ func (f *fetcher) primary(plan rpmPlan) ([]Entry, error) {
 }
 
 // decompressMetadata returns the text of a metadata file by its name's
-// extension, and what releases the decompressor.
+// extension, and what releases the decompressor. An xz file goes through
+// deb's reader, which refuses a dictionary larger than any preset uses: the
+// library's own allocates whatever a block declares, up to 4 GiB, and
+// repomd.xml, which names the file, is read unsigned.
 func decompressMetadata(href string, reader io.Reader) (io.Reader, func(), error) {
 	switch {
 	case strings.HasSuffix(href, ".zst"):
@@ -280,7 +290,7 @@ func decompressMetadata(href string, reader io.Reader) (io.Reader, func(), error
 		}
 		return decoder, decoder.Close, nil
 	case strings.HasSuffix(href, ".xz"):
-		decoder, err := xz.NewReader(reader)
+		decoder, err := deb.NewXZReader(reader)
 		return decoder, func() {}, err
 	case strings.HasSuffix(href, ".gz"):
 		decoder, err := gzip.NewReader(reader)
@@ -292,10 +302,88 @@ func decompressMetadata(href string, reader io.Reader) (io.Reader, func(), error
 
 // rpmPackage is what the index keeps of one <package> while it is read.
 type rpmPackage struct {
-	name, arch, summary string
+	name, arch, summary fieldText
 	epoch, version, rel string
 	isRPM, hasVersion   bool
 }
+
+// newRPMPackage starts a <package>. Its name and summary come to what
+// oneLine makes of them and its arch to what TrimSpace does, as reduce has
+// them of an apt stanza.
+func newRPMPackage(isRPM bool) rpmPackage {
+	return rpmPackage{
+		name:    fieldText{limit: maxNameBytes, asLine: true},
+		arch:    fieldText{limit: maxFieldBytes},
+		summary: fieldText{limit: maxDescriptionBytes, asLine: true},
+		isRPM:   isRPM,
+	}
+}
+
+// fieldText collects the text of one element of a package as it arrives.
+// RawToken returns a CharData for every run of text between two comments,
+// and a field rebuilt as a string for every run took time quadratic in
+// their count: a name of 200,000 runs, 1.6 MB that compress to almost
+// nothing, took four and a half seconds. Each run is added once, and once
+// the field is longer than its limit the rest is not kept, since the name
+// is then refused and the summary cut.
+//
+// What it keeps is what oneLine (asLine), or TrimSpace alone, makes of the
+// whole text, without the whole text: space at the start is skipped as it
+// comes, and space at the end is left out by end.
+type fieldText struct {
+	limit   int
+	asLine  bool   // through lineSafeRune, as oneLine does
+	text    []byte // the field from its first non-space rune, while it is at most limit bytes
+	length  int    // bytes of the field from its first non-space rune, kept or not
+	end     int    // length up to its last non-space rune
+	tooLong bool   // the trimmed field is longer than limit; nothing more is added
+}
+
+func (f *fieldText) add(piece []byte) {
+	for len(piece) > 0 && !f.tooLong {
+		character, size := utf8.DecodeRune(piece)
+		raw := piece[:size]
+		piece = piece[size:]
+		if f.asLine {
+			// strings.Map writes U+FFFD for a byte that is not UTF-8, as
+			// AppendRune does below.
+			if character = lineSafeRune(character); character < 0 {
+				continue
+			}
+			size = utf8.RuneLen(character)
+		}
+		isSpace := unicode.IsSpace(character)
+		if isSpace && f.length == 0 {
+			continue
+		}
+		if len(f.text) <= f.limit {
+			if f.asLine {
+				f.text = utf8.AppendRune(f.text, character)
+			} else {
+				f.text = append(f.text, raw...)
+			}
+		}
+		f.length += size
+		if !isSpace {
+			f.end = f.length
+			f.tooLong = f.end > f.limit
+		}
+	}
+}
+
+// String returns the field trimmed, or, when it is too long, more than its
+// first limit bytes, which is enough for cutField to cut it where it would
+// cut the whole.
+func (f *fieldText) String() string {
+	if f.tooLong {
+		return string(f.text)
+	}
+	return string(f.text[:f.end])
+}
+
+// contextCheckTokens is how many tokens reducePrimary reads between two
+// looks at the context.
+const contextCheckTokens = 4096
 
 // reducePrimary reads primary.xml as a stream of tokens and keeps, of each
 // package built for this architecture or for none, its name, its version
@@ -307,14 +395,28 @@ type rpmPackage struct {
 // resolved, and the provides, requires and file lists below <format> are
 // most of the 185 MB; they are passed over a token at a time without being
 // kept.
-func reducePrimary(reader io.Reader) ([]Entry, error) {
+//
+// The context is looked at every few thousand tokens: a small compressed
+// file is wholly read before its parse is far along, so no read of the body
+// notices that the context ended, and Ctrl-C or a deadline waited for the
+// parse to finish.
+//
+// It keeps at most maxEntries names, and fails with tooManyEntriesError
+// past them, as an apt index file does: the bound on the text is hundreds
+// of megabytes, and every name kept is held until the parse ends.
+func reducePrimary(ctx context.Context, maxEntries int, reader io.Reader) ([]Entry, error) {
 	decoder := xml.NewDecoder(reader)
 	byName := map[string]rpmPackage{}
 	var current rpmPackage
 	depth := 0
 	reading := "" // the element of the package whose text is being read
 	isMetadata := false
-	for {
+	for tokens := 1; ; tokens++ {
+		if tokens%contextCheckTokens == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		token, err := decoder.RawToken()
 		if errors.Is(err, io.EOF) {
 			break
@@ -330,7 +432,7 @@ func reducePrimary(reader io.Reader) ([]Entry, error) {
 			case depth == 1:
 				isMetadata = element.Name.Local == "metadata"
 			case depth == 2 && element.Name.Local == "package":
-				current = rpmPackage{isRPM: attribute(element, "type") == "rpm"}
+				current = newRPMPackage(attribute(element, "type") == "rpm")
 			case depth == 3 && element.Name.Local == "version":
 				current.epoch, current.version, current.rel = attribute(element, "epoch"), attribute(element, "ver"), attribute(element, "rel")
 				current.hasVersion = true
@@ -340,16 +442,18 @@ func reducePrimary(reader io.Reader) ([]Entry, error) {
 		case xml.CharData:
 			switch reading {
 			case "name":
-				current.name += string(element)
+				current.name.add(element)
 			case "arch":
-				current.arch += string(element)
+				current.arch.add(element)
 			case "summary":
-				current.summary += string(element)
+				current.summary.add(element)
 			}
 		case xml.EndElement:
 			reading = ""
 			if depth == 2 && element.Name.Local == "package" {
-				keepNewest(byName, current)
+				if err := keepNewest(byName, current, maxEntries); err != nil {
+					return nil, err
+				}
 			}
 			depth--
 			if depth < 0 {
@@ -366,9 +470,9 @@ func reducePrimary(reader io.Reader) ([]Entry, error) {
 	entries := make([]Entry, 0, len(byName))
 	for _, kept := range byName {
 		entries = append(entries, Entry{
-			Name:        kept.name,
+			Name:        kept.name.String(),
 			Version:     cutField(displayEVR(kept.epoch, kept.version, kept.rel), maxFieldBytes),
-			Description: cutField(oneLine(kept.summary), maxDescriptionBytes),
+			Description: cutField(kept.summary.String(), maxDescriptionBytes),
 		})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
@@ -377,19 +481,27 @@ func reducePrimary(reader io.Reader) ([]Entry, error) {
 
 // keepNewest records a package read in full, unless it is built for another
 // architecture, is not a binary rpm, or is older than one of its name
-// already kept.
-func keepNewest(byName map[string]rpmPackage, read rpmPackage) {
-	read.name, read.arch = oneLine(read.name), strings.TrimSpace(read.arch)
-	if !read.isRPM || !read.hasVersion || read.name == "" || len(read.name) > maxNameBytes {
-		return
+// already kept. A name longer than maxNameBytes is refused rather than cut,
+// as reduce refuses one of an apt stanza: cut, it would name a package that
+// does not exist, and offer it. A new name past maxEntries fails with
+// tooManyEntriesError.
+func keepNewest(byName map[string]rpmPackage, read rpmPackage, maxEntries int) error {
+	name, arch := read.name.String(), read.arch.String()
+	if !read.isRPM || !read.hasVersion || name == "" || read.name.tooLong {
+		return nil
 	}
-	if read.arch != distro.FedoraArch && read.arch != "noarch" {
-		return
+	if read.arch.tooLong || (arch != distro.FedoraArch && arch != "noarch") {
+		return nil
 	}
-	if kept, isKept := byName[read.name]; isKept && compareEVR(kept.epoch, kept.version, kept.rel, read.epoch, read.version, read.rel) >= 0 {
-		return
+	kept, isKept := byName[name]
+	if isKept && compareEVR(kept.epoch, kept.version, kept.rel, read.epoch, read.version, read.rel) >= 0 {
+		return nil
 	}
-	byName[read.name] = read
+	if !isKept && len(byName) >= maxEntries {
+		return tooManyEntriesError{limit: maxEntries}
+	}
+	byName[name] = read
+	return nil
 }
 
 // attribute returns the value of an element's attribute, or "".

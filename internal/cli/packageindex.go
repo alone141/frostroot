@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"flag"
+	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -54,7 +56,62 @@ signing keys of the sources you pick. The names are only suggestions, but a
 PPA's key is then fetched from wherever the network says, and every later
 build trusts it; the command says where to check it.
 
+--mirror is held to the rule of a recipe's source URL, as build and vendor
+hold it, and --python-index to the same rule: http or https, written in
+lower case, with no space, bracket, # or query, and no credentials, which
+the index cache would keep and an error would print. Either is refused
+before anything is read or fetched.
+
 `
+
+// checkIndexFlags refuses a --mirror or --python-index that cannot be
+// fetched from or must not be kept, before anything is read, fetched or
+// written, and reports false when it refused, which has been reported.
+// Both URLs head their cache files and appear in a failed fetch's error, so
+// one carrying credentials would leave the password in the cache directory
+// and on the terminal.
+func (a *App) checkIndexFlags(command string, parsed *indexFlags) bool {
+	if parsed.mirror != "" {
+		if err := validateMirrorURL(parsed.mirror); err != nil {
+			a.stderrf("frostroot %s: %v\n", command, err)
+			return false
+		}
+	}
+	if parsed.pythonIndex != "" {
+		if err := validatePythonIndexFlag(parsed.pythonIndex); err != nil {
+			a.stderrf("frostroot %s: %v\n", command, err)
+			return false
+		}
+	}
+	return true
+}
+
+// validatePythonIndexFlag applies the source URL rule to --python-index. It
+// is not the [python] index_url rule, which asks for https: the form only
+// searches the index for names, and an http one has always been accepted
+// here. The refusal never quotes the URL, not even redacted: it names the
+// rule the URL breaks, and only the scheme as written, so that nothing a
+// person typed after it can reach the terminal.
+func validatePythonIndexFlag(indexURL string) error {
+	if recipe.CheckSourceURL(indexURL) == nil {
+		return nil
+	}
+	if recipe.RedactURLCredentials(indexURL) != indexURL {
+		return fmt.Errorf("--python-index: the URL carries credentials, which the index cache would keep and an error would print")
+	}
+	// The source URL rule's own checks, in its order, each said without
+	// the URL.
+	parsed, err := url.Parse(indexURL)
+	if err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" && !strings.ContainsAny(indexURL, " \t\r\n\v\f[]#") {
+		if written := indexURL[:len(parsed.Scheme)]; written != parsed.Scheme {
+			return fmt.Errorf("--python-index: the scheme %q must be written in lower case, as %q", written, parsed.Scheme)
+		}
+		if parsed.RawQuery != "" || parsed.ForceQuery {
+			return fmt.Errorf("--python-index: the URL has a query, a \"?\" part, which the index's paths cannot be appended to")
+		}
+	}
+	return fmt.Errorf("--python-index: not a simple index URL frostroot can search (expected http or https in lower case, with a host and no space, bracket, # or query, such as https://nexus.example.com/repository/pypi/simple)")
+}
 
 // packageIndexes opens package indexes for one run of the recipe form: each
 // release once, however often the form asks, because the picker opens it

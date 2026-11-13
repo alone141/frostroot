@@ -83,20 +83,25 @@ type Options struct {
 	// the fetching goroutine, often.
 	Progress func(doneBytes, totalBytes int64)
 	Now      func() time.Time // nil means time.Now
-	// MaxBodyBytes bounds a download whose size nothing declares: a simple
-	// index sent without a Content-Length. 0 means DefaultMaxBodyBytes. An
-	// apt index is bounded by the size its Release entry declares instead,
-	// and a body with a Content-Length by that. What an apt or a Fedora
-	// index expands to is bounded by the size its metadata declares for
-	// that, and never past MaxBodyBytes either, since the same unsigned
-	// metadata declares both.
+	// MaxBodyBytes bounds a download whose size no metadata declares: a
+	// simple index, whatever its Content-Length says, since the length
+	// comes from the server the bound holds against. A Content-Length below
+	// it bounds the body further, and one above it is refused. 0 means
+	// DefaultMaxBodyBytes. An apt index is bounded by the size its Release
+	// entry declares instead. What an apt or a Fedora index expands to is
+	// bounded by the size its metadata declares for that, and never past
+	// MaxBodyBytes either, since the same unsigned metadata declares both.
 	MaxBodyBytes int64
 	// StallTimeout fails a download that receives nothing for this long,
 	// after its headers; 0 means DefaultStallTimeout.
 	StallTimeout time.Duration
+	// maxEntries is how many packages one apt index file, or one Fedora
+	// repository's primary metadata, may list; 0 means maxIndexEntries.
+	// Only tests set it, to reach the bound with a small index.
+	maxEntries int
 }
 
-// DefaultMaxBodyBytes is the most a download whose size nothing declares
+// DefaultMaxBodyBytes is the most a download whose size no metadata declares
 // may be. PyPI's own simple index is 40 MB gzipped, and nothing legitimate
 // is ten times that.
 const DefaultMaxBodyBytes = 512 << 20
@@ -164,8 +169,7 @@ func openTarget(ctx context.Context, options Options, what target) (*Index, erro
 	}
 	cached := readCache(options, what)
 	if cached != nil {
-		fresh := options.Now().Sub(cached.fetched) < options.MaxAge
-		if options.Offline || (fresh && !options.Refresh) {
+		if options.Offline || (isFresh(options.Now(), cached.fetched, options.MaxAge) && !options.Refresh) {
 			return cached, nil
 		}
 	}
@@ -200,6 +204,15 @@ func openTarget(ctx context.Context, options Options, what target) (*Index, erro
 	// one nothing.
 	_ = writeCache(options, what, fetched)
 	return fetched, nil
+}
+
+// isFresh says whether a cache fetched at fetched is young enough at now to
+// be served without asking the repository. One dated after now was written
+// while the clock was ahead, and an age below zero would keep it fresh until
+// the clock passed its date and the whole age besides.
+func isFresh(now, fetched time.Time, maxAge time.Duration) bool {
+	age := now.Sub(fetched)
+	return age >= 0 && age < maxAge
 }
 
 // stampOrigin marks entries as the source's. The archive's origin is "", so
@@ -245,9 +258,13 @@ func (x *Index) Describe() string {
 	return description
 }
 
-// ago renders an age the way people say it.
+// ago renders an age the way people say it. A negative one is a cache
+// written while the clock was ahead, which is served only offline or when
+// the repository cannot be reached.
 func ago(age time.Duration) string {
 	switch {
+	case age < 0:
+		return "later than this clock's time"
 	case age < time.Hour:
 		return "just now"
 	case age < 2*time.Hour:

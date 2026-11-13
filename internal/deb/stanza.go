@@ -30,13 +30,25 @@ func ReadStanzas(reader io.Reader, visit func(Stanza) error) error {
 	scanner.Buffer(make([]byte, 0, 64<<10), maxLineBytes)
 	current := Stanza{}
 	lastField := ""
+	// The open field's value is built here and stored when the field ends,
+	// because appending each continuation line to the stored string copies
+	// the whole value every time: a field folded over a hundred thousand
+	// lines took seconds.
+	var lastValue strings.Builder
+	storeLastField := func() {
+		if lastField != "" {
+			current[lastField] = lastValue.String()
+		}
+		lastField = ""
+		lastValue.Reset()
+	}
 	finish := func() error {
+		storeLastField()
 		if len(current) == 0 {
 			return nil
 		}
 		complete := current
 		current = Stanza{}
-		lastField = ""
 		return visit(complete)
 	}
 	for scanner.Scan() {
@@ -48,15 +60,18 @@ func ReadStanzas(reader io.Reader, visit func(Stanza) error) error {
 			}
 		case line[0] == ' ' || line[0] == '\t':
 			if lastField != "" {
-				current[lastField] += "\n" + line[1:]
+				lastValue.WriteByte('\n')
+				lastValue.WriteString(line[1:])
 			}
 		default:
 			name, value, isField := strings.Cut(line, ":")
 			if !isField {
 				continue
 			}
-			lastField = name
+			storeLastField()
 			current[name] = strings.TrimSpace(value)
+			lastField = name
+			lastValue.WriteString(current[name])
 		}
 	}
 	if err := scanner.Err(); err != nil {

@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
-	"github.com/ulikunitz/xz"
 )
 
 // Control is the control file of a .deb package.
@@ -33,6 +32,12 @@ const (
 	maxControlTarBytes = 64 << 20 // a control archive is kilobytes; this only bounds a corrupt size field
 	maxControlBytes    = 1 << 20
 )
+
+// maxZstdWindow bounds the memory a zstd frame of a control archive may ask
+// for, as maxXZDictionaryBytes does for xz. A control archive is kilobytes,
+// and the decoder's own default of 512 MiB is more than a file nothing has
+// checked yet should claim.
+const maxZstdWindow = 64 << 20
 
 // ErrNotDeb means the file is not a Debian package archive.
 var ErrNotDeb = errors.New("not a .deb file")
@@ -107,13 +112,13 @@ func controlFromTar(memberName string, compressed []byte) (Control, error) {
 		}
 		decompressed = gzipReader
 	case ".xz":
-		xzReader, err := xz.NewReader(bytes.NewReader(compressed))
+		xzReader, err := NewXZReader(bytes.NewReader(compressed))
 		if err != nil {
 			return Control{}, fmt.Errorf("%s: %w", memberName, err)
 		}
 		decompressed = xzReader
 	case ".zst":
-		zstdReader, err := zstd.NewReader(bytes.NewReader(compressed), zstd.WithDecoderConcurrency(1))
+		zstdReader, err := zstd.NewReader(bytes.NewReader(compressed), zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxWindow(maxZstdWindow))
 		if err != nil {
 			return Control{}, fmt.Errorf("%s: %w", memberName, err)
 		}
@@ -134,9 +139,15 @@ func controlFromTar(memberName string, compressed []byte) (Control, error) {
 		if strings.TrimPrefix(entry.Name, "./") != "control" {
 			continue
 		}
-		text, err := io.ReadAll(io.LimitReader(tarReader, maxControlBytes))
+		// One byte past the limit tells a control file that fills it from one
+		// that is longer: cut short, it would still parse, and its first
+		// mebibyte would go into a Packages file as if it were all of it.
+		text, err := io.ReadAll(io.LimitReader(tarReader, maxControlBytes+1))
 		if err != nil {
 			return Control{}, fmt.Errorf("%s: reading control: %w", memberName, err)
+		}
+		if len(text) > maxControlBytes {
+			return Control{}, fmt.Errorf("%s: control file is larger than %d bytes", memberName, maxControlBytes)
 		}
 		return parseControl(string(text))
 	}

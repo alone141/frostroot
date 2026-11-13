@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 
 	"frostroot/internal/deb/debtest"
 )
@@ -38,6 +41,26 @@ Description: example package based on GNU hello
 func buildDeb(t *testing.T, dir, fileName, extension, control string) string {
 	t.Helper()
 	return debtest.Build(t, dir, fileName, extension, control)
+}
+
+// controlOfSize returns a control file of exactly size bytes whose
+// Description is folded over as many lines as that takes.
+func controlOfSize(t *testing.T, size int) string {
+	t.Helper()
+	var control strings.Builder
+	control.WriteString("Package: hello\nVersion: 1\nArchitecture: amd64\nDescription: long\n")
+	for control.Len() < size {
+		remaining := size - control.Len()
+		lineLength := min(64, remaining)
+		if remaining > 64 && remaining < 64+3 {
+			lineLength = 32 // so that the last line is not too short to hold a character
+		}
+		if lineLength < 3 {
+			t.Fatalf("cannot make a control file of exactly %d bytes", size)
+		}
+		control.WriteString(" " + strings.Repeat("x", lineLength-2) + "\n")
+	}
+	return control.String()
 }
 
 // collectStanzas reads every stanza of text.
@@ -89,6 +112,46 @@ func TestReadStanzas(t *testing.T) {
 			text: "\n\n",
 			want: nil,
 		},
+		{
+			name: "a tab starts a continuation, and only the first blank goes",
+			text: "Description: short\n\tone\n \ttwo\n  three\n",
+			want: []Stanza{{"Description": "short\none\n\ttwo\n three"}},
+		},
+		{
+			name: "CRLF in a folded field",
+			text: "Description: short\r\n one\r\n .\r\n two\r\n",
+			want: []Stanza{{"Description": "short\none\n.\ntwo"}},
+		},
+		{
+			name: "a folded field with an empty first line",
+			text: "Description:\n .\n x\n",
+			want: []Stanza{{"Description": "\n.\nx"}},
+		},
+		{
+			name: "a continuation before any field is dropped",
+			text: " stray\nPackage: a\n\n stray after a paragraph\nPackage: b\n",
+			want: []Stanza{{"Package": "a"}, {"Package": "b"}},
+		},
+		{
+			name: "a field given twice keeps the last, with its own continuation",
+			text: "Depends: one\n first\nPackage: a\nDepends: two\n second\n",
+			want: []Stanza{{"Depends": "two\nsecond", "Package": "a"}},
+		},
+		{
+			name: "a field given twice keeps the last even when only the first is folded",
+			text: "Depends: one\n first\nDepends: two\n",
+			want: []Stanza{{"Depends": "two"}},
+		},
+		{
+			name: "a skipped line does not end the field before it",
+			text: "Description: short\ngarbage\n more\n",
+			want: []Stanza{{"Description": "short\nmore"}},
+		},
+		{
+			name: "a field with an empty name takes no continuation",
+			text: ": x\n y\nPackage: a\n",
+			want: []Stanza{{"": "x", "Package": "a"}},
+		},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -107,6 +170,36 @@ func TestReadStanzas(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestReadStanzasLongFoldedFieldTakesLinearTime: a Packages index comes from
+// the network, and a field folded over many lines must not cost time in the
+// square of its length.
+func TestReadStanzasLongFoldedFieldTakesLinearTime(t *testing.T) {
+	const continuationLines = 400_000
+	var text strings.Builder
+	text.WriteString("Package: a\nDescription: long\n")
+	for range continuationLines {
+		text.WriteString(" xx\n")
+	}
+	text.WriteString("Section: x\n")
+	start := time.Now()
+	stanzas := collectStanzas(t, text.String())
+	elapsed := time.Since(start)
+	t.Logf("reading %d continuation lines took %v", continuationLines, elapsed)
+	if elapsed > 5*time.Second {
+		t.Errorf("reading %d continuation lines took %v, want well under 5s", continuationLines, elapsed)
+	}
+	if len(stanzas) != 1 {
+		t.Fatalf("got %d stanzas, want 1", len(stanzas))
+	}
+	description := stanzas[0]["Description"]
+	if wantLength := len("long") + continuationLines*len("\nxx"); len(description) != wantLength {
+		t.Errorf("Description is %d bytes, want %d", len(description), wantLength)
+	}
+	if stanzas[0]["Section"] != "x" {
+		t.Errorf("Section = %q, want %q", stanzas[0]["Section"], "x")
 	}
 }
 
@@ -196,6 +289,60 @@ func TestReadControlEveryCompression(t *testing.T) {
 	}
 }
 
+func TestReadControlAcceptsAControlFileAtTheLimit(t *testing.T) {
+	control := controlOfSize(t, maxControlBytes)
+	got, err := ReadControl(buildDeb(t, t.TempDir(), "long.deb", ".gz", control))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Text != strings.TrimRight(control, "\n") {
+		t.Errorf("Text is %d bytes, want the %d of the control file without its final newline", len(got.Text), len(control)-1)
+	}
+}
+
+// TestReadControlRefusesALargeWindow: a .deb is read before anything checks
+// it against the lock, and a few bytes of its control archive may declare
+// the memory the decoder is to allocate.
+func TestReadControlRefusesALargeWindow(t *testing.T) {
+	controlTar := debtest.WriteTar(t, map[string]string{"control": sampleControl})
+	// A zstd frame of one raw block whose header declares a 512 MiB window,
+	// the most the decoder allows by default: magic, frame header
+	// descriptor, window descriptor, block header, block.
+	zstdFrame := []byte{0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x98}
+	zstdFrame = append(zstdFrame, byte(1|len(controlTar)<<3), byte(len(controlTar)>>5), byte(len(controlTar)>>13))
+	zstdFrame = append(zstdFrame, controlTar...)
+	// An xz stream whose one block declares a dictionary of 4 GiB - 1.
+	xzStream := withDictionaryCode(t, debtest.Compress(t, ".xz", controlTar), xzStreamHeaderBytes, 40)
+	testCases := []struct {
+		name       string
+		member     string
+		compressed []byte
+		wantErr    error
+	}{
+		{name: "zstd", member: "control.tar.zst", compressed: zstdFrame, wantErr: zstd.ErrWindowSizeExceeded},
+		{name: "xz", member: "control.tar.xz", compressed: xzStream, wantErr: ErrXZDictionaryTooLarge},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "hello.deb")
+			archive := debtest.WriteAr([]debtest.ArMember{{Name: "debian-binary", Data: []byte("2.0\n")}, {Name: testCase.member, Data: testCase.compressed}})
+			if err := os.WriteFile(path, archive, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			_, err := ReadControl(path)
+			runtime.ReadMemStats(&after)
+			if !errors.Is(err, testCase.wantErr) {
+				t.Errorf("err = %v, want %v", err, testCase.wantErr)
+			}
+			if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 16<<20 {
+				t.Errorf("allocated %d MiB, want far less than the window", allocated>>20)
+			}
+		})
+	}
+}
+
 func TestReadControlErrors(t *testing.T) {
 	dir := t.TempDir()
 	writeFile := func(name string, content []byte) string {
@@ -210,6 +357,7 @@ func TestReadControlErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	overLimit := controlOfSize(t, maxControlBytes+1)
 	testCases := []struct {
 		name        string
 		path        string
@@ -218,6 +366,11 @@ func TestReadControlErrors(t *testing.T) {
 	}{
 		{name: "not an archive", path: writeFile("text.deb", []byte("hello world, not an archive at all")), wantNotDeb: true},
 		{name: "empty file", path: writeFile("empty.deb", nil), wantNotDeb: true},
+		{
+			name:        "control file one byte over the limit",
+			path:        buildDeb(t, dir, "long.deb", ".gz", overLimit),
+			wantInError: fmt.Sprintf("larger than %d bytes", maxControlBytes),
+		},
 		{name: "truncated", path: writeFile("cut.deb", goodDeb[:len(goodDeb)/2]), wantNotDeb: true},
 		{
 			name:       "no control member",

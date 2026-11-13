@@ -5,9 +5,11 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"maps"
 	"net/http"
@@ -24,6 +26,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz"
 
+	"frostroot/internal/deb"
 	"frostroot/internal/distro"
 	"frostroot/internal/index/indextest"
 )
@@ -811,5 +814,274 @@ func TestOpenServesTheCacheWhenTheDeadlinePasses(t *testing.T) {
 	served.mutex.Unlock()
 	if _, err := Open(canceled, options); !errors.Is(err, context.Canceled) {
 		t.Errorf("Open after cancel = %v, want context.Canceled even with a cache", err)
+	}
+}
+
+// publishFile puts one compressed index in place as it is, with an
+// InRelease that lists its true size and digest and no uncompressed size.
+func (a *archive) publishFile(pocket, component, extension string, content []byte) {
+	a.t.Helper()
+	path := component + "/binary-amd64/Packages" + extension
+	digest := sha256.Sum256(content)
+	release := fmt.Sprintf("Origin: Ubuntu\nSuite: %s\nSHA256:\n %s %d %s\n", pocket, hex.EncodeToString(digest[:]), len(content), path)
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+	a.files["/dists/"+pocket+"/"+path] = content
+	a.files["/dists/"+pocket+"/InRelease"] = []byte(release)
+}
+
+// xzWithAHugeDictionary returns text compressed with xz in a block whose
+// header declares a 256 MiB dictionary, which no xz preset uses.
+func xzWithAHugeDictionary(t *testing.T, text []byte) []byte {
+	t.Helper()
+	var buffer bytes.Buffer
+	writer, err := xz.WriterConfig{DictCap: 4096}.NewWriter(&buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write(text); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The block header follows the 12-byte stream header: its size, its
+	// flags, the LZMA2 filter's ID, the size of its properties and then the
+	// dictionary's code, covered by the header's CRC32 at its end.
+	forged := buffer.Bytes()
+	header := forged[12 : 12+(int(forged[12])+1)*4]
+	if header[2] != 0x21 || header[3] != 1 {
+		t.Fatalf("block header % x is not the one LZMA2 filter this test expects", header)
+	}
+	header[4] = 32 // 2 << (32/2 + 11) bytes: 256 MiB
+	binary.LittleEndian.PutUint32(header[len(header)-4:], crc32.ChecksumIEEE(header[:len(header)-4]))
+	return forged
+}
+
+// xzOfManyDictionaries returns an xz file of 64 empty blocks, 16 bytes
+// each, that each declare a 64 MiB dictionary: no one block asks for more
+// than an xz preset uses, but together they ask for 4 GiB.
+func xzOfManyDictionaries() []byte {
+	const blockCount = 64
+	withCRC32 := func(data []byte) []byte {
+		return binary.LittleEndian.AppendUint32(data, crc32.ChecksumIEEE(data))
+	}
+	// The stream header, with no check.
+	file := append([]byte{0xfd, '7', 'z', 'X', 'Z', 0}, withCRC32([]byte{0, 0})...)
+	for range blockCount {
+		// A block header of the LZMA2 filter with dictionary code 28,
+		// 64 MiB, then LZMA2's end marker and the block's padding.
+		file = append(file, withCRC32([]byte{2, 0, 0x21, 1, 28, 0, 0, 0})...)
+		file = append(file, 0, 0, 0, 0)
+	}
+	// The index: each record is the unpadded size, 12 + 1, and the
+	// uncompressed size, 0, padded to four bytes.
+	index := binary.AppendUvarint([]byte{0}, blockCount)
+	for range blockCount {
+		index = append(index, 13, 0)
+	}
+	index = withCRC32(append(index, make([]byte, (4-len(index)%4)%4)...))
+	file = append(file, index...)
+	footerFields := append(binary.LittleEndian.AppendUint32(nil, uint32(len(index)/4-1)), 0, 0)
+	file = binary.LittleEndian.AppendUint32(file, crc32.ChecksumIEEE(footerFields))
+	return append(append(file, footerFields...), 'Y', 'Z')
+}
+
+// TestOpenRefusesAnXZIndexOfManyDictionaries: a file whose blocks together
+// declare more dictionary than they hold data is refused by deb's reader,
+// and will be refused again, so it is not a file that changed while it was
+// fetched, and is not asked for twice.
+func TestOpenRefusesAnXZIndexOfManyDictionaries(t *testing.T) {
+	served := newArchive(t, ".xz")
+	served.publishFile("noble", "main", ".xz", xzOfManyDictionaries())
+	delete(served.files, "/dists/noble-updates/InRelease")
+	_, err := Open(context.Background(), optionsFor(t, served))
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, deb.ErrXZDictionariesTooLarge) {
+		t.Fatalf("Open = %v, want ErrUnavailable wrapping deb.ErrXZDictionariesTooLarge", err)
+	}
+	if errors.Is(err, errChanged) {
+		t.Errorf("err = %v; refused dictionaries are not a file that changed", err)
+	}
+	if got := served.served["/dists/noble/main/binary-amd64/Packages.xz"]; got != 1 {
+		t.Errorf("the index was asked for %d times, want once", got)
+	}
+}
+
+// TestOpenRefusesAnXZIndexWithAHugeDictionary: the xz library allocates the
+// dictionary a block declares, up to 4 GiB, before it decodes a byte, and
+// an index whose Release came unsigned over plain http could declare one in
+// a file of a few hundred bytes. The file here matches its size and digest
+// and declares 256 MiB, which no xz preset uses.
+func TestOpenRefusesAnXZIndexWithAHugeDictionary(t *testing.T) {
+	served := newArchive(t, ".xz")
+	forged := xzWithAHugeDictionary(t, []byte("Package: git\nVersion: 1\n\n"))
+	served.publishFile("noble", "main", ".xz", forged)
+	delete(served.files, "/dists/noble-updates/InRelease")
+	options := optionsFor(t, served)
+
+	var heapBefore, heapAfter runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&heapBefore)
+	_, err := Open(context.Background(), options)
+	runtime.ReadMemStats(&heapAfter)
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, deb.ErrXZDictionaryTooLarge) {
+		t.Fatalf("Open = %v, want ErrUnavailable wrapping deb.ErrXZDictionaryTooLarge", err)
+	}
+	if !strings.Contains(err.Error(), "dictionary") {
+		t.Errorf("err = %v, want it to name the dictionary", err)
+	}
+	if allocated := heapAfter.TotalAlloc - heapBefore.TotalAlloc; allocated > 32<<20 {
+		t.Errorf("Open allocated %d MB for an index of %d bytes", allocated>>20, len(forged))
+	}
+	// A file that declares too large a dictionary will declare it again: it
+	// is not a file that changed while it was fetched.
+	if errors.Is(err, errChanged) {
+		t.Errorf("err = %v; a refused dictionary is not a file that changed", err)
+	}
+	if got := served.served["/dists/noble/main/binary-amd64/Packages.xz"]; got != 1 {
+		t.Errorf("the index was asked for %d times, want once", got)
+	}
+}
+
+// TestOpenStopsParsingWhenTheContextEnds: a gzipped index of a million
+// stanzas is tens of kilobytes, wholly read before its parse is far along,
+// so the parse never read the body again and ended only when the text did:
+// a source's twenty seconds, or Ctrl-C, waited for it. The context is
+// canceled here once the last byte of the file has arrived, and the parse
+// must stop at the next stanza rather than keep every package of the rest.
+func TestOpenStopsParsingWhenTheContextEnds(t *testing.T) {
+	served := newArchive(t, ".gz")
+	text := []byte(strings.Repeat("Package: filler\nVersion: 1\n\n", 1_000_000))
+	served.publishTexts("noble", ".gz", map[string][]byte{"main": text}, func(text []byte) int64 { return int64(len(text)) })
+	delete(served.files, "/dists/noble-updates/InRelease")
+	options := optionsFor(t, served)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	options.Progress = func(done, total int64) {
+		if done == total {
+			cancel()
+		}
+	}
+
+	var heapBefore, heapAfter runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&heapBefore)
+	_, err := Open(ctx, options)
+	runtime.ReadMemStats(&heapAfter)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Open = %v, want context.Canceled", err)
+	}
+	// A parse that went on kept a million entries, and built a stanza for
+	// each, hundreds of megabytes; one that stopped built a few.
+	if allocated := heapAfter.TotalAlloc - heapBefore.TotalAlloc; allocated > 64<<20 {
+		t.Errorf("Open allocated %d MB after its context ended: the parse went on", allocated>>20)
+	}
+}
+
+// TestOpenFailsAPocketWhoseReleaseFails: a pocket is missing only when both
+// InRelease and Release answer 404. A mirror without InRelease whose
+// Release answered 503 was taken for one without -updates: the form offered
+// git 1:2.43.0-1ubuntu7 while -updates had 1:2.43.0-1ubuntu7.3, reported
+// nothing missing, and cached that index as whole for a week.
+func TestOpenFailsAPocketWhoseReleaseFails(t *testing.T) {
+	for _, pocket := range []string{"noble", "noble-updates"} {
+		for name, failing := range map[string]string{
+			"InRelease 404, Release 503": "Release",
+			"InRelease 503, Release 404": "InRelease",
+		} {
+			t.Run(pocket+", "+name, func(t *testing.T) {
+				served := newArchive(t, ".gz")
+				delete(served.files, "/dists/"+pocket+"/InRelease")
+				served.intercept = func(writer http.ResponseWriter, request *http.Request) bool {
+					if request.URL.Path != "/dists/"+pocket+"/"+failing {
+						return false
+					}
+					http.Error(writer, "busy", http.StatusServiceUnavailable)
+					return true
+				}
+				options := optionsFor(t, served)
+				_, err := Open(context.Background(), options)
+				if !errors.Is(err, ErrUnavailable) || errors.Is(err, errNotFound) || !strings.Contains(fmt.Sprint(err), "503") {
+					t.Fatalf("Open = %v, want ErrUnavailable naming the 503, not a pocket that is not there", err)
+				}
+				if _, err := os.Stat(cachePath(options, archiveTarget(options))); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("an index without %s was cached: %v", pocket, err)
+				}
+			})
+		}
+	}
+}
+
+// TestOpenRefetchesACacheDatedLaterThanTheClock: a cache written while the
+// clock was ahead had a negative age, which is less than any MaxAge, so it
+// stayed fresh until the clock passed its date and a week besides, and
+// Describe said "fetched just now" of it all along.
+func TestOpenRefetchesACacheDatedLaterThanTheClock(t *testing.T) {
+	served := newArchive(t, ".gz")
+	options := optionsFor(t, served)
+	if _, err := Open(context.Background(), options); err != nil {
+		t.Fatal(err)
+	}
+	options.Now = func() time.Time { return testNow.Add(-3 * time.Hour) }
+
+	// Offline it is still the only index there is, and it says what is true.
+	offline := options
+	offline.Offline = true
+	opened, err := Open(context.Background(), offline)
+	if err != nil {
+		t.Fatalf("offline with a cache dated later than the clock: %v", err)
+	}
+	if got := opened.Describe(); got != "noble · 17 packages · fetched later than this clock's time" {
+		t.Errorf("Describe = %q", got)
+	}
+
+	before := served.requests()
+	refetched, err := Open(context.Background(), options)
+	if err != nil || served.requests() == before {
+		t.Fatalf("a cache dated later than the clock: err %v, %d new requests, want a fetch", err, served.requests()-before)
+	}
+	if got := refetched.Describe(); !strings.HasSuffix(got, "fetched just now") {
+		t.Errorf("Describe = %q after the refetch", got)
+	}
+	// The refetch dated the cache by this clock, so it is fresh again.
+	before = served.requests()
+	if _, err := Open(context.Background(), options); err != nil || served.requests() != before {
+		t.Errorf("the refetched cache: err %v, %d new requests, want none", err, served.requests()-before)
+	}
+}
+
+// TestOpenRefusesAnIndexOfTooManyPackages: the text an index may expand to
+// is bounded, but every stanza in it became an entry that was kept, and an
+// entry of a stanza that names a package and nothing else costs about
+// twenty-five times its text: the bound let one file keep gigabytes. The
+// bound on entries is lowered here so that a small index reaches it.
+func TestOpenRefusesAnIndexOfTooManyPackages(t *testing.T) {
+	stanzas := func(count int) []byte {
+		var text strings.Builder
+		for number := range count {
+			fmt.Fprintf(&text, "Package: p%07d\n\n", number)
+		}
+		return []byte(text.String())
+	}
+	served := newArchive(t, ".gz")
+	served.publishTexts("noble", ".gz", map[string][]byte{"main": stanzas(11)}, func(text []byte) int64 { return int64(len(text)) })
+	delete(served.files, "/dists/noble-updates/InRelease")
+	options := optionsFor(t, served)
+	options.maxEntries = 10
+	_, err := Open(context.Background(), options)
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, errTooLarge) || errors.Is(err, errChanged) {
+		t.Fatalf("Open = %v, want ErrUnavailable wrapping errTooLarge alone", err)
+	}
+	if !strings.Contains(err.Error(), "more than any archive has") {
+		t.Errorf("err = %v, want it to say the index lists more packages than any archive has", err)
+	}
+	if got := served.served["/dists/noble/main/binary-amd64/Packages.gz"]; got != 1 {
+		t.Errorf("the index was asked for %d times, want once", got)
+	}
+
+	// As many as the bound allows open.
+	served.publishTexts("noble", ".gz", map[string][]byte{"main": stanzas(10)}, func(text []byte) int64 { return int64(len(text)) })
+	if opened, err := Open(context.Background(), options); err != nil || opened.Len() != 10 {
+		t.Errorf("Open of 10 packages with a bound of 10 = %v, %v; want all 10", opened, err)
 	}
 }

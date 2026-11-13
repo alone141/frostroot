@@ -167,6 +167,47 @@ func TestValidateSources(t *testing.T) {
 	}
 }
 
+// Apt stops at mmdebstrap's first update when one URL and suite reach it
+// on two lines with different signed-by values, so validate refuses what
+// the build would only find out once it had started.
+func TestValidateRefusesARepositoryAptWouldSeeTwice(t *testing.T) {
+	llvm := Source{Name: "llvm", URL: "https://apt.llvm.org/jammy", Suite: "llvm-toolchain-jammy", Key: "keys/llvm.asc"}
+	testCases := []struct {
+		name        string
+		sources     []Source
+		wantMessage string
+	}{
+		{"one url and suite twice", []Source{llvm, {Name: "llvm-two", URL: "https://apt.llvm.org/jammy", Suite: "llvm-toolchain-jammy", Components: []string{"other"}, Key: "keys/two.asc"}}, "is sources[0] again"},
+		{"a trailing slash is the same url", []Source{llvm, {Name: "llvm-two", URL: "https://apt.llvm.org/jammy/", Suite: "llvm-toolchain-jammy", Key: "keys/llvm.asc"}}, "is sources[0] again"},
+		// valid.toml is 22.04, so an empty suite is jammy.
+		{"an empty suite is the release's", []Source{{Name: "a", URL: "https://x.example/ubuntu", Key: "keys/a.asc"}, {Name: "b", URL: "https://x.example/ubuntu", Suite: "jammy", Key: "keys/b.asc"}}, "is sources[0] again"},
+		{"the archive's release pocket", []Source{{Name: "archive", URL: "http://archive.ubuntu.com/ubuntu", Key: "keys/a.asc"}}, "Ubuntu's archive"},
+		{"the archive's updates pocket", []Source{{Name: "archive", URL: "http://archive.ubuntu.com/ubuntu/", Suite: "jammy-updates", Key: "keys/a.asc"}}, "Ubuntu's archive"},
+		{"the archive's security pocket", []Source{{Name: "archive", URL: "http://archive.ubuntu.com/ubuntu", Suite: "jammy-security", Key: "keys/a.asc"}}, "Ubuntu's archive"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			imageRecipe := loadValidRecipe(t)
+			imageRecipe.Sources = testCase.sources
+			problems := Validate(imageRecipe)
+			if len(problems) != 1 || !strings.Contains(problems[0], testCase.wantMessage) {
+				t.Fatalf("Validate = %q, want one problem mentioning %q", problems, testCase.wantMessage)
+			}
+		})
+	}
+	// One URL with two suites is two repositories, and the archive's URL
+	// with a suite that is none of its pockets is not the archive's.
+	imageRecipe := loadValidRecipe(t)
+	imageRecipe.Sources = []Source{
+		llvm,
+		{Name: "llvm-18", URL: "https://apt.llvm.org/jammy", Suite: "llvm-toolchain-jammy-18", Key: "keys/llvm.asc"},
+		{Name: "proposed", URL: "http://archive.ubuntu.com/ubuntu", Suite: "jammy-proposed", Key: "keys/p.asc"},
+	}
+	if problems := Validate(imageRecipe); len(problems) != 0 {
+		t.Errorf("distinct repositories: Validate = %q, want no problems", problems)
+	}
+}
+
 // A refusal is printed to a terminal, kept in a CI log, and quoted in
 // capture's report, which sits beside a recipe people commit: it must name
 // the URL without repeating the secret it refuses.
@@ -239,6 +280,144 @@ func TestCredentialRefusalsOfOtherwiseBadURLsDoNotQuoteTheSecret(t *testing.T) {
 	}
 	if err := CheckPythonIndexURL("https://nexus.example/repository/pypi/simple"); err != nil {
 		t.Errorf("a plain index URL is refused: %v", err)
+	}
+}
+
+// credentialsNetURLMisses are URLs that carry a password, s3cret with a "?"
+// or "#" in it, where net/url sees no userinfo or no URL at all: it ends the
+// authority at the first "?" or "#", while apt ends it only at the first "/"
+// and takes the last "@" before that as the end of user:password. The last
+// two have no "//" or no scheme, and are refused anyway, but quoting them
+// whole would print the password.
+var credentialsNetURLMisses = map[string]string{
+	"https://deploy:12?s3cret@apt.example/ubuntu":  "https://REDACTED@apt.example/ubuntu",
+	"https://deploy:pa?s3cret@apt.example/ubuntu":  "https://REDACTED@apt.example/ubuntu",
+	"https://deploy:pa#s3cret@apt.example/ubuntu":  "https://REDACTED@apt.example/ubuntu",
+	"user:s3cret@mirror.example.com/ubuntu":        "REDACTED@mirror.example.com/ubuntu",
+	"https:/user:s3cret@mirror.example.com/ubuntu": "https:/REDACTED@mirror.example.com/ubuntu",
+}
+
+func TestCredentialsNetURLDoesNotSeeAreRefusedAndRedacted(t *testing.T) {
+	for raw, want := range credentialsNetURLMisses {
+		if got := RedactURLCredentials(raw); got != want {
+			t.Errorf("RedactURLCredentials(%q) = %q, want %q", raw, got, want)
+		}
+		refusals := map[string]error{
+			"source url":       CheckSourceURL(raw),
+			"python index_url": CheckPythonIndexURL(raw),
+		}
+		for name, err := range refusals {
+			if err == nil {
+				t.Errorf("%s %q: no refusal", name, raw)
+				continue
+			}
+			if strings.Contains(err.Error(), "s3cret") {
+				t.Errorf("%s: the refusal quotes the secret: %v", name, err)
+			}
+			if !strings.Contains(err.Error(), "credentials") || !strings.Contains(err.Error(), "REDACTED@") {
+				t.Errorf("%s %q: the refusal should say the URL carries credentials: %v", name, raw, err)
+			}
+		}
+	}
+	// An "@" after the first "/" is in the path or the query, not a
+	// userinfo, for apt as for net/url.
+	for _, plain := range []string{"https://host.example/path@x", "https://host.example/a?b=c@d", "host.example/path", "mirror.example.com/ubuntu"} {
+		if got := RedactURLCredentials(plain); got != plain {
+			t.Errorf("RedactURLCredentials(%q) = %q, want it unchanged", plain, got)
+		}
+		if hasURLCredentials(plain) {
+			t.Errorf("hasURLCredentials(%q) = true", plain)
+		}
+	}
+	if err := CheckSourceURL("https://host.example/path@x"); err != nil {
+		t.Errorf("a path with an @ is refused: %v", err)
+	}
+}
+
+// url.Parse accepts both of these, but apt has no method named "HTTPS",
+// and apt and pip both append a path to the URL, which lands inside a
+// query. The refusal names the rule, never the query's text, which is
+// where a repository token usually goes.
+func TestURLChecksRefuseAQueryAndAnUpperCaseScheme(t *testing.T) {
+	refusals := map[string]struct {
+		err      error
+		wantText string
+	}{
+		"source url, query":             {CheckSourceURL("https://repo.example/ubuntu?token=t0ken"), "query"},
+		"source url, empty query":       {CheckSourceURL("https://repo.example/ubuntu?"), "query"},
+		"source url, upper case":        {CheckSourceURL("HTTPS://repo.example/ubuntu"), "lower case"},
+		"source url, mixed case":        {CheckSourceURL("Http://repo.example/ubuntu"), "lower case"},
+		"source url, both":              {CheckSourceURL("HTTPS://repo.example/ubuntu?token=t0ken"), "lower case"},
+		"python index_url, query":       {CheckPythonIndexURL("https://nexus.example/simple?token=t0ken"), "query"},
+		"python index_url, empty query": {CheckPythonIndexURL("https://nexus.example/simple/?"), "query"},
+		"python index_url, upper case":  {CheckPythonIndexURL("HTTPS://nexus.example/simple"), "lower case"},
+	}
+	for name, refusal := range refusals {
+		if refusal.err == nil {
+			t.Errorf("%s: no refusal", name)
+			continue
+		}
+		if !strings.Contains(refusal.err.Error(), refusal.wantText) {
+			t.Errorf("%s: the refusal should say %q: %v", name, refusal.wantText, refusal.err)
+		}
+		if strings.Contains(refusal.err.Error(), "t0ken") {
+			t.Errorf("%s: the refusal quotes the query: %v", name, refusal.err)
+		}
+	}
+}
+
+// queryOrFragmentShapes are URLs refused for something before their query,
+// or for their fragment, whose refusal quoted them whole, the token after
+// "?" or "#" with them.
+var queryOrFragmentShapes = []string{
+	"https://host.example/x?token=s3cret#frag",
+	"https://host.example/x?token=s3 cret",
+	"https://host.example/x?token=[s3cret]",
+	"ftp://host.example/x?token=s3cret",
+	"https:///x?token=s3cret",
+	"https://host.example/%zz?token=s3cret",
+	"host.example/x?token=s3cret",
+	"https://host.example/x#s3cret",
+	"https://user:pw@host.example/x?token=s3cret",
+}
+
+// TestURLRefusalsQuoteNothingOfAQueryOrFragment: a refusal quotes the URL
+// up to its "?" or "#" and nothing after it; a URL with neither is quoted
+// as it was.
+func TestURLRefusalsQuoteNothingOfAQueryOrFragment(t *testing.T) {
+	for _, shape := range queryOrFragmentShapes {
+		for name, err := range map[string]error{
+			"source url":       CheckSourceURL(shape),
+			"python index_url": CheckPythonIndexURL(shape),
+		} {
+			if err == nil {
+				t.Errorf("%s %q: no refusal", name, shape)
+				continue
+			}
+			if strings.Contains(err.Error(), "s3") || strings.Contains(err.Error(), "frag") {
+				t.Errorf("%s %q: the refusal quotes what follows the ? or #: %v", name, shape, err)
+			}
+		}
+	}
+	if err := CheckPythonIndexURL("http://host.example/x?token=s3cret"); err == nil || strings.Contains(err.Error(), "s3cret") {
+		t.Errorf("an http index_url with a query: %v, want a refusal that does not quote the query", err)
+	}
+	if err := CheckSourceURL("ftp://host.example/x"); err == nil || !strings.Contains(err.Error(), `"ftp://host.example/x"`) {
+		t.Errorf("a URL with no query: %v, want it quoted whole", err)
+	}
+}
+
+func TestRedactURL(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://host.example/x":                    "https://host.example/x",
+		"https://host.example/x?token=s3cret":       "https://host.example/x?REDACTED",
+		"https://host.example/x#s3cret?y":           "https://host.example/x#REDACTED",
+		"https://u:p@host.example/x?token=s3cret":   "https://REDACTED@host.example/x?REDACTED",
+		"https://deploy:12?s3cret@host.example/x?q": "https://REDACTED@host.example/x?REDACTED",
+	} {
+		if got := RedactURL(raw); got != want {
+			t.Errorf("RedactURL(%q) = %q, want %q", raw, got, want)
+		}
 	}
 }
 

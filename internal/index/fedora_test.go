@@ -17,7 +17,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	"frostroot/internal/deb"
 	"frostroot/internal/distro"
 )
 
@@ -82,7 +84,13 @@ func readTestdata(t *testing.T, name string) []byte {
 // true size.
 func (m *fedoraMirror) publish(repositoryPath string, text []byte, extension string, openSize int64) (primaryPath string) {
 	m.t.Helper()
-	content := compress(m.t, extension, text)
+	return m.publishFile(repositoryPath, compress(m.t, extension, text), text, extension, openSize)
+}
+
+// publishFile puts content in place as it is, as the primary metadata
+// compressed as extension says, whose text is text.
+func (m *fedoraMirror) publishFile(repositoryPath string, content, text []byte, extension string, openSize int64) (primaryPath string) {
+	m.t.Helper()
 	digest := sha256.Sum256(content)
 	openDigest := sha256.Sum256(text)
 	if openSize == 0 {
@@ -423,6 +431,97 @@ func TestOpenFedoraFetchesNothingRepomdCannotVouchFor(t *testing.T) {
 	}
 }
 
+// TestOpenFedoraRefusesAnXZPrimaryWithAHugeDictionary: repomd.xml is read
+// unsigned, so it may name a primary.xml.xz of a few hundred bytes whose
+// block declares a dictionary of gigabytes, which the xz library allocated
+// before it decoded a byte. The file here matches its size and digest and
+// declares 256 MiB, which no xz preset uses.
+func TestOpenFedoraRefusesAnXZPrimaryWithAHugeDictionary(t *testing.T) {
+	mirror := newFedoraMirror(t, ".xz")
+	options := fedoraOptions(t)
+	text := readTestdata(t, "fedora-44.primary.xml")
+	primary := mirror.publishFile(fedoraReleasePath, xzWithAHugeDictionary(t, text), text, ".xz", 0)
+
+	var heapBefore, heapAfter runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&heapBefore)
+	_, err := OpenFedora(context.Background(), options, mirror.release())
+	runtime.ReadMemStats(&heapAfter)
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, deb.ErrXZDictionaryTooLarge) {
+		t.Fatalf("OpenFedora = %v, want ErrUnavailable wrapping deb.ErrXZDictionaryTooLarge", err)
+	}
+	if allocated := heapAfter.TotalAlloc - heapBefore.TotalAlloc; allocated > 32<<20 {
+		t.Errorf("OpenFedora allocated %d MB for primary metadata of %d bytes", allocated>>20, len(mirror.files[primary]))
+	}
+	// A file that declares too large a dictionary will declare it again: it
+	// is not a repository republished between two requests.
+	if errors.Is(err, errChanged) {
+		t.Errorf("err = %v; a refused dictionary is not a file that changed", err)
+	}
+	if got := mirror.requestsFor(primary); got != 1 {
+		t.Errorf("the primary metadata was asked for %d times, want once", got)
+	}
+}
+
+// TestOpenFedoraRefusesAnXZPrimaryOfManyDictionaries: blocks that together
+// declare more dictionary than they hold data will be refused again, so
+// they are not a repository republished between two requests.
+func TestOpenFedoraRefusesAnXZPrimaryOfManyDictionaries(t *testing.T) {
+	mirror := newFedoraMirror(t, ".xz")
+	primary := mirror.publishFile(fedoraReleasePath, xzOfManyDictionaries(), nil, ".xz", 0)
+	_, err := OpenFedora(context.Background(), fedoraOptions(t), mirror.release())
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, deb.ErrXZDictionariesTooLarge) {
+		t.Fatalf("OpenFedora = %v, want ErrUnavailable wrapping deb.ErrXZDictionariesTooLarge", err)
+	}
+	if errors.Is(err, errChanged) {
+		t.Errorf("err = %v; refused dictionaries are not a file that changed", err)
+	}
+	if got := mirror.requestsFor(primary); got != 1 {
+		t.Errorf("the primary metadata was asked for %d times, want once", got)
+	}
+}
+
+// TestOpenFedoraRefusesAPrimaryOfTooManyPackages: every name the primary
+// metadata lists for this architecture was kept until the parse ended, and
+// only its text was bounded, as for an apt index. The bound on names is
+// lowered here so that a small primary reaches it. Versions of a name
+// already kept do not count.
+func TestOpenFedoraRefusesAPrimaryOfTooManyPackages(t *testing.T) {
+	primary := func(count int) []byte {
+		var text strings.Builder
+		text.WriteString(`<metadata>`)
+		for number := range count {
+			for _, version := range []string{"1", "2"} {
+				fmt.Fprintf(&text, `<package type="rpm"><name>p%07d</name><arch>noarch</arch><version ver="%s" rel="1"/></package>`, number, version)
+			}
+		}
+		text.WriteString(`</metadata>`)
+		return []byte(text.String())
+	}
+	mirror := newFedoraMirror(t, ".zst")
+	path := mirror.publish(fedoraReleasePath, primary(11), ".zst", 0)
+	release := mirror.release()
+	release.Repositories = release.Repositories[:1]
+	options := fedoraOptions(t)
+	options.maxEntries = 10
+	_, err := OpenFedora(context.Background(), options, release)
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, errTooLarge) || errors.Is(err, errChanged) {
+		t.Fatalf("OpenFedora = %v, want ErrUnavailable wrapping errTooLarge alone", err)
+	}
+	if !strings.Contains(err.Error(), "more than any archive has") {
+		t.Errorf("err = %v, want it to say the primary lists more packages than any archive has", err)
+	}
+	if got := mirror.requestsFor(path); got != 1 {
+		t.Errorf("the primary metadata was asked for %d times, want once", got)
+	}
+
+	// As many as the bound allows open.
+	mirror.publish(fedoraReleasePath, primary(10), ".zst", 0)
+	if opened, err := OpenFedora(context.Background(), options, release); err != nil || opened.Len() != 10 {
+		t.Errorf("OpenFedora of 10 packages with a bound of 10 = %v, %v; want all 10", opened, err)
+	}
+}
+
 func TestOpenFedoraStopsWhenTheContextEnds(t *testing.T) {
 	mirror := newFedoraMirror(t, ".zst")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -443,7 +542,7 @@ func TestReducePrimary(t *testing.T) {
 			`<format><rpm:provides><rpm:entry name="` + name + `"/></rpm:provides><file>/usr/bin/` + name + `</file></format></package>`
 	}
 	t.Run("what is kept", func(t *testing.T) {
-		entries, err := reducePrimary(strings.NewReader(document(
+		entries, err := reducePrimary(context.Background(), maxIndexEntries, strings.NewReader(document(
 			rpm("tool", "x86_64", `<version epoch="0" ver="1.10" rel="1.fc44"/>`, "the newer"),
 			rpm("tool", "x86_64", `<version epoch="0" ver="1.9" rel="3.fc44"/>`, "the older, listed after it"),
 			rpm("tool", "i686", `<version epoch="0" ver="2.0" rel="1.fc44"/>`, "another architecture"),
@@ -471,10 +570,155 @@ func TestReducePrimary(t *testing.T) {
 		"an unclosed quote": `<metadata><package type="rpm><name>git</name></package></metadata>`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if entries, err := reducePrimary(strings.NewReader(text)); err == nil {
+			if entries, err := reducePrimary(context.Background(), maxIndexEntries, strings.NewReader(text)); err == nil {
 				t.Errorf("reducePrimary = %+v, want an error", entries)
 			}
 		})
+	}
+}
+
+// TestReducePrimaryJoinsAFieldGivenInPieces: a comment splits an element's
+// text into several CharData tokens, and the field is all of them, trimmed
+// and made one line as a whole.
+func TestReducePrimaryJoinsAFieldGivenInPieces(t *testing.T) {
+	entries, err := reducePrimary(context.Background(), maxIndexEntries, strings.NewReader(`<metadata>`+
+		`<package type="rpm"><name> <!---->gi<!-- a comment -->t<!----> </name><arch>x86<!---->_64</arch>`+
+		`<version ver="1" rel="1"/><summary> the <!---->`+"\t"+`summary <!----> </summary></package>`+
+		`<package type="rpm"><name>tool</name><arch> noarch <!----></arch><version ver="2" rel="1"/></package>`+
+		`</metadata>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Entry{
+		{Name: "git", Version: "1-1", Description: "the  summary"},
+		{Name: "tool", Version: "2-1"},
+	}
+	if !slices.Equal(entries, want) {
+		t.Errorf("entries =\n%+v\nwant\n%+v", entries, want)
+	}
+}
+
+// TestReducePrimaryReadsAFieldOfManyPiecesInLinearTime: every CharData
+// between two comments was added to a string, which copied all of it each
+// time, so a name of n pieces cost n²/2 bytes: 200,000 pieces, 1.6 MB that
+// compress to almost nothing, took four and a half seconds. A name that
+// long is refused, and a summary that long is cut, as one in one piece.
+func TestReducePrimaryReadsAFieldOfManyPiecesInLinearTime(t *testing.T) {
+	const pieces = 100_000
+	split := strings.Repeat("a<!---->", pieces)
+	document := `<metadata>` +
+		`<package type="rpm"><name>` + split + `</name><arch>noarch</arch><version ver="1" rel="1"/></package>` +
+		`<package type="rpm"><name>tool</name><arch>noarch</arch><version ver="1" rel="1"/><summary>` + split + `</summary></package>` +
+		`</metadata>`
+	var heapBefore, heapAfter runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&heapBefore)
+	entries, err := reducePrimary(context.Background(), maxIndexEntries, strings.NewReader(document))
+	runtime.ReadMemStats(&heapAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Entry{{Name: "tool", Version: "1-1", Description: strings.Repeat("a", maxDescriptionBytes)}}
+	if !slices.Equal(entries, want) {
+		t.Errorf("entries = %+v, want only tool, its summary cut", entries)
+	}
+	// Copying the name for every piece allocates about 5 GB.
+	if allocated := heapAfter.TotalAlloc - heapBefore.TotalAlloc; allocated > 128<<20 {
+		t.Errorf("reducePrimary allocated %d MB for %d bytes of XML", allocated>>20, len(document))
+	}
+}
+
+// TestFieldTextKeepsWhatOneLineMakesOfTheWhole: a field added piece by
+// piece comes to what oneLine, or TrimSpace for the arch, made of all of
+// it, cut as cutField cut that, though it keeps no more than its limit.
+func TestFieldTextKeepsWhatOneLineMakesOfTheWhole(t *testing.T) {
+	const limit = 8
+	testCases := [][]string{
+		{},
+		{"   "},
+		{" a", "b ", " c "},
+		{"\t a\x01b\u009b\r\n", "\u00a0c\u00a0"},
+		{"abcdefgh"},
+		{"abcdefgh", "   "},
+		{"abcdefgh", " ", "i"},
+		{"a", strings.Repeat(" ", 20)},
+		{"a", strings.Repeat(" ", 20), "b"},
+		{"a", strings.Repeat("\t", 20), "b", "c"},
+		{"abcdéfgh", "ij"},
+		{"abcdefgé", " "},
+		{"abcdefg", "éh"},
+		{"\xff\xfe", "a"},
+		{strings.Repeat("x", 100), "y"},
+	}
+	for _, asLine := range []bool{true, false} {
+		for _, pieces := range testCases {
+			field := fieldText{limit: limit, asLine: asLine}
+			for _, piece := range pieces {
+				field.add([]byte(piece))
+			}
+			whole := strings.Join(pieces, "")
+			want := strings.TrimSpace(whole)
+			if asLine {
+				want = oneLine(whole)
+			}
+			if field.tooLong != (len(want) > limit) {
+				t.Errorf("asLine %v, %q: tooLong = %v, want %v", asLine, pieces, field.tooLong, len(want) > limit)
+			}
+			if got := cutField(field.String(), limit); got != cutField(want, limit) {
+				t.Errorf("asLine %v, %q: cut = %q, want %q", asLine, pieces, got, cutField(want, limit))
+			}
+			if !field.tooLong && field.String() != want {
+				t.Errorf("asLine %v, %q: String = %q, want %q", asLine, pieces, field.String(), want)
+			}
+			if len(field.text) > limit+utf8.UTFMax {
+				t.Errorf("asLine %v, %q: kept %d bytes, more than the limit needs", asLine, pieces, len(field.text))
+			}
+		}
+	}
+}
+
+// TestReducePrimaryStopsWhenTheContextEnds: the parse ended only when the
+// text did, so Ctrl-C and a deadline waited for all of it.
+func TestReducePrimaryStopsWhenTheContextEnds(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	document := `<metadata>` + strings.Repeat(`<package type="rpm"><name>filler</name><arch>noarch</arch><version ver="1" rel="1"/></package>`, 10_000) + `</metadata>`
+	if entries, err := reducePrimary(ctx, maxIndexEntries, strings.NewReader(document)); !errors.Is(err, context.Canceled) {
+		t.Errorf("reducePrimary = %d entries, %v; want context.Canceled", len(entries), err)
+	}
+}
+
+// TestOpenFedoraStopsParsingWhenTheContextEnds: a gzipped primary.xml of
+// half a million packages is tens of kilobytes, wholly read before its parse
+// is far along, so no read of the body noticed that the context ended. The
+// context is canceled here once the last byte of the file has arrived.
+func TestOpenFedoraStopsParsingWhenTheContextEnds(t *testing.T) {
+	mirror := newFedoraMirror(t, ".gz")
+	text := []byte(`<metadata>` + strings.Repeat(`<package type="rpm"><name>filler</name><arch>noarch</arch><version ver="1" rel="1"/></package>`+"\n", 500_000) + `</metadata>`)
+	mirror.publish(fedoraReleasePath, text, ".gz", 0)
+	release := mirror.release()
+	release.Repositories = release.Repositories[:1]
+	options := fedoraOptions(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	options.Progress = func(done, total int64) {
+		if done == total {
+			cancel()
+		}
+	}
+
+	var heapBefore, heapAfter runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&heapBefore)
+	_, err := OpenFedora(ctx, options, release)
+	runtime.ReadMemStats(&heapAfter)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("OpenFedora = %v, want context.Canceled", err)
+	}
+	// A parse that went on read every package's tokens, hundreds of
+	// megabytes of them; one that stopped read a few thousand.
+	if allocated := heapAfter.TotalAlloc - heapBefore.TotalAlloc; allocated > 64<<20 {
+		t.Errorf("OpenFedora allocated %d MB after its context ended: the parse went on", allocated>>20)
 	}
 }
 

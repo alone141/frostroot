@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
@@ -54,9 +53,9 @@ func readSourceKeys(recipeDir string, sources []recipe.Source) (map[string]sourc
 		if err := recipe.CheckKeyPath(source.Key); err != nil {
 			return nil, fmt.Errorf("%w: source %s: %w", ErrSourceKey, source.Name, err)
 		}
-		data, err := os.ReadFile(recipe.KeyPath(recipeDir, source))
+		data, err := recipe.ReadKeyFile(recipeDir, source.Key)
 		if err != nil {
-			return nil, fmt.Errorf("%w: source %s: %w", ErrSourceKey, source.Name, err)
+			return nil, fmt.Errorf("%w: source %s: %s: %w", ErrSourceKey, source.Name, source.Key, err)
 		}
 		key, err := pgp.ParsePublicKey(data)
 		if err != nil {

@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // testdataPath returns the path of a fixture in the repository's testdata
@@ -59,6 +60,56 @@ func TestLoadRejectsUnknownField(t *testing.T) {
 	for _, wantText := range []string{"unknown-field.toml", "[package]"} {
 		if !strings.Contains(err.Error(), wantText) {
 			t.Errorf("error should mention %s: %v", wantText, err)
+		}
+	}
+}
+
+// A decode error quotes the offending lines, and a lock is hostile input:
+// what a file holds must not reach the terminal as an escape sequence, and
+// the person must still see where it is.
+func TestDecodeErrorsEscapeControlCharacters(t *testing.T) {
+	testCases := []struct {
+		name    string
+		content string
+		want    []string // what the message must show of the hostile bytes
+	}{
+		// ESC and BEL are not allowed raw in a TOML string, so go-toml
+		// stops there and quotes the line.
+		{"syntax error", "version = 1\nname = \"a\x1b]0;pwned\a\x1b[2Jb\"\n", []string{`\x1b]0;pwned\x07\x1b[2Jb`}},
+		// TOML allows C1 characters in a string, so this one decodes and
+		// the unknown field's context quotes it.
+		{"unknown field", "version = 1\nsurprise = \"x\u009b2Jy\"\n", []string{`x\x9b2Jy`}},
+		{"invalid UTF-8", "version = 1\nname = \"a\xffb\"\n", []string{`a\xffb`}},
+	}
+	loaders := map[string]func(string) error{
+		"Load":     func(path string) error { _, err := Load(path); return err },
+		"LoadLock": func(path string) error { _, err := LoadLock(path); return err },
+	}
+	for loaderName, load := range loaders {
+		for _, testCase := range testCases {
+			t.Run(loaderName+" "+testCase.name, func(t *testing.T) {
+				err := load(writeRecipeFile(t, testCase.content))
+				if err == nil {
+					t.Fatal("loading succeeded, want an error")
+				}
+				message := err.Error()
+				for _, character := range message {
+					if (character < 0x20 && character != '\n' && character != '\t') || (character >= 0x7f && character <= 0x9f) {
+						t.Fatalf("message holds control character %U:\n%s", character, message)
+					}
+				}
+				if !utf8.ValidString(message) {
+					t.Fatalf("message is not UTF-8:\n%q", message)
+				}
+				for _, want := range testCase.want {
+					if !strings.Contains(message, want) {
+						t.Errorf("message does not show %s:\n%s", want, message)
+					}
+				}
+				if !strings.Contains(message, "\n") {
+					t.Errorf("message lost its newlines:\n%s", message)
+				}
+			})
 		}
 	}
 }
@@ -137,6 +188,9 @@ func TestValidateReportsProblem(t *testing.T) {
 		{"shell in package name", func(imageRecipe *Recipe) { imageRecipe.Packages.Include = []string{"git; rm -rf /"} }, "package name"},
 		{"version pin", func(imageRecipe *Recipe) { imageRecipe.Packages.Include = []string{"git=1:2.34.1-1ubuntu1.11"} }, "package name"},
 		{"one-character package name", func(imageRecipe *Recipe) { imageRecipe.Packages.Include = []string{"a"} }, "package name"},
+		// apt-get install reads "openssh-server-" as "remove openssh-server"
+		// and exits 0.
+		{"package name ending in a dash", func(imageRecipe *Recipe) { imageRecipe.Packages.Include = []string{"openssh-server-"} }, `trailing "-"`},
 		{"shell in locale", func(imageRecipe *Recipe) { imageRecipe.Locale.Lang = "en_US.UTF-8; touch /pwned" }, "locale lang"},
 		{"locale without codeset", func(imageRecipe *Recipe) { imageRecipe.Locale.Lang = "en_US" }, "locale lang"},
 		{"locale with leading dash", func(imageRecipe *Recipe) { imageRecipe.Locale.Lang = "-x.UTF-8" }, "locale lang"},
@@ -218,7 +272,7 @@ func TestValidateAcceptsRealisticValues(t *testing.T) {
 		{
 			name:      "package",
 			adjust:    func(imageRecipe *Recipe, value string) { imageRecipe.Packages.Include = []string{value} },
-			goodValue: []string{"g++", "libstdc++6", "python3.12", "xz-utils", "r-base"},
+			goodValue: []string{"g++", "libstdc++6", "python3.12", "xz-utils", "r-base", "c++", "libsigc++-2.0-0v5"},
 		},
 		{
 			name:      "image name",

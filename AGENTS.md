@@ -193,8 +193,9 @@ Hand-typed alternatives break in ways that are easy to miss:
   nothing else, and needs no root.
 - Every network read has a size bound and a timeout, and honors the
   context. An apt index is bounded by the size its Release entry declares,
-  read before decompression; a body nothing declares a size for gets
-  `index.Options.MaxBodyBytes`.
+  read before decompression; a body no metadata declares a size for gets
+  `index.Options.MaxBodyBytes`, and a server's own Content-Length only
+  lowers that bound.
 - The package index only suggests names. `internal/builder` never imports
   `internal/index`, and `--plain` never fetches.
 

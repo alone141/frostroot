@@ -106,3 +106,23 @@ func TestEditKeepsCertificatesWhenTheAnswerIsKept(t *testing.T) {
 		t.Errorf("edit wrote certificates %v, want the recipe's own", got)
 	}
 }
+
+func TestValidateRefusesACertificateLinkedFromOutsideTheRecipeDirectory(t *testing.T) {
+	// A cloned recipe's link would make the lock pin a file of the host's.
+	outside := t.TempDir()
+	writeTestCertificate(t, outside, "corp-root.pem")
+	recipeDir := newRecipeDir(t, "certificates.toml")
+	if err := os.MkdirAll(filepath.Join(recipeDir, "certs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "corp-root.pem"), filepath.Join(recipeDir, "certs", "corp-root.pem")); err != nil {
+		t.Skipf("cannot make a symbolic link here: %v", err)
+	}
+	exitCode, _, stderr := runValidateIn(recipeDir)
+	if exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d; stderr %s", exitCode, exitUserError, stderr)
+	}
+	if !strings.Contains(stderr, "certs/corp-root.pem") || !strings.Contains(stderr, "outside the recipe directory") {
+		t.Errorf("stderr does not say which file leads where: %s", stderr)
+	}
+}

@@ -42,9 +42,18 @@ var (
 // with, once each, in the lock's order.
 func fedoraManifest(lock recipe.Lockfile) ([]Entry, error) {
 	for _, repository := range lock.Repositories {
+		// Credentials first, found as the Ubuntu URLs' are, so that the
+		// refusal says why: in "https://user:12?s@host" net/url reads no
+		// userinfo, only a query.
+		if err := refuseCredentials("repository "+repository.Name, repository.URL); err != nil {
+			return nil, err
+		}
+		// A build records Fedora's base URLs, which have no query, fragment
+		// or space; vendor joins a package's path to the URL, which would
+		// land inside a query, and a token in one must not be quoted.
 		parsed, err := url.Parse(repository.URL)
-		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
-			return nil, fmt.Errorf("%w: repository %s has url %q, which is not a plain https URL", ErrBadLock, repository.Name, recipe.RedactURLCredentials(repository.URL))
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || strings.ContainsAny(repository.URL, "?# \t\r\n\v\f") {
+			return nil, fmt.Errorf("%w: repository %s has url %q, which is not a plain https URL with no query, fragment or space", ErrBadLock, repository.Name, recipe.RedactURL(repository.URL))
 		}
 	}
 	var entries []Entry

@@ -216,11 +216,11 @@ func WheelManifest(lock recipe.Lockfile) ([]Entry, error) {
 // so it counts as well. A userinfo that is already the word REDACTED reads
 // as none, and holds no secret.
 func refuseCredentials(what, rawURL string) error {
-	redacted := recipe.RedactURLCredentials(rawURL)
-	if redacted == rawURL {
+	if recipe.RedactURLCredentials(rawURL) == rawURL {
 		return nil
 	}
-	return fmt.Errorf("%w: %s has url %q, which carries credentials; a lock never records them", ErrBadLock, what, redacted)
+	// Quoted without its query or fragment either, which may hold a token.
+	return fmt.Errorf("%w: %s has url %q, which carries credentials; a lock never records them", ErrBadLock, what, recipe.RedactURL(rawURL))
 }
 
 // FallbackURL returns the Fetch fallback for lock: Launchpad's librarian for

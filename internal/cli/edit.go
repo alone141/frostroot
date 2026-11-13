@@ -24,6 +24,9 @@ func (a *App) runEdit(args []string) int {
 	if exitCode, stop := a.parseFlags(flags, args); stop {
 		return exitCode
 	}
+	if !a.checkIndexFlags("edit", indexOptions) {
+		return exitUserError
+	}
 	imageRecipe, ok := a.loadValidatedRecipe()
 	if !ok {
 		return exitUserError

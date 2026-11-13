@@ -338,7 +338,12 @@ gives up, and marks a lock whose Python packages were resolved that way; see
 the form's apt index comes from and whom to trust for it, `--python-index`
 points the PyPI search at another simple index, and `--refresh-index` fetches
 them again before their week is up. A Fedora recipe's search reads Fedora's
-own server, which `--mirror`, an Ubuntu archive, does not replace.
+own server, which `--mirror`, an Ubuntu archive, does not replace. Both
+`--mirror` and `--python-index` are held to the rule of a source URL, as
+`build` and `vendor` hold `--mirror`: http or https, written in lower case,
+with no space, bracket, `#` or query, and no credentials, which the index
+cache would keep and an error would print. Either is refused, exit code 1,
+before anything is fetched.
 
 | Exit code | Meaning |
 |---|---|
@@ -364,9 +369,9 @@ own server, which `--mirror`, an Ubuntu archive, does not replace.
 | `disk.formats` | formats to write beside the raw image, which is always written; this version writes none and refuses every name (qcow2 and vhdx come later); disk only | none |
 | `locale.lang` | e.g. `en_US.UTF-8`, `tr_TR.UTF-8`, `C.UTF-8` | `en_US.UTF-8` |
 | `locale.timezone` | e.g. `UTC`, `Europe/Istanbul`, `America/Argentina/Buenos_Aires` | the host's timezone, or `UTC` |
-| `packages.include` | apt package names only, or Fedora's rpm names; no versions, no suites | none |
+| `packages.include` | apt package names only, or Fedora's rpm names; no versions, no suites, and no trailing `-`, which apt reads as "remove" | none |
 | `python.include` | PyPI names only; see [Python packages](#python-packages); Ubuntu only so far | none |
-| `python.index_url` | an `https` PEP 691 simple index to resolve from instead of PyPI, with no credentials; needs `python.include`; see [Resolving from an internal index](#resolving-from-an-internal-index) | none, which is PyPI |
+| `python.index_url` | an `https` PEP 691 simple index to resolve from instead of PyPI, with no credentials or query; needs `python.include`; see [Resolving from an internal index](#resolving-from-an-internal-index) | none, which is PyPI |
 | `[[sources]]` | extra apt repositories; see [Third-party sources](#third-party-sources); Ubuntu only | none |
 | `certificates.include` | PEM files beside the recipe; see [Networks that inspect TLS](#networks-that-inspect-tls); Ubuntu only so far | none |
 
@@ -491,7 +496,8 @@ Kitware together took under two seconds and added 15 packages to the 85,574
 of `noble`. `--mirror` is an Ubuntu mirror and is never applied to a source. It is reduced to names, versions,
 sections and one-line descriptions and kept as one 1.7 MB file a release under
 `$XDG_CACHE_HOME/frostroot/index/` (or `~/.cache/frostroot/index/`) for a
-week; `--refresh-index` fetches it sooner. The recipe directory is never
+week, or fetched again at once if it is dated later than the clock;
+`--refresh-index` fetches it sooner. The recipe directory is never
 written to. `--mirror` fetches from another archive, `--ca-bundle` trusts an
 authority for an HTTPS one, and `http_proxy` is honored as everywhere else.
 
@@ -602,7 +608,11 @@ and takes PPAs as `owner/name`, whose fingerprints come from Launchpad's
 API. When the recipe is written the keys are fetched, checked against those
 fingerprints, and saved as `keys/<name>.asc`; a key that does not match is
 refused. For any other repository, save its public key yourself at the path
-the recipe names, and commit the `keys/` directory with the recipe.
+the recipe names, and commit the `keys/` directory with the recipe. A key
+file, like a certificate file, must be a regular file inside the recipe
+directory, at most 1 MiB (a certificate file 4 MiB): a symbolic link may
+point elsewhere in the directory, never out of it, so that the lock pins
+nothing of the host's.
 
 `build` installs from the archive and the sources together, each source
 verified by its own key and nothing else. The lock records which source
@@ -723,9 +733,10 @@ pip included — from the one place such a network allows.
 It must be `https`, because PyPI has no package signing: TLS is the only
 thing between the resolve and whatever answers, and the hashes that first
 resolve writes are pinned from then on. It must carry no credentials, since
-a recipe is committed and reviewed. It replaces PyPI rather than adding to
-it: `--extra-index-url` invites dependency confusion and is deliberately not
-offered. It needs at least one package in `include`: with none there is no
+a recipe is committed and reviewed, and no query, since pip joins each
+project's name onto the URL; the scheme is written in lower case. It
+replaces PyPI rather than adding to it: `--extra-index-url` invites
+dependency confusion and is deliberately not offered. It needs at least one package in `include`: with none there is no
 Python step, so the lock would never record the index and an offline rebuild
 could never match it, and `validate` refuses the recipe. The field has no
 question in the form yet; write it by hand, and `frostroot edit` gives it

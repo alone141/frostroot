@@ -17,8 +17,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/ulikunitz/xz"
-
 	"frostroot/internal/deb"
 	"frostroot/internal/distro"
 	"frostroot/internal/pki"
@@ -89,6 +87,28 @@ func expandedLimit(compressedBytes, ceiling int64) int64 {
 	return maxExpansion * compressedBytes
 }
 
+// maxIndexEntries bounds how many packages one index file may list. The
+// bound on its text is hundreds of megabytes, and every stanza becomes an
+// entry that is kept: 32 MB of stanzas that name a package and nothing else
+// kept 1.7 million entries in 802 MB of heap, about 450 bytes each, so the
+// text bound alone let an index hold gigabytes. Ubuntu's largest index,
+// universe, lists about 65,000 packages, and a vendor that lists every
+// version it has published lists thousands; this is several times either,
+// and holds what one file keeps to a few hundred megabytes. A Fedora
+// primary is bound the same way, by the names it keeps.
+const maxIndexEntries = 500_000
+
+// tooManyEntriesError means an index file lists more than maxEntries
+// packages. It is errTooLarge, so that the file is not fetched again as one
+// that changed, with a message that says what was too large.
+type tooManyEntriesError struct{ limit int }
+
+func (e tooManyEntriesError) Error() string {
+	return fmt.Sprintf("lists more than %d packages, more than any archive has", e.limit)
+}
+
+func (e tooManyEntriesError) Is(target error) bool { return target == errTooLarge }
+
 // pocketPlan is what to download from one pocket.
 type pocketPlan struct {
 	pocket string
@@ -110,7 +130,11 @@ func fetch(ctx context.Context, options Options, what target) ([]Entry, error) {
 	if maxBodyBytes <= 0 {
 		maxBodyBytes = DefaultMaxBodyBytes
 	}
-	fetcher := &fetcher{ctx: ctx, client: client, baseURL: what.baseURL, components: what.components, progress: options.Progress, maxBodyBytes: maxBodyBytes, stallTimeout: options.StallTimeout}
+	maxEntries := options.maxEntries
+	if maxEntries <= 0 {
+		maxEntries = maxIndexEntries
+	}
+	fetcher := &fetcher{ctx: ctx, client: client, baseURL: what.baseURL, components: what.components, progress: options.Progress, maxBodyBytes: maxBodyBytes, stallTimeout: options.StallTimeout, maxEntries: maxEntries}
 	if len(what.rpmRepositories) > 0 {
 		return fetcher.fedora(what.rpmRepositories)
 	}
@@ -184,6 +208,7 @@ type fetcher struct {
 	// primary metadata when repomd.xml gives no open-size.
 	maxBodyBytes int64
 	stallTimeout time.Duration // Options.StallTimeout
+	maxEntries   int           // how many packages one index file may list
 }
 
 // get opens url. The caller closes the body, which fails a read once it
@@ -267,14 +292,27 @@ func (s *stalledBody) Close() error {
 // plan reads a pocket's Release file and picks, for every component, the
 // smallest index it lists. InRelease is what apt reads and every current
 // repository has; Release is the older spelling of the same content.
+//
+// The pocket is not found only when both names answered 404. Any other
+// failure of either wins over a 404, because fetch skips an -updates that
+// is not found: a Release that timed out behind an InRelease the mirror
+// does not have was taken for a mirror without -updates, and the release
+// pocket's old versions were offered, and cached for a week, as the
+// newest.
 func (f *fetcher) plan(pocket string) (pocketPlan, error) {
 	var listed map[string]listedFile
-	var firstErr error
+	var notFound, failed error
 	for _, name := range []string{"InRelease", "Release"} {
 		body, err := f.get(f.baseURL + "/dists/" + pocket + "/" + name)
+		if errors.Is(err, errNotFound) {
+			if notFound == nil {
+				notFound = err
+			}
+			continue
+		}
 		if err != nil {
-			if firstErr == nil {
-				firstErr = err
+			if failed == nil {
+				failed = err
 			}
 			continue
 		}
@@ -289,7 +327,10 @@ func (f *fetcher) plan(pocket string) (pocketPlan, error) {
 		break
 	}
 	if listed == nil {
-		return pocketPlan{}, firstErr
+		if failed != nil {
+			return pocketPlan{}, failed
+		}
+		return pocketPlan{}, notFound
 	}
 	plan := pocketPlan{pocket: pocket}
 	for _, component := range f.components {
@@ -401,7 +442,16 @@ func (f *fetcher) file(pocket, component string, file listedFile) ([]Entry, erro
 	opened := &boundedReader{reader: text, limit: min(openLimit, f.maxBodyBytes) + 1}
 	var entries []Entry
 	err = deb.ReadStanzas(opened, func(stanza deb.Stanza) error {
+		// A small compressed file is wholly in memory before its parse is
+		// far along, so no read of the body notices that the context ended:
+		// a source's deadline and Ctrl-C waited for the parse to finish.
+		if err := f.ctx.Err(); err != nil {
+			return err
+		}
 		if entry, isPackage := reduce(stanza, component); isPackage {
+			if len(entries) >= f.maxEntries {
+				return tooManyEntriesError{limit: f.maxEntries}
+			}
 			entries = append(entries, entry)
 		}
 		return nil
@@ -410,12 +460,17 @@ func (f *fetcher) file(pocket, component string, file listedFile) ([]Entry, erro
 		if f.ctx.Err() != nil {
 			return nil, f.ctx.Err()
 		}
+		if tooMany := (tooManyEntriesError{}); errors.As(err, &tooMany) {
+			return nil, fmt.Errorf("%s: %w", url, tooMany)
+		}
 		if errors.Is(err, errTooLarge) || counted.count > file.size {
 			return nil, fmt.Errorf("%s: %w", url, errTooLarge)
 		}
 		// A server that went quiet is not one that published anew, and
-		// asking it again would only wait as long once more.
-		if errors.Is(err, errStalled) {
+		// asking it again would only wait as long once more. Nor is a file
+		// whose xz dictionaries deb's reader refuses: it would ask for them
+		// again.
+		if errors.Is(err, errStalled) || isRefusedXZDictionary(err) {
 			return nil, fmt.Errorf("%s: %w", url, err)
 		}
 		// A cut download fails in the decompressor before the digest is
@@ -435,11 +490,22 @@ func (f *fetcher) file(pocket, component string, file listedFile) ([]Entry, erro
 	return entries, nil
 }
 
-// decompress returns the text of an index by its file name's extension.
+// isRefusedXZDictionary reports whether deb's xz reader refused the
+// dictionary one block declares, or the dictionaries all of them declare.
+func isRefusedXZDictionary(err error) bool {
+	return errors.Is(err, deb.ErrXZDictionaryTooLarge) || errors.Is(err, deb.ErrXZDictionariesTooLarge)
+}
+
+// decompress returns the text of an index by its file name's extension. An
+// xz file goes through deb's reader, which refuses a dictionary larger than
+// any preset uses, and more dictionary across its blocks than they hold
+// data: the library's own allocates whatever each block declares, up to
+// 4 GiB, and the Release that lists the file is read unsigned, often over
+// plain http.
 func decompress(path string, reader io.Reader) (io.Reader, error) {
 	switch {
 	case strings.HasSuffix(path, ".xz"):
-		return xz.NewReader(reader)
+		return deb.NewXZReader(reader)
 	case strings.HasSuffix(path, ".gz"):
 		return gzip.NewReader(reader)
 	default:
