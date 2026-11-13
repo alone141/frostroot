@@ -154,6 +154,18 @@ frostroot version
 sudo apt install mmdebstrap        # also pulls uidmap
 ```
 
+`sha256sum -c` says the binary is the file `SHA256SUMS` names. The release
+workflow also attests the build provenance of both files: a signed
+statement that this repository's release workflow built them from the
+tagged commit. With the [GitHub CLI](https://cli.github.com/):
+
+```sh
+gh attestation verify frostroot-linux-amd64 --repo alone141/frostroot
+```
+
+A release published before the attestation step was added has none, and
+the command fails for it; `sha256sum -c` is then the check there is.
+
 For Fedora images, on Ubuntu 24.04:
 
 ```sh
