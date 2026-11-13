@@ -43,6 +43,9 @@ func (a *App) runCapture(args []string) int {
 	if exitCode, stop := a.parseFlags(flags, args); stop {
 		return exitCode
 	}
+	if !a.checkIndexFlags("capture", indexOptions) {
+		return exitUserError
+	}
 	recipePath := filepath.Join(a.RecipeDir, recipeFileName)
 	if _, err := os.Stat(recipePath); err == nil && !*overwrite {
 		a.stderrf("frostroot: %s already exists; use --force to overwrite it\n", recipePath)

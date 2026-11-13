@@ -122,6 +122,9 @@ func (a *App) runInit(args []string) int {
 	if exitCode, stop := a.parseFlags(flags, args); stop {
 		return exitCode
 	}
+	if !a.checkIndexFlags("init", indexOptions) {
+		return exitUserError
+	}
 	initial := form.Defaults(a.host())
 	fixed := form.Fixed{Family: *distroName != "", Target: *targetName != ""}
 	if fixed.Family {

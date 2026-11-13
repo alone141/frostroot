@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"frostroot/internal/index"
 	"frostroot/internal/index/indextest"
 	"frostroot/internal/recipe"
+	"frostroot/internal/tui"
 )
 
 // TestMain keeps every test of the package away from the cache of whoever
@@ -137,7 +139,7 @@ func TestIndexFlagsAreCheckedBeforeTheForm(t *testing.T) {
 		if exitCode := app.Run([]string{command, "--help"}); exitCode != exitSuccess {
 			t.Errorf("%s --help: exit %d", command, exitCode)
 		}
-		for _, wantText := range []string{"-mirror", "-ca-bundle", "-insecure", "-refresh-index", "only suggest names", "--plain never", "where to check it"} {
+		for _, wantText := range []string{"-mirror", "-ca-bundle", "-insecure", "-refresh-index", "only suggest names", "--plain never", "where to check it", "--python-index to the same rule", "no credentials"} {
 			if !strings.Contains(usage.String(), wantText) {
 				t.Errorf("%s --help lacks %q:\n%s", command, wantText, usage.String())
 			}
@@ -746,4 +748,130 @@ func TestThePreviewReadsOnlyTheIndexesItNeeds(t *testing.T) {
 	if !slices.Equal(opened, []string{"archive", "pypi"}) {
 		t.Errorf("an Ubuntu recipe with both read %q, want the archive and PyPI", opened)
 	}
+}
+
+// TestIndexFlagsRefuseWhatTheCacheMustNotKeep: init, edit and capture
+// handed --mirror and --python-index to the index unchecked, so a URL
+// carrying a password headed the index's cache file and was printed by a
+// failed fetch. Each command now refuses the URL as build refuses --mirror,
+// before the form, any fetch or any cache file, in the full-screen form and
+// in --plain alike, and never quotes the secret.
+func TestIndexFlagsRefuseWhatTheCacheMustNotKeep(t *testing.T) {
+	archive := indextest.Serve(t, "jammy", noblePackages)
+	pypi := indextest.ServePyPI(t, []string{"requests"}, nil)
+	shapes := func(serverURL string) map[string]string {
+		host := strings.TrimPrefix(serverURL, "http://")
+		return map[string]string{
+			"credentials":             "http://user:s3cret@" + host,
+			"credentials apt reads":   "http://deploy:12?s3cret@" + host,
+			"a token as the user":     "http://s3cret@" + host,
+			"a query":                 serverURL + "/simple?token=s3cret",
+			"an upper-case scheme":    "HTTP://" + host,
+			"no scheme, a credential": "user:s3cret@" + host,
+		}
+	}
+	commandArgs := map[string]func(t *testing.T) (recipeDir string, args []string){
+		"init": func(t *testing.T) (string, []string) { return t.TempDir(), []string{"init"} },
+		"edit": func(t *testing.T) (string, []string) { return newRecipeDir(t, "valid.toml"), []string{"edit"} },
+		"capture": func(t *testing.T) (string, []string) {
+			return t.TempDir(), []string{"capture", "--root", fakeUbuntuRoot(t, "24.04")}
+		},
+	}
+	for command, setUp := range commandArgs {
+		for flagName, server := range map[string]*indextest.Archive{"--mirror": archive, "--python-index": pypi} {
+			for shape, flagValue := range shapes(server.URL) {
+				for _, plain := range []bool{false, true} {
+					name := command + " " + flagName + " " + shape
+					if plain {
+						name += " --plain"
+					}
+					t.Run(name, func(t *testing.T) {
+						recipeDir, args := setUp(t)
+						before, err := os.ReadDir(recipeDir)
+						if err != nil {
+							t.Fatal(err)
+						}
+						cacheHome := t.TempDir()
+						requestsBefore := server.Requests()
+						args = append(args, flagName, flagValue)
+						if plain {
+							args = append(args, "--plain")
+						}
+						prompt := &scriptedPrompt{}
+						formShown := false
+						var stderr bytes.Buffer
+						app := App{
+							Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: &stderr, RecipeDir: recipeDir, ReadFile: noHostFile,
+							Prompt: prompt, IsTerminal: terminalChecker(!plain),
+							Getenv:      environmentWith(map[string]string{"TERM": "xterm-256color", "XDG_CACHE_HOME": cacheHome}),
+							IndexClient: &http.Client{Transport: loopbackOnly{}},
+						}
+						// The form opens every index it can, as a person
+						// reaching each picker would, so that a URL let
+						// through is a URL fetched.
+						app.runForm = func(ctx context.Context, fields []form.Field, initial form.Values, _ tui.PreviewFunc, _ io.Reader, _ io.Writer) (form.Values, error) {
+							formShown = true
+							request := form.IndexRequest{Family: distro.Ubuntu, Release: initial.String(form.KeyRelease)}
+							for _, field := range fields {
+								if field.OpenIndex != nil {
+									_, _ = field.OpenIndex(ctx, request, nil)
+								}
+							}
+							return nil, errors.New("the test ends the form")
+						}
+						if exitCode := app.Run(args); exitCode != exitUserError {
+							t.Errorf("exit code = %d, want %d; stderr %s", exitCode, exitUserError, stderr.String())
+						}
+						if !strings.Contains(stderr.String(), flagName) {
+							t.Errorf("stderr does not name %s: %s", flagName, stderr.String())
+						}
+						if strings.Contains(stderr.String(), "s3cret") {
+							t.Errorf("stderr quotes the secret: %s", stderr.String())
+						}
+						if formShown || len(prompt.questionsAsked) != 0 {
+							t.Errorf("the form was shown (%v) or %d questions asked before the flag was refused", formShown, len(prompt.questionsAsked))
+						}
+						if requests := server.Requests() - requestsBefore; requests != 0 {
+							t.Errorf("%d requests reached the server", requests)
+						}
+						if cached, err := os.ReadDir(cacheHome); err != nil || len(cached) != 0 {
+							t.Errorf("the cache directory holds %v (%v), want nothing", cached, err)
+						}
+						if after, err := os.ReadDir(recipeDir); err != nil || len(after) != len(before) {
+							t.Errorf("the recipe directory went from %v to %v (%v)", before, after, err)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+// TestIndexFlagsTakeAPlainHTTPIndex: --python-index has always taken an
+// http index, which a test server is, and the refusal of credentials must
+// not start asking for https.
+func TestIndexFlagsTakeAPlainHTTPIndex(t *testing.T) {
+	for _, flags := range []*indexFlags{
+		{mirror: "http://archive.example/ubuntu", pythonIndex: "http://pypi.example/simple"},
+		{mirror: "https://archive.example/ubuntu/", pythonIndex: "https://nexus.example.com/repository/pypi/simple/"},
+		{},
+	} {
+		var stderr bytes.Buffer
+		app := App{Stderr: &stderr}
+		if !app.checkIndexFlags("init", flags) {
+			t.Errorf("checkIndexFlags(%+v) refused: %s", *flags, stderr.String())
+		}
+	}
+}
+
+// loopbackOnly reaches the test servers and nothing else, so that a URL
+// whose host is not one, such as "deploy" in "http://deploy:12?s@host",
+// fails at once instead of waiting on a name lookup.
+type loopbackOnly struct{}
+
+func (loopbackOnly) RoundTrip(request *http.Request) (*http.Response, error) {
+	if request.URL.Hostname() != "127.0.0.1" {
+		return nil, errors.New("only the test servers are reachable")
+	}
+	return http.DefaultTransport.RoundTrip(request)
 }

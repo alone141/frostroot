@@ -338,7 +338,12 @@ gives up, and marks a lock whose Python packages were resolved that way; see
 the form's apt index comes from and whom to trust for it, `--python-index`
 points the PyPI search at another simple index, and `--refresh-index` fetches
 them again before their week is up. A Fedora recipe's search reads Fedora's
-own server, which `--mirror`, an Ubuntu archive, does not replace.
+own server, which `--mirror`, an Ubuntu archive, does not replace. Both
+`--mirror` and `--python-index` are held to the rule of a source URL, as
+`build` and `vendor` hold `--mirror`: http or https, written in lower case,
+with no space, bracket, `#` or query, and no credentials, which the index
+cache would keep and an error would print. Either is refused, exit code 1,
+before anything is fetched.
 
 | Exit code | Meaning |
 |---|---|
