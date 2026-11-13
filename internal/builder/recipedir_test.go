@@ -257,6 +257,7 @@ func TestHoldRecipeDirRefusesWhenNeitherRootIsUsable(t *testing.T) {
 		{
 			name: "a work root that is not a directory",
 			cacheHome: func(t *testing.T, _ string) string {
+				t.Helper()
 				cacheHome := t.TempDir()
 				if err := os.WriteFile(filepath.Join(cacheHome, "frostroot"), nil, 0o600); err != nil {
 					t.Fatal(err)
@@ -271,6 +272,7 @@ func TestHoldRecipeDirRefusesWhenNeitherRootIsUsable(t *testing.T) {
 		{
 			name: "the work root is the hold root",
 			cacheHome: func(t *testing.T, holdRoot string) string {
+				t.Helper()
 				return filepath.Dir(holdRoot)
 			},
 		},

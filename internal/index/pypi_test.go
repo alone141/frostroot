@@ -467,12 +467,17 @@ func TestOpenPyPIBoundsADeclaredLengthByTheCeiling(t *testing.T) {
 	served.answer = func(response http.ResponseWriter) bool {
 		response.Header().Set("Content-Type", pypiSimpleJSON)
 		response.Header().Set("Content-Length", strconv.FormatInt(20<<30, 10))
+		flusher, canFlush := response.(http.Flusher)
+		if !canFlush {
+			t.Error("the test server cannot flush")
+			return true
+		}
 		_, _ = response.Write(document)
 		for chunk := 0; chunk < len(tail); chunk += 4096 {
 			if _, err := response.Write([]byte(tail[chunk:min(chunk+4096, len(tail))])); err != nil {
 				return true // the client stopped reading, as it should
 			}
-			response.(http.Flusher).Flush()
+			flusher.Flush()
 		}
 		return true
 	}

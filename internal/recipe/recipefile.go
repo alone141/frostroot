@@ -148,11 +148,11 @@ func checkInside(resolvedRecipeDir, resolvedPath string) error {
 	return nil
 }
 
-// openCheckedFile opens path, which was stat'ed as checked. What was opened
-// must be what was checked: a file swapped for another in between is
+// openCheckedFile opens filePath, which was stat'ed as checked. What was
+// opened must be what was checked: a file swapped for another in between is
 // refused rather than read.
-func openCheckedFile(path string, checked fs.FileInfo) (*os.File, error) {
-	file, err := os.Open(path)
+func openCheckedFile(filePath string, checked fs.FileInfo) (*os.File, error) {
+	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, withoutPath(err)
 	}
@@ -209,10 +209,10 @@ func explainUnresolvable(recipeDir, relativePath string, err error) error {
 	return pathErr.Err
 }
 
-// resolvePath returns path made absolute with every symbolic link in it
-// resolved.
-func resolvePath(path string) (string, error) {
-	absolute, err := filepath.Abs(path)
+// resolvePath returns unresolvedPath made absolute with every symbolic link
+// in it resolved.
+func resolvePath(unresolvedPath string) (string, error) {
+	absolute, err := filepath.Abs(unresolvedPath)
 	if err != nil {
 		return "", err
 	}
