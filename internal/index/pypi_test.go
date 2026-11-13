@@ -444,13 +444,61 @@ func TestOpenPyPIRefusesABodyPastTheCeiling(t *testing.T) {
 		t.Fatalf("OpenPyPI of %d gzipped bytes that expand to 3.6 MB = %v, want ErrUnavailable wrapping errTooLarge", len(repetitive), err)
 	}
 
-	// The same document, whole, with a Content-Length: a body of exactly
-	// its declared length is what every index is, and the ceiling does not
-	// apply to it.
-	served.answer = nil
-	options.MaxBodyBytes = 1
+}
+
+// TestOpenPyPIBoundsADeclaredLengthByTheCeiling: a Content-Length comes
+// from the server the ceiling holds against, and was the bound itself, so
+// a server that declared 20 GB got to send 20 GB. A length above the
+// ceiling is refused before the body is read; one at or below it is read.
+func TestOpenPyPIBoundsADeclaredLengthByTheCeiling(t *testing.T) {
+	served := newSimpleIndex(t)
+	options := pypiOptionsFor(t, served)
+	options.MaxBodyBytes = 64 << 10
+	var read atomic.Int64
+	options.Client = &http.Client{Transport: &countingTransport{base: http.DefaultTransport, read: &read}}
+	document, err := os.ReadFile(filepath.Join("testdata", "pypi-simple.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The document and a tail of a megabyte, flushed in chunks under a
+	// declared length of 20 GB; the handler returns before the length is
+	// reached, which the client sees as a body cut short.
+	tail := strings.Repeat(`{"name": "filler"}`, 60_000)
+	served.answer = func(response http.ResponseWriter) bool {
+		response.Header().Set("Content-Type", pypiSimpleJSON)
+		response.Header().Set("Content-Length", strconv.FormatInt(20<<30, 10))
+		_, _ = response.Write(document)
+		for chunk := 0; chunk < len(tail); chunk += 4096 {
+			if _, err := response.Write([]byte(tail[chunk:min(chunk+4096, len(tail))])); err != nil {
+				return true // the client stopped reading, as it should
+			}
+			response.(http.Flusher).Flush()
+		}
+		return true
+	}
+	_, err = OpenPyPI(context.Background(), options)
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, errTooLarge) {
+		t.Fatalf("OpenPyPI of a body declared as 20 GB = %v, want ErrUnavailable wrapping errTooLarge", err)
+	}
+	if read.Load() > options.MaxBodyBytes+1 {
+		t.Errorf("the client read %d bytes of a body declared past the ceiling of %d", read.Load(), options.MaxBodyBytes)
+	}
+
+	// The document whole, declared at its length, one byte above the
+	// ceiling and then at it.
+	served.answer = func(response http.ResponseWriter) bool {
+		response.Header().Set("Content-Type", pypiSimpleJSON)
+		response.Header().Set("Content-Length", strconv.Itoa(len(document)))
+		_, _ = response.Write(document)
+		return true
+	}
+	options.MaxBodyBytes = int64(len(document)) - 1
+	if _, err := OpenPyPI(context.Background(), options); !errors.Is(err, ErrUnavailable) || !errors.Is(err, errTooLarge) {
+		t.Errorf("OpenPyPI of %d bytes declared, a ceiling of %d = %v, want ErrUnavailable wrapping errTooLarge", len(document), options.MaxBodyBytes, err)
+	}
+	options.MaxBodyBytes = int64(len(document))
 	if opened, err := OpenPyPI(context.Background(), options); err != nil || opened.Len() != 15 {
-		t.Errorf("OpenPyPI with a declared length below the ceiling = %v, %v; want the index", opened, err)
+		t.Errorf("OpenPyPI of %d bytes declared, a ceiling of as many = %v, %v; want the index", len(document), opened, err)
 	}
 }
 

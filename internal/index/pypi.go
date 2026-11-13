@@ -259,14 +259,18 @@ func fetchPyPI(ctx context.Context, options Options) ([]Project, error) {
 		return nil, fmt.Errorf("%s: %s", url, response.Status)
 	}
 	total := response.ContentLength
-	// A Content-Length bounds the body already: the client stops at it.
-	// A body sent without one, chunked, would be read to whatever end the
-	// server chose, so it gets a ceiling nothing legitimate reaches, read
-	// before decompression. One byte past the ceiling tells a longer body
-	// from one of exactly that size.
+	// The body gets a ceiling nothing legitimate reaches, read before
+	// decompression, and a Content-Length lowers it: the client stops
+	// there. The length comes from the server the ceiling holds against,
+	// so one above the ceiling is refused before a byte is read rather
+	// than believed. One byte past the ceiling tells a longer body from
+	// one of exactly that size.
 	ceiling := options.MaxBodyBytes
 	if ceiling <= 0 {
 		ceiling = DefaultMaxBodyBytes
+	}
+	if total > ceiling {
+		return nil, fmt.Errorf("%s: %w", url, errTooLarge)
 	}
 	if total >= 0 {
 		ceiling = total

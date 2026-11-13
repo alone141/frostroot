@@ -83,13 +83,14 @@ type Options struct {
 	// the fetching goroutine, often.
 	Progress func(doneBytes, totalBytes int64)
 	Now      func() time.Time // nil means time.Now
-	// MaxBodyBytes bounds a download whose size nothing declares: a simple
-	// index sent without a Content-Length. 0 means DefaultMaxBodyBytes. An
-	// apt index is bounded by the size its Release entry declares instead,
-	// and a body with a Content-Length by that. What an apt or a Fedora
-	// index expands to is bounded by the size its metadata declares for
-	// that, and never past MaxBodyBytes either, since the same unsigned
-	// metadata declares both.
+	// MaxBodyBytes bounds a download whose size no metadata declares: a
+	// simple index, whatever its Content-Length says, since the length
+	// comes from the server the bound holds against. A Content-Length below
+	// it bounds the body further, and one above it is refused. 0 means
+	// DefaultMaxBodyBytes. An apt index is bounded by the size its Release
+	// entry declares instead. What an apt or a Fedora index expands to is
+	// bounded by the size its metadata declares for that, and never past
+	// MaxBodyBytes either, since the same unsigned metadata declares both.
 	MaxBodyBytes int64
 	// StallTimeout fails a download that receives nothing for this long,
 	// after its headers; 0 means DefaultStallTimeout.
@@ -100,7 +101,7 @@ type Options struct {
 	maxEntries int
 }
 
-// DefaultMaxBodyBytes is the most a download whose size nothing declares
+// DefaultMaxBodyBytes is the most a download whose size no metadata declares
 // may be. PyPI's own simple index is 40 MB gzipped, and nothing legitimate
 // is ten times that.
 const DefaultMaxBodyBytes = 512 << 20
