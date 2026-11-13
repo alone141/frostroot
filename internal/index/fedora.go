@@ -15,8 +15,8 @@ import (
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
-	"github.com/ulikunitz/xz"
 
+	"frostroot/internal/deb"
 	"frostroot/internal/distro"
 )
 
@@ -248,8 +248,10 @@ func (f *fetcher) primary(plan rpmPlan) ([]Entry, error) {
 		if errors.Is(err, errTooLarge) || counted.count > plan.primary.size {
 			return nil, fmt.Errorf("%s: %w", url, errTooLarge)
 		}
-		// A server that went quiet is not one that published anew.
-		if errors.Is(err, errStalled) {
+		// A server that went quiet is not one that published anew, nor is a
+		// file that asks for a larger xz dictionary than any preset uses: it
+		// would ask for it again.
+		if errors.Is(err, errStalled) || errors.Is(err, deb.ErrXZDictionaryTooLarge) {
 			return nil, fmt.Errorf("%s: %w", url, err)
 		}
 		// A cut download fails in the decompressor or the parser before
@@ -270,7 +272,10 @@ func (f *fetcher) primary(plan rpmPlan) ([]Entry, error) {
 }
 
 // decompressMetadata returns the text of a metadata file by its name's
-// extension, and what releases the decompressor.
+// extension, and what releases the decompressor. An xz file goes through
+// deb's reader, which refuses a dictionary larger than any preset uses: the
+// library's own allocates whatever a block declares, up to 4 GiB, and
+// repomd.xml, which names the file, is read unsigned.
 func decompressMetadata(href string, reader io.Reader) (io.Reader, func(), error) {
 	switch {
 	case strings.HasSuffix(href, ".zst"):
@@ -280,7 +285,7 @@ func decompressMetadata(href string, reader io.Reader) (io.Reader, func(), error
 		}
 		return decoder, decoder.Close, nil
 	case strings.HasSuffix(href, ".xz"):
-		decoder, err := xz.NewReader(reader)
+		decoder, err := deb.NewXZReader(reader)
 		return decoder, func() {}, err
 	case strings.HasSuffix(href, ".gz"):
 		decoder, err := gzip.NewReader(reader)

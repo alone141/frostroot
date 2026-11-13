@@ -830,19 +830,16 @@ func (a *archive) publishFile(pocket, component, extension string, content []byt
 	a.files["/dists/"+pocket+"/InRelease"] = []byte(release)
 }
 
-// TestOpenRefusesAnXZIndexWithAHugeDictionary: the xz library allocates the
-// dictionary a block declares, up to 4 GiB, before it decodes a byte, and
-// an index whose Release came unsigned over plain http could declare one in
-// a file of a few hundred bytes. The file here matches its size and digest
-// and declares 256 MiB, which no xz preset uses.
-func TestOpenRefusesAnXZIndexWithAHugeDictionary(t *testing.T) {
-	served := newArchive(t, ".xz")
+// xzWithAHugeDictionary returns text compressed with xz in a block whose
+// header declares a 256 MiB dictionary, which no xz preset uses.
+func xzWithAHugeDictionary(t *testing.T, text []byte) []byte {
+	t.Helper()
 	var buffer bytes.Buffer
 	writer, err := xz.WriterConfig{DictCap: 4096}.NewWriter(&buffer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := writer.Write([]byte("Package: git\nVersion: 1\n\n")); err != nil {
+	if _, err := writer.Write(text); err != nil {
 		t.Fatal(err)
 	}
 	if err := writer.Close(); err != nil {
@@ -858,6 +855,17 @@ func TestOpenRefusesAnXZIndexWithAHugeDictionary(t *testing.T) {
 	}
 	header[4] = 32 // 2 << (32/2 + 11) bytes: 256 MiB
 	binary.LittleEndian.PutUint32(header[len(header)-4:], crc32.ChecksumIEEE(header[:len(header)-4]))
+	return forged
+}
+
+// TestOpenRefusesAnXZIndexWithAHugeDictionary: the xz library allocates the
+// dictionary a block declares, up to 4 GiB, before it decodes a byte, and
+// an index whose Release came unsigned over plain http could declare one in
+// a file of a few hundred bytes. The file here matches its size and digest
+// and declares 256 MiB, which no xz preset uses.
+func TestOpenRefusesAnXZIndexWithAHugeDictionary(t *testing.T) {
+	served := newArchive(t, ".xz")
+	forged := xzWithAHugeDictionary(t, []byte("Package: git\nVersion: 1\n\n"))
 	served.publishFile("noble", "main", ".xz", forged)
 	delete(served.files, "/dists/noble-updates/InRelease")
 	options := optionsFor(t, served)
@@ -865,7 +873,7 @@ func TestOpenRefusesAnXZIndexWithAHugeDictionary(t *testing.T) {
 	var heapBefore, heapAfter runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&heapBefore)
-	_, err = Open(context.Background(), options)
+	_, err := Open(context.Background(), options)
 	runtime.ReadMemStats(&heapAfter)
 	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, deb.ErrXZDictionaryTooLarge) {
 		t.Fatalf("Open = %v, want ErrUnavailable wrapping deb.ErrXZDictionaryTooLarge", err)

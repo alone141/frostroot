@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"frostroot/internal/deb"
 	"frostroot/internal/distro"
 )
 
@@ -82,7 +83,13 @@ func readTestdata(t *testing.T, name string) []byte {
 // true size.
 func (m *fedoraMirror) publish(repositoryPath string, text []byte, extension string, openSize int64) (primaryPath string) {
 	m.t.Helper()
-	content := compress(m.t, extension, text)
+	return m.publishFile(repositoryPath, compress(m.t, extension, text), text, extension, openSize)
+}
+
+// publishFile puts content in place as it is, as the primary metadata
+// compressed as extension says, whose text is text.
+func (m *fedoraMirror) publishFile(repositoryPath string, content, text []byte, extension string, openSize int64) (primaryPath string) {
+	m.t.Helper()
 	digest := sha256.Sum256(content)
 	openDigest := sha256.Sum256(text)
 	if openSize == 0 {
@@ -420,6 +427,38 @@ func TestOpenFedoraFetchesNothingRepomdCannotVouchFor(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestOpenFedoraRefusesAnXZPrimaryWithAHugeDictionary: repomd.xml is read
+// unsigned, so it may name a primary.xml.xz of a few hundred bytes whose
+// block declares a dictionary of gigabytes, which the xz library allocated
+// before it decoded a byte. The file here matches its size and digest and
+// declares 256 MiB, which no xz preset uses.
+func TestOpenFedoraRefusesAnXZPrimaryWithAHugeDictionary(t *testing.T) {
+	mirror := newFedoraMirror(t, ".xz")
+	options := fedoraOptions(t)
+	text := readTestdata(t, "fedora-44.primary.xml")
+	primary := mirror.publishFile(fedoraReleasePath, xzWithAHugeDictionary(t, text), text, ".xz", 0)
+
+	var heapBefore, heapAfter runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&heapBefore)
+	_, err := OpenFedora(context.Background(), options, mirror.release())
+	runtime.ReadMemStats(&heapAfter)
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, deb.ErrXZDictionaryTooLarge) {
+		t.Fatalf("OpenFedora = %v, want ErrUnavailable wrapping deb.ErrXZDictionaryTooLarge", err)
+	}
+	if allocated := heapAfter.TotalAlloc - heapBefore.TotalAlloc; allocated > 32<<20 {
+		t.Errorf("OpenFedora allocated %d MB for primary metadata of %d bytes", allocated>>20, len(mirror.files[primary]))
+	}
+	// A file that declares too large a dictionary will declare it again: it
+	// is not a repository republished between two requests.
+	if errors.Is(err, errChanged) {
+		t.Errorf("err = %v; a refused dictionary is not a file that changed", err)
+	}
+	if got := mirror.requestsFor(primary); got != 1 {
+		t.Errorf("the primary metadata was asked for %d times, want once", got)
 	}
 }
 
