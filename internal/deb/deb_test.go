@@ -89,6 +89,46 @@ func TestReadStanzas(t *testing.T) {
 			text: "\n\n",
 			want: nil,
 		},
+		{
+			name: "a tab starts a continuation, and only the first blank goes",
+			text: "Description: short\n\tone\n \ttwo\n  three\n",
+			want: []Stanza{{"Description": "short\none\n\ttwo\n three"}},
+		},
+		{
+			name: "CRLF in a folded field",
+			text: "Description: short\r\n one\r\n .\r\n two\r\n",
+			want: []Stanza{{"Description": "short\none\n.\ntwo"}},
+		},
+		{
+			name: "a folded field with an empty first line",
+			text: "Description:\n .\n x\n",
+			want: []Stanza{{"Description": "\n.\nx"}},
+		},
+		{
+			name: "a continuation before any field is dropped",
+			text: " stray\nPackage: a\n\n stray after a paragraph\nPackage: b\n",
+			want: []Stanza{{"Package": "a"}, {"Package": "b"}},
+		},
+		{
+			name: "a field given twice keeps the last, with its own continuation",
+			text: "Depends: one\n first\nPackage: a\nDepends: two\n second\n",
+			want: []Stanza{{"Depends": "two\nsecond", "Package": "a"}},
+		},
+		{
+			name: "a field given twice keeps the last even when only the first is folded",
+			text: "Depends: one\n first\nDepends: two\n",
+			want: []Stanza{{"Depends": "two"}},
+		},
+		{
+			name: "a skipped line does not end the field before it",
+			text: "Description: short\ngarbage\n more\n",
+			want: []Stanza{{"Description": "short\nmore"}},
+		},
+		{
+			name: "a field with an empty name takes no continuation",
+			text: ": x\n y\nPackage: a\n",
+			want: []Stanza{{"": "x", "Package": "a"}},
+		},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -107,6 +147,36 @@ func TestReadStanzas(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestReadStanzasLongFoldedFieldTakesLinearTime: a Packages index comes from
+// the network, and a field folded over many lines must not cost time in the
+// square of its length.
+func TestReadStanzasLongFoldedFieldTakesLinearTime(t *testing.T) {
+	const continuationLines = 400_000
+	var text strings.Builder
+	text.WriteString("Package: a\nDescription: long\n")
+	for range continuationLines {
+		text.WriteString(" xx\n")
+	}
+	text.WriteString("Section: x\n")
+	start := time.Now()
+	stanzas := collectStanzas(t, text.String())
+	elapsed := time.Since(start)
+	t.Logf("reading %d continuation lines took %v", continuationLines, elapsed)
+	if elapsed > 5*time.Second {
+		t.Errorf("reading %d continuation lines took %v, want well under 5s", continuationLines, elapsed)
+	}
+	if len(stanzas) != 1 {
+		t.Fatalf("got %d stanzas, want 1", len(stanzas))
+	}
+	description := stanzas[0]["Description"]
+	if wantLength := len("long") + continuationLines*len("\nxx"); len(description) != wantLength {
+		t.Errorf("Description is %d bytes, want %d", len(description), wantLength)
+	}
+	if stanzas[0]["Section"] != "x" {
+		t.Errorf("Section = %q, want %q", stanzas[0]["Section"], "x")
 	}
 }
 
