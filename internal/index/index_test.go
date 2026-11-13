@@ -885,3 +885,38 @@ func TestOpenRefusesAnXZIndexWithAHugeDictionary(t *testing.T) {
 		t.Errorf("the index was asked for %d times, want once", got)
 	}
 }
+
+// TestOpenStopsParsingWhenTheContextEnds: a gzipped index of a million
+// stanzas is tens of kilobytes, wholly read before its parse is far along,
+// so the parse never read the body again and ended only when the text did:
+// a source's twenty seconds, or Ctrl-C, waited for it. The context is
+// canceled here once the last byte of the file has arrived, and the parse
+// must stop at the next stanza rather than keep every package of the rest.
+func TestOpenStopsParsingWhenTheContextEnds(t *testing.T) {
+	served := newArchive(t, ".gz")
+	text := []byte(strings.Repeat("Package: filler\nVersion: 1\n\n", 1_000_000))
+	served.publishTexts("noble", ".gz", map[string][]byte{"main": text}, func(text []byte) int64 { return int64(len(text)) })
+	delete(served.files, "/dists/noble-updates/InRelease")
+	options := optionsFor(t, served)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	options.Progress = func(done, total int64) {
+		if done == total {
+			cancel()
+		}
+	}
+
+	var heapBefore, heapAfter runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&heapBefore)
+	_, err := Open(ctx, options)
+	runtime.ReadMemStats(&heapAfter)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Open = %v, want context.Canceled", err)
+	}
+	// A parse that went on kept a million entries, and built a stanza for
+	// each, hundreds of megabytes; one that stopped built a few.
+	if allocated := heapAfter.TotalAlloc - heapBefore.TotalAlloc; allocated > 64<<20 {
+		t.Errorf("Open allocated %d MB after its context ended: the parse went on", allocated>>20)
+	}
+}

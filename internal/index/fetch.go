@@ -399,6 +399,12 @@ func (f *fetcher) file(pocket, component string, file listedFile) ([]Entry, erro
 	opened := &boundedReader{reader: text, limit: min(openLimit, f.maxBodyBytes) + 1}
 	var entries []Entry
 	err = deb.ReadStanzas(opened, func(stanza deb.Stanza) error {
+		// A small compressed file is wholly in memory before its parse is
+		// far along, so no read of the body notices that the context ended:
+		// a source's deadline and Ctrl-C waited for the parse to finish.
+		if err := f.ctx.Err(); err != nil {
+			return err
+		}
 		if entry, isPackage := reduce(stanza, component); isPackage {
 			entries = append(entries, entry)
 		}
