@@ -129,18 +129,30 @@ func TestFedoraManifestRefusesAHostileLock(t *testing.T) {
 
 // TestFedoraManifestDoesNotQuoteCredentials: the error that refuses a
 // repository URL with credentials names the URL, and must not repeat them.
+// The shapes after the first hold a "?" or "#" in the password, so that
+// net/url reads no userinfo, only a query or a fragment, and a parsed
+// URL's User alone would let them through.
 func TestFedoraManifestDoesNotQuoteCredentials(t *testing.T) {
-	lock := fedoraLock()
-	lock.Repositories[1].URL = "https://user:s3cret@dl.fedoraproject.org/x"
-	_, err := Manifest(lock)
-	if !errors.Is(err, ErrBadLock) {
-		t.Fatalf("Manifest = %v, want %v", err, ErrBadLock)
-	}
-	if strings.Contains(err.Error(), "s3cret") {
-		t.Errorf("the error quotes the password: %v", err)
-	}
-	if !strings.Contains(err.Error(), "REDACTED@") {
-		t.Errorf("the error does not show the URL redacted: %v", err)
+	for _, shape := range []string{
+		"https://user:s3cret@dl.fedoraproject.org/x",
+		"https://deploy:12?s3cret@dl.fedoraproject.org/x",
+		"https://deploy:pa?s3cret@dl.fedoraproject.org/x",
+		"https://deploy:pa#s3cret@dl.fedoraproject.org/x",
+	} {
+		t.Run(shape, func(t *testing.T) {
+			lock := fedoraLock()
+			lock.Repositories[1].URL = shape
+			_, err := Manifest(lock)
+			if !errors.Is(err, ErrBadLock) {
+				t.Fatalf("Manifest = %v, want %v", err, ErrBadLock)
+			}
+			if strings.Contains(err.Error(), "s3cret") {
+				t.Errorf("the error quotes the password: %v", err)
+			}
+			if !strings.Contains(err.Error(), "REDACTED@") || !strings.Contains(err.Error(), "credentials") {
+				t.Errorf("the error does not show the URL redacted and say why: %v", err)
+			}
+		})
 	}
 }
 

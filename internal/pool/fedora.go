@@ -42,8 +42,15 @@ var (
 // with, once each, in the lock's order.
 func fedoraManifest(lock recipe.Lockfile) ([]Entry, error) {
 	for _, repository := range lock.Repositories {
+		// Credentials first, found as the Ubuntu URLs' are: in
+		// "https://user:12?s@host" net/url reads no userinfo, only a query,
+		// and passes the check below, while the text still holds the
+		// password vendor would then print.
+		if err := refuseCredentials("repository "+repository.Name, repository.URL); err != nil {
+			return nil, err
+		}
 		parsed, err := url.Parse(repository.URL)
-		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
 			return nil, fmt.Errorf("%w: repository %s has url %q, which is not a plain https URL", ErrBadLock, repository.Name, recipe.RedactURLCredentials(repository.URL))
 		}
 	}
