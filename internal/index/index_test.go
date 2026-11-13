@@ -920,3 +920,37 @@ func TestOpenStopsParsingWhenTheContextEnds(t *testing.T) {
 		t.Errorf("Open allocated %d MB after its context ended: the parse went on", allocated>>20)
 	}
 }
+
+// TestOpenFailsAPocketWhoseReleaseFails: a pocket is missing only when both
+// InRelease and Release answer 404. A mirror without InRelease whose
+// Release answered 503 was taken for one without -updates: the form offered
+// git 1:2.43.0-1ubuntu7 while -updates had 1:2.43.0-1ubuntu7.3, reported
+// nothing missing, and cached that index as whole for a week.
+func TestOpenFailsAPocketWhoseReleaseFails(t *testing.T) {
+	for _, pocket := range []string{"noble", "noble-updates"} {
+		for name, failing := range map[string]string{
+			"InRelease 404, Release 503": "Release",
+			"InRelease 503, Release 404": "InRelease",
+		} {
+			t.Run(pocket+", "+name, func(t *testing.T) {
+				served := newArchive(t, ".gz")
+				delete(served.files, "/dists/"+pocket+"/InRelease")
+				served.intercept = func(writer http.ResponseWriter, request *http.Request) bool {
+					if request.URL.Path != "/dists/"+pocket+"/"+failing {
+						return false
+					}
+					http.Error(writer, "busy", http.StatusServiceUnavailable)
+					return true
+				}
+				options := optionsFor(t, served)
+				_, err := Open(context.Background(), options)
+				if !errors.Is(err, ErrUnavailable) || errors.Is(err, errNotFound) || !strings.Contains(fmt.Sprint(err), "503") {
+					t.Fatalf("Open = %v, want ErrUnavailable naming the 503, not a pocket that is not there", err)
+				}
+				if _, err := os.Stat(cachePath(options, archiveTarget(options))); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("an index without %s was cached: %v", pocket, err)
+				}
+			})
+		}
+	}
+}

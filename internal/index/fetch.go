@@ -265,14 +265,27 @@ func (s *stalledBody) Close() error {
 // plan reads a pocket's Release file and picks, for every component, the
 // smallest index it lists. InRelease is what apt reads and every current
 // repository has; Release is the older spelling of the same content.
+//
+// The pocket is not found only when both names answered 404. Any other
+// failure of either wins over a 404, because fetch skips an -updates that
+// is not found: a Release that timed out behind an InRelease the mirror
+// does not have was taken for a mirror without -updates, and the release
+// pocket's old versions were offered, and cached for a week, as the
+// newest.
 func (f *fetcher) plan(pocket string) (pocketPlan, error) {
 	var listed map[string]listedFile
-	var firstErr error
+	var notFound, failed error
 	for _, name := range []string{"InRelease", "Release"} {
 		body, err := f.get(f.baseURL + "/dists/" + pocket + "/" + name)
+		if errors.Is(err, errNotFound) {
+			if notFound == nil {
+				notFound = err
+			}
+			continue
+		}
 		if err != nil {
-			if firstErr == nil {
-				firstErr = err
+			if failed == nil {
+				failed = err
 			}
 			continue
 		}
@@ -287,7 +300,10 @@ func (f *fetcher) plan(pocket string) (pocketPlan, error) {
 		break
 	}
 	if listed == nil {
-		return pocketPlan{}, firstErr
+		if failed != nil {
+			return pocketPlan{}, failed
+		}
+		return pocketPlan{}, notFound
 	}
 	plan := pocketPlan{pocket: pocket}
 	for _, component := range f.components {
