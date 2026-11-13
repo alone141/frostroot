@@ -481,6 +481,47 @@ func TestOpenFedoraRefusesAnXZPrimaryOfManyDictionaries(t *testing.T) {
 	}
 }
 
+// TestOpenFedoraRefusesAPrimaryOfTooManyPackages: every name the primary
+// metadata lists for this architecture was kept until the parse ended, and
+// only its text was bounded, as for an apt index. The bound on names is
+// lowered here so that a small primary reaches it. Versions of a name
+// already kept do not count.
+func TestOpenFedoraRefusesAPrimaryOfTooManyPackages(t *testing.T) {
+	primary := func(count int) []byte {
+		var text strings.Builder
+		text.WriteString(`<metadata>`)
+		for number := range count {
+			for _, version := range []string{"1", "2"} {
+				fmt.Fprintf(&text, `<package type="rpm"><name>p%07d</name><arch>noarch</arch><version ver="%s" rel="1"/></package>`, number, version)
+			}
+		}
+		text.WriteString(`</metadata>`)
+		return []byte(text.String())
+	}
+	mirror := newFedoraMirror(t, ".zst")
+	path := mirror.publish(fedoraReleasePath, primary(11), ".zst", 0)
+	release := mirror.release()
+	release.Repositories = release.Repositories[:1]
+	options := fedoraOptions(t)
+	options.maxEntries = 10
+	_, err := OpenFedora(context.Background(), options, release)
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, errTooLarge) || errors.Is(err, errChanged) {
+		t.Fatalf("OpenFedora = %v, want ErrUnavailable wrapping errTooLarge alone", err)
+	}
+	if !strings.Contains(err.Error(), "more than any archive has") {
+		t.Errorf("err = %v, want it to say the primary lists more packages than any archive has", err)
+	}
+	if got := mirror.requestsFor(path); got != 1 {
+		t.Errorf("the primary metadata was asked for %d times, want once", got)
+	}
+
+	// As many as the bound allows open.
+	mirror.publish(fedoraReleasePath, primary(10), ".zst", 0)
+	if opened, err := OpenFedora(context.Background(), options, release); err != nil || opened.Len() != 10 {
+		t.Errorf("OpenFedora of 10 packages with a bound of 10 = %v, %v; want all 10", opened, err)
+	}
+}
+
 func TestOpenFedoraStopsWhenTheContextEnds(t *testing.T) {
 	mirror := newFedoraMirror(t, ".zst")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -501,7 +542,7 @@ func TestReducePrimary(t *testing.T) {
 			`<format><rpm:provides><rpm:entry name="` + name + `"/></rpm:provides><file>/usr/bin/` + name + `</file></format></package>`
 	}
 	t.Run("what is kept", func(t *testing.T) {
-		entries, err := reducePrimary(context.Background(), strings.NewReader(document(
+		entries, err := reducePrimary(context.Background(), maxIndexEntries, strings.NewReader(document(
 			rpm("tool", "x86_64", `<version epoch="0" ver="1.10" rel="1.fc44"/>`, "the newer"),
 			rpm("tool", "x86_64", `<version epoch="0" ver="1.9" rel="3.fc44"/>`, "the older, listed after it"),
 			rpm("tool", "i686", `<version epoch="0" ver="2.0" rel="1.fc44"/>`, "another architecture"),
@@ -529,7 +570,7 @@ func TestReducePrimary(t *testing.T) {
 		"an unclosed quote": `<metadata><package type="rpm><name>git</name></package></metadata>`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if entries, err := reducePrimary(context.Background(), strings.NewReader(text)); err == nil {
+			if entries, err := reducePrimary(context.Background(), maxIndexEntries, strings.NewReader(text)); err == nil {
 				t.Errorf("reducePrimary = %+v, want an error", entries)
 			}
 		})
@@ -540,7 +581,7 @@ func TestReducePrimary(t *testing.T) {
 // text into several CharData tokens, and the field is all of them, trimmed
 // and made one line as a whole.
 func TestReducePrimaryJoinsAFieldGivenInPieces(t *testing.T) {
-	entries, err := reducePrimary(context.Background(), strings.NewReader(`<metadata>`+
+	entries, err := reducePrimary(context.Background(), maxIndexEntries, strings.NewReader(`<metadata>`+
 		`<package type="rpm"><name> <!---->gi<!-- a comment -->t<!----> </name><arch>x86<!---->_64</arch>`+
 		`<version ver="1" rel="1"/><summary> the <!---->`+"\t"+`summary <!----> </summary></package>`+
 		`<package type="rpm"><name>tool</name><arch> noarch <!----></arch><version ver="2" rel="1"/></package>`+
@@ -572,7 +613,7 @@ func TestReducePrimaryReadsAFieldOfManyPiecesInLinearTime(t *testing.T) {
 	var heapBefore, heapAfter runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&heapBefore)
-	entries, err := reducePrimary(context.Background(), strings.NewReader(document))
+	entries, err := reducePrimary(context.Background(), maxIndexEntries, strings.NewReader(document))
 	runtime.ReadMemStats(&heapAfter)
 	if err != nil {
 		t.Fatal(err)
@@ -642,7 +683,7 @@ func TestReducePrimaryStopsWhenTheContextEnds(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	document := `<metadata>` + strings.Repeat(`<package type="rpm"><name>filler</name><arch>noarch</arch><version ver="1" rel="1"/></package>`, 10_000) + `</metadata>`
-	if entries, err := reducePrimary(ctx, strings.NewReader(document)); !errors.Is(err, context.Canceled) {
+	if entries, err := reducePrimary(ctx, maxIndexEntries, strings.NewReader(document)); !errors.Is(err, context.Canceled) {
 		t.Errorf("reducePrimary = %d entries, %v; want context.Canceled", len(entries), err)
 	}
 }

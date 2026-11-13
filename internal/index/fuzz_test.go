@@ -52,6 +52,6 @@ func FuzzFedoraMetadata(f *testing.F) {
 	f.Add([]byte(`<repomd><data type="primary"><checksum type="sha256">00</checksum><location href="repodata/x-primary.xml.zst"/><size>1</size><open-size>2</open-size></data></repomd>`))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		_, _ = parseRepomd(bytes.NewReader(data))
-		_, _ = reducePrimary(context.Background(), bytes.NewReader(data))
+		_, _ = reducePrimary(context.Background(), maxIndexEntries, bytes.NewReader(data))
 	})
 }

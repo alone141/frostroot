@@ -237,7 +237,7 @@ func (f *fetcher) primary(plan rpmPlan) ([]Entry, error) {
 		openLimit = f.maxBodyBytes
 	}
 	opened := &boundedReader{reader: text, limit: openLimit + 1}
-	entries, err := reducePrimary(f.ctx, opened)
+	entries, err := reducePrimary(f.ctx, f.maxEntries, opened)
 	if err == nil {
 		// What follows the document is whitespace at most, and it counts
 		// toward both bounds like the rest.
@@ -246,6 +246,9 @@ func (f *fetcher) primary(plan rpmPlan) ([]Entry, error) {
 	if err != nil {
 		if f.ctx.Err() != nil {
 			return nil, f.ctx.Err()
+		}
+		if tooMany := (tooManyEntriesError{}); errors.As(err, &tooMany) {
+			return nil, fmt.Errorf("%s: %w", url, tooMany)
 		}
 		if errors.Is(err, errTooLarge) || counted.count > plan.primary.size {
 			return nil, fmt.Errorf("%s: %w", url, errTooLarge)
@@ -397,7 +400,11 @@ const contextCheckTokens = 4096
 // file is wholly read before its parse is far along, so no read of the body
 // notices that the context ended, and Ctrl-C or a deadline waited for the
 // parse to finish.
-func reducePrimary(ctx context.Context, reader io.Reader) ([]Entry, error) {
+//
+// It keeps at most maxEntries names, and fails with tooManyEntriesError
+// past them, as an apt index file does: the bound on the text is hundreds
+// of megabytes, and every name kept is held until the parse ends.
+func reducePrimary(ctx context.Context, maxEntries int, reader io.Reader) ([]Entry, error) {
 	decoder := xml.NewDecoder(reader)
 	byName := map[string]rpmPackage{}
 	var current rpmPackage
@@ -444,7 +451,9 @@ func reducePrimary(ctx context.Context, reader io.Reader) ([]Entry, error) {
 		case xml.EndElement:
 			reading = ""
 			if depth == 2 && element.Name.Local == "package" {
-				keepNewest(byName, current)
+				if err := keepNewest(byName, current, maxEntries); err != nil {
+					return nil, err
+				}
 			}
 			depth--
 			if depth < 0 {
@@ -474,19 +483,25 @@ func reducePrimary(ctx context.Context, reader io.Reader) ([]Entry, error) {
 // architecture, is not a binary rpm, or is older than one of its name
 // already kept. A name longer than maxNameBytes is refused rather than cut,
 // as reduce refuses one of an apt stanza: cut, it would name a package that
-// does not exist, and offer it.
-func keepNewest(byName map[string]rpmPackage, read rpmPackage) {
+// does not exist, and offer it. A new name past maxEntries fails with
+// tooManyEntriesError.
+func keepNewest(byName map[string]rpmPackage, read rpmPackage, maxEntries int) error {
 	name, arch := read.name.String(), read.arch.String()
 	if !read.isRPM || !read.hasVersion || name == "" || read.name.tooLong {
-		return
+		return nil
 	}
 	if read.arch.tooLong || (arch != distro.FedoraArch && arch != "noarch") {
-		return
+		return nil
 	}
-	if kept, isKept := byName[name]; isKept && compareEVR(kept.epoch, kept.version, kept.rel, read.epoch, read.version, read.rel) >= 0 {
-		return
+	kept, isKept := byName[name]
+	if isKept && compareEVR(kept.epoch, kept.version, kept.rel, read.epoch, read.version, read.rel) >= 0 {
+		return nil
+	}
+	if !isKept && len(byName) >= maxEntries {
+		return tooManyEntriesError{limit: maxEntries}
 	}
 	byName[name] = read
+	return nil
 }
 
 // attribute returns the value of an element's attribute, or "".

@@ -94,7 +94,8 @@ func expandedLimit(compressedBytes, ceiling int64) int64 {
 // text bound alone let an index hold gigabytes. Ubuntu's largest index,
 // universe, lists about 65,000 packages, and a vendor that lists every
 // version it has published lists thousands; this is several times either,
-// and holds what one file keeps to a few hundred megabytes.
+// and holds what one file keeps to a few hundred megabytes. A Fedora
+// primary is bound the same way, by the names it keeps.
 const maxIndexEntries = 500_000
 
 // tooManyEntriesError means an index file lists more than maxEntries
