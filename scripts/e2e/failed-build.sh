@@ -6,6 +6,7 @@
 # The line that explains a failed build is found in mmdebstrap's whole log,
 # or mkosi's, and apt's wording is apt's to change and dnf5's dnf5's, so
 # only a real build shows that the search still finds it.
+# shellcheck source=scripts/e2e/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 e2e_begin failed-build

@@ -13,6 +13,7 @@
 # the lab's boot/ directory. The second boot uses OVMF's snakeoil variables,
 # whose keys signed nothing the disk holds, and must be refused. A real PC
 # is the owner's check. E2E_OVMF_DIR names where the firmware files are.
+# shellcheck source=scripts/e2e/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 E2E_TARGET=disk

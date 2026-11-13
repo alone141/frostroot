@@ -277,6 +277,7 @@ dnf repoquery --installed --queryformat '%{full_nevra}|%{reason}|%{from_repo}|%{
 nevras=$(cut -d '|' -f 1 "$OUTPUTDIR/{{.Installed}}")
 set -f
 # Unquoted on purpose: one argument per package, none holding a space.
+# shellcheck disable=SC2086
 dnf --cacheonly repoquery --available --queryformat '%{full_nevra}|%{repoid}|%{location}\n' $nevras > "$OUTPUTDIR/{{.Locations}}"
 set +f
 {{- end}}

@@ -7,6 +7,7 @@
 # that could not have failed is worse than none, so each case below is a
 # tiny scenario in its own process, and its verdict is compared with the
 # one it must reach.
+# shellcheck source=scripts/e2e/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 e2e_begin harness
@@ -23,12 +24,18 @@ expect_exit() {
 
 expect_exit 0 "a scenario whose checks hold passes" 'e2e_check "holds" true; e2e_end'
 expect_exit 1 "a false check fails the scenario" 'e2e_check "does not hold" false; e2e_end'
+# Each scenario below is single-quoted on purpose: the inner shell expands
+# it, in the lab, and this one must not.
+# shellcheck disable=SC2016
 expect_exit 1 "a lacks-check on a file never written fails" \
 	'e2e_check "lacks" e2e_lacks "$LAB/never-written" "anything"; e2e_end'
+# shellcheck disable=SC2016
 expect_exit 1 "a tree-lacks-check on a directory never made fails" \
 	'e2e_check "lacks" e2e_tree_lacks "$LAB/never-made" "anything"; e2e_end'
+# shellcheck disable=SC2016
 expect_exit 1 "checks against a tarball that cannot be listed fail" \
 	'entries=$(e2e_entries "$LAB/no-such.tar.gz"); e2e_check "lacks" e2e_lacks "$entries" "anything"; e2e_end'
+# shellcheck disable=SC2016
 expect_exit 1 "a wrong exit status stops the scenario at once" \
 	'e2e_run step "$LAB" false; e2e_expect_status 0 step; e2e_check "never reached" true; echo reached; e2e_end'
 e2e_check "and nothing after it ran" e2e_lacks "$LAB/inner.log" "reached"

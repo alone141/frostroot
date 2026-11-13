@@ -9,6 +9,7 @@
 # image. The recipe asks for a Python package because the Python step is
 # where --ca-bundle's file is uploaded into the image, and where it has to be
 # deleted again.
+# shellcheck source=scripts/e2e/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 e2e_begin certificates

@@ -9,6 +9,7 @@
 # is the way to look at a change to the form without a person at the
 # terminal. The golden frames in internal/tui cover how each screen renders;
 # this covers the binary, the terminal and the real indexes together.
+# shellcheck source=scripts/e2e/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 e2e_begin tui

@@ -7,6 +7,7 @@
 # flag's plumbing and its messages. That apt and pip really do skip
 # verification under it is apt-trust's and pip-trust's to show, and that it
 # leaves nothing in the image is no-build-leaks'.
+# shellcheck source=scripts/e2e/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 e2e_begin insecure

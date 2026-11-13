@@ -7,6 +7,7 @@
 # real system, and the unit tests can only fake those files. An image
 # frostroot built is a real system whose answers are known: the packages
 # asked for, the release and the user.
+# shellcheck source=scripts/e2e/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 e2e_begin capture-roundtrip

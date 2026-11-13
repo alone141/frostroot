@@ -24,7 +24,7 @@ The README's "Layout" section maps the packages.
 
 | To | Run | Notes |
 |---|---|---|
-| Run every check before a push | `scripts/check.sh` | gofmt, vet with and without the integration tag, `go test -race`, the Windows build, golangci-lint. About 2 minutes. CI runs the same script. |
+| Run every check before a push | `scripts/check.sh` | gofmt, vet with and without the integration tag, `go test -race`, the Windows build, shellcheck over `scripts/`, golangci-lint. About 2 minutes. CI runs the same script. |
 | Test one package, or one test | `scripts/check.sh --only test -- -run TestName ./internal/cli/` | Arguments after `--` go to `go test`. |
 | Check for known vulnerabilities | `scripts/check.sh --only vuln` | Runs govulncheck against the toolchain go.mod pins. Needs the network. |
 | Fuzz the parsers of hostile input | `scripts/check.sh --only fuzz` | Every `Fuzz` target for `FROSTROOT_FUZZTIME` (10s) each; CI runs them two minutes each, weekly. A crasher lands in the package's `testdata/fuzz`: commit it with the fix. |

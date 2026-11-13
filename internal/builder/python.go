@@ -255,6 +255,8 @@ if [ "$compileStatus" -gt 1 ]; then
 fi
 
 # Every login shell finds the environment, so "python" is the image's python.
+# The profile expands $PATH when it runs, not this script.
+# shellcheck disable=SC2016
 printf 'PATH="%s/bin:$PATH"\n' "$venv" > {{shellQuote .ProfilePath}}
 chmod 0644 {{shellQuote .ProfilePath}}
 `))

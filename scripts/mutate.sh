@@ -98,6 +98,8 @@ for file in "${files[@]}"; do
 	mkdir -p "$backup/$(dirname "$file")"
 	cp -p "$file" "$backup/$file"
 done
+# Called by the EXIT trap below, which shellcheck does not count as a call.
+# shellcheck disable=SC2317
 restore() {
 	for file in "${files[@]}"; do
 		cp -p "$backup/$file" "$file"

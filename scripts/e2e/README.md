@@ -107,6 +107,7 @@ Start from this:
 # takes: about N minutes: what takes the time
 #
 # Why this needs a real build, and what the checks rest on.
+# shellcheck source=scripts/e2e/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 e2e_begin NAME

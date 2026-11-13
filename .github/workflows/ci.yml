@@ -17,12 +17,20 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      # shellcheck is a step of check.sh, and internal/builder's unit tests
+      # run it over the hooks and scripts the builder renders. Those tests
+      # skip without it, so it is installed here, and check.sh's shellcheck
+      # step fails the job if it is not.
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
       # The same script CONTRIBUTING.md asks for before a push, so a clean
       # run on a laptop is a clean run here: gofmt, vet with and without the
-      # integration tag, go test -race, and the Windows build. Lint has a job
-      # of its own below.
-      - name: gofmt, vet, test and the Windows build
-        run: scripts/check.sh --only fmt,vet,test,windows
+      # integration tag, go test -race, the Windows build and shellcheck.
+      # Lint has a job of its own below.
+      - name: gofmt, vet, test, the Windows build and shellcheck
+        run: scripts/check.sh --only fmt,vet,test,windows,shellcheck
 
   integration:
     # The tests behind the integration tag bootstrap real images and compare

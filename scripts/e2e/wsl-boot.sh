@@ -13,6 +13,7 @@
 # recipe has no Python packages or [certificates] yet, so a Fedora image is
 # checked for what it has instead: rpm's database, dnf5 verifying TLS, and
 # a machine id of its own, made at its first boot.
+# shellcheck source=scripts/e2e/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 e2e_begin wsl-boot
@@ -52,9 +53,13 @@ registered() {
 	grep -qx -- "$distro" <<< "$list"
 }
 
-# Predicates over what the image said, for e2e_check.
+# Predicates over what the image said, for e2e_check, which calls them by
+# name: shellcheck sees no call and takes them for unreachable.
+# shellcheck disable=SC2317
 is_running_or_degraded() { [ "$1" = running ] || [ "$1" = degraded ]; }
+# shellcheck disable=SC2317
 says() { grep -qE -- "$1" <<< "$2"; }         # REGEX TEXT
+# shellcheck disable=SC2317
 never_says() { ! grep -qiE -- "$1" <<< "$2"; } # REGEX TEXT
 
 unregister() {
