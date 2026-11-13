@@ -36,18 +36,18 @@ func xzTestData(size int) []byte {
 }
 
 // compressXZ writes data as one xz stream with the library's writer.
-func compressXZ(t testing.TB, data []byte, config xz.WriterConfig) []byte {
-	t.Helper()
+func compressXZ(tb testing.TB, data []byte, config xz.WriterConfig) []byte {
+	tb.Helper()
 	var compressed bytes.Buffer
 	writer, err := config.NewWriter(&compressed)
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	if _, err := writer.Write(data); err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	if err := writer.Close(); err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	return compressed.Bytes()
 }
@@ -85,8 +85,8 @@ func xzBlockHeaderOffsets(file []byte) []int {
 // withDictionaryCode returns a copy of file whose block header at offset
 // declares the dictionary code, with the header's CRC32 made to match, so
 // that nothing but the size of the dictionary is wrong with it.
-func withDictionaryCode(t testing.TB, file []byte, offset int, code byte) []byte {
-	t.Helper()
+func withDictionaryCode(tb testing.TB, file []byte, offset int, code byte) []byte {
+	tb.Helper()
 	changed := bytes.Clone(file)
 	headerBytes := (int(changed[offset]) + 1) * 4
 	header := changed[offset : offset+headerBytes]

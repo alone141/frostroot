@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"frostroot/internal/distro"
 	"frostroot/internal/recipe"
 )
 
@@ -297,15 +298,124 @@ func TestCustomizeHooksWithoutSudoOmitSudoers(t *testing.T) {
 	}
 }
 
-func TestHooksAndScriptNeverSwallowFailures(t *testing.T) {
-	// The Python script too, which used to end its compile step with
-	// "|| true" where nothing looked.
-	everything := strings.Join(CustomizeHooks(sampleStage("/w/stage")), "\n") + "\n" + renderProvisionScript(t, sampleRecipe()) +
-		"\n" + renderPythonScript(t, pythonRecipe(), PythonOptions{})
-	for _, failureSwallower := range []string{"|| true", "|| :", "set +e"} {
-		if strings.Contains(everything, failureSwallower) {
-			t.Errorf("hooks must fail closed, found %q", failureSwallower)
+// renderedShellText is shell text the builder renders and a shell runs,
+// named for test failures.
+type renderedShellText struct {
+	name  string
+	shell string // the shell that runs it: sh, or bash
+	text  string
+}
+
+// isShellHook reports whether mmdebstrap runs hook with sh. The others are
+// its own commands, which it parses itself.
+func isShellHook(hook string) bool {
+	command, _, _ := strings.Cut(hook, " ")
+	switch command {
+	case "upload", "download", "copy-in", "copy-out", "tar-in", "tar-out", "sync-in", "sync-out":
+		return false
+	}
+	return true
+}
+
+// renderedShell returns every hook and script the builder renders, with
+// every optional part switched on in at least one of them.
+func renderedShell(t *testing.T) []renderedShellText {
+	t.Helper()
+	stage := sampleStage("/w/stage")
+	stage.SourcesListPath = "/w/stage/sources.list"
+	stage.AptListsDir = "/w/stage/lists"
+	stage.ExtendedStatesPath = "/w/stage/extended-states"
+	stage.KeyringDir, stage.KeyNames = "/w/stage/keyrings", []string{"vendor"}
+	stage.CertificateDir, stage.CertificateFileNames = "/w/stage/certificates", []string{"corp.crt"}
+	stage.PythonScriptPath = "/w/stage/python.sh"
+	stage.ExtraTrustPath = "/w/stage/extra-trust.pem"
+	stage.RequirementsPath = "/w/stage/requirements.txt"
+	stage.WheelsDir = "/w/stage/wheels"
+	stage.PipReportPath = "/w/stage/pip-report.json"
+	stage.PipPinReportPath = "/w/stage/pip-pin-report.json"
+	stage.PipListPath = "/w/stage/pip-list.json"
+	allHooks := slices.Concat(CustomizeHooks(stage), CustomizeHooks(sampleDiskStage(t)),
+		[]string{aptTrustSetupHook(aptTrustSettings("/w/stage/ca-bundle.pem", true)), aptTrustCleanupHook})
+	var shellHooks []string
+	for _, hook := range allHooks {
+		if isShellHook(hook) {
+			shellHooks = append(shellHooks, hook)
 		}
+	}
+	release, err := distro.Lookup("24.04", "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	diskScript, err := renderDiskScript(sampleDiskRecipe(), release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificatesScript, err := RenderProvisionScript(certificateRecipe("certs/corp.pem", "certs/other.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fedoraProvision, err := RenderFedoraProvisionScript(sampleFedoraRecipe())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fedoraOnline, err := renderFedoraImageFinalize(fedora44(t), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fedoraOffline, err := renderFedoraImageFinalize(fedora44(t), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []renderedShellText{
+		// Each runs on its own as sh -c HOOK exec ROOTDIR; one after the
+		// other they are one script that means the same.
+		{"hooks", "sh", strings.Join(shellHooks, "\n") + "\n"},
+		{"provision script", "sh", renderProvisionScript(t, sampleRecipe())},
+		{"provision script with certificates", "sh", certificatesScript},
+		// The Python script too, which used to end its compile step with
+		// "|| true" where nothing looked.
+		{"python script", "sh", renderPythonScript(t, pythonRecipe(), PythonOptions{SourceDateEpoch: 1789662022})},
+		{"python script trusting certificates insecurely", "sh", renderPythonScript(t, pythonRecipe(), PythonOptions{TrustImageCertificates: true, ExtraTrust: true, Insecure: true})},
+		{"python script offline", "sh", renderPythonScript(t, pythonRecipe(), PythonOptions{Offline: true, Pip: PinnedPip})},
+		{"disk script", "sh", diskScript},
+		{"set-password", "bash", renderSetPassword()},
+		{"fedora provision script", "sh", fedoraProvision},
+		{"fedora finalize script", "sh", fedoraOnline},
+		{"fedora finalize script offline", "sh", fedoraOffline},
+		{"fedora tools finalize script", "sh", fedoraToolsFinalize},
+		{"mkosi wrapper", "sh", mkosiWrapper},
+	}
+}
+
+func TestHooksAndScriptNeverSwallowFailures(t *testing.T) {
+	for _, rendered := range renderedShell(t) {
+		for _, failureSwallower := range []string{"|| true", "|| :", "set +e"} {
+			if strings.Contains(rendered.text, failureSwallower) {
+				t.Errorf("the %s must fail closed, found %q", rendered.name, failureSwallower)
+			}
+		}
+	}
+}
+
+// TestRenderedShellPassesShellcheck runs shellcheck over what the builder
+// renders, which scripts/check.sh's shellcheck step cannot see: none of it is
+// a file in the repository. CI installs shellcheck; without it this skips.
+func TestRenderedShellPassesShellcheck(t *testing.T) {
+	shellcheck, err := exec.LookPath("shellcheck")
+	if err != nil {
+		t.Skip("shellcheck is not installed")
+	}
+	for _, rendered := range renderedShell(t) {
+		t.Run(rendered.name, func(t *testing.T) {
+			// --norc, so that a shellcheckrc in someone's home cannot change
+			// the findings. SC2018 and SC2019 say tr 'A-Z' misses accented
+			// letters; it lowercases locale names, which are ASCII.
+			command := exec.Command(shellcheck, "--norc", "--shell="+rendered.shell, "--exclude=SC2018,SC2019", "-")
+			command.Stdin = strings.NewReader(rendered.text)
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Errorf("shellcheck on the %s: %v\n%s", rendered.name, err, output)
+			}
+		})
 	}
 }
 

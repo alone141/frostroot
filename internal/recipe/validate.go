@@ -697,16 +697,11 @@ func targetProblems(imageRecipe Recipe) []string {
 			problems = append(problems, err.Error())
 		}
 	}
-	seenFormats := map[string]bool{}
+	// CheckDiskFormat refuses every name until a format besides the raw
+	// image is built, so a name given twice is refused twice. The version
+	// that builds one checks for nil here, and for a name given twice.
 	for _, format := range imageRecipe.DiskFormats() {
-		if err := CheckDiskFormat(format); err != nil {
-			problems = append(problems, err.Error())
-			continue
-		}
-		if seenFormats[format] {
-			problems = append(problems, fmt.Sprintf("disk.formats names %s twice", format))
-		}
-		seenFormats[format] = true
+		problems = append(problems, CheckDiskFormat(format).Error())
 	}
 	return problems
 }
@@ -746,7 +741,7 @@ func CheckDiskSize(size string) error {
 
 // CheckDiskFormat reports why format cannot be in [disk] formats: no format
 // besides the raw image is built yet, and a recipe that asked for one
-// built, exited 0 and wrote no such file.
+// built, exited 0 and wrote no such file. It never returns nil.
 func CheckDiskFormat(format string) error {
 	switch format {
 	case DiskFormatQcow2, "vhdx":

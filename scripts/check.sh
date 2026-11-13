@@ -6,7 +6,8 @@
 #
 # usage: scripts/check.sh [--only STEPS] [--skip STEPS] [-- GO-TEST-ARGS...]
 #
-#   STEPS is a comma-separated list of: fmt vet test windows lint vuln fuzz
+#   STEPS is a comma-separated list of:
+#     fmt vet test windows shellcheck lint vuln fuzz
 #   The default runs every step but vuln, which needs the network and can
 #   turn red on any day a vulnerability is disclosed, so it runs when asked,
 #   and fuzz, which runs every fuzz target for FROSTROOT_FUZZTIME (10s by
@@ -21,8 +22,8 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 2
 
-allSteps=(fmt vet test windows lint vuln fuzz)
-defaultSteps=(fmt vet test windows lint)
+allSteps=(fmt vet test windows shellcheck lint vuln fuzz)
+defaultSteps=(fmt vet test windows shellcheck lint)
 # Bump together with release.yml, which installs the same version.
 govulncheckVersion=v1.8.0
 
@@ -155,6 +156,36 @@ step_windows() {
 	# The module must still compile off Linux: the CLI explains on Windows
 	# that the build needs WSL, which it cannot do if it does not compile.
 	GOOS=windows go build ./...
+}
+
+step_shellcheck() {
+	# Every shell script under scripts/, the e2e scenarios among them. The
+	# hooks and scripts the builder renders are not files here: a unit test
+	# in internal/builder runs shellcheck over them, and the test step runs
+	# it whenever shellcheck is installed. Missing, it fails this step, as
+	# golangci-lint fails lint: a step that passed without its tool would
+	# report a check nobody ran.
+	if ! command -v shellcheck > /dev/null 2>&1; then
+		echo "shellcheck is not installed; CI installs Ubuntu's:"
+		echo "  sudo apt-get install shellcheck"
+		return 1
+	fi
+	local files=() file
+	if git rev-parse --git-dir > /dev/null 2>&1; then
+		while IFS= read -r file; do
+			[ -f "$file" ] && files+=("$file")
+		done < <(git ls-files --cached --others --exclude-standard -- 'scripts/*.sh')
+	else
+		while IFS= read -r file; do
+			files+=("$file")
+		done < <(find scripts -name '*.sh' | sort)
+	fi
+	shellcheck --version | sed -n 's/^version: /shellcheck /p'
+	# --norc, so that a shellcheckrc in someone's home cannot change the
+	# findings; --external-sources follows each scenario's source directive
+	# into lib.sh, whose paths are relative to the root this runs from.
+	shellcheck --norc --external-sources "${files[@]}" || return 1
+	echo "${#files[@]} scripts checked"
 }
 
 step_lint() {

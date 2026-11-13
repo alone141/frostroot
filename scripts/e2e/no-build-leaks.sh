@@ -14,6 +14,7 @@
 # FAIL. FROSTROOT_E2E_HTTPS_MIRROR picks the mirror. A Fedora build reaches
 # Fedora's mirrors over HTTPS through its metalinks, and takes neither a
 # --mirror nor [certificates] yet: dnf reads the bundle and the switch.
+# shellcheck source=scripts/e2e/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 e2e_begin no-build-leaks

@@ -7,8 +7,12 @@ on:
   push:
     tags: ["v*"]
 
+# contents to publish the release; id-token and attestations to sign and
+# record the build provenance of what it publishes.
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -43,6 +47,16 @@ jobs:
           ./frostroot-linux-amd64 version
           sha256sum frostroot-linux-amd64 > SHA256SUMS
           cat SHA256SUMS
+      # A signed statement that this workflow, at this commit, built these
+      # files, which `gh attestation verify FILE --repo alone141/frostroot`
+      # checks. SHA256SUMS says a download is what was published; this says
+      # what published it.
+      - name: Attest the build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            frostroot-linux-amd64
+            SHA256SUMS
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}

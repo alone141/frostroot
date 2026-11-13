@@ -771,9 +771,16 @@ func TestIndexFlagsRefuseWhatTheCacheMustNotKeep(t *testing.T) {
 		}
 	}
 	commandArgs := map[string]func(t *testing.T) (recipeDir string, args []string){
-		"init": func(t *testing.T) (string, []string) { return t.TempDir(), []string{"init"} },
-		"edit": func(t *testing.T) (string, []string) { return newRecipeDir(t, "valid.toml"), []string{"edit"} },
+		"init": func(t *testing.T) (string, []string) {
+			t.Helper()
+			return t.TempDir(), []string{"init"}
+		},
+		"edit": func(t *testing.T) (string, []string) {
+			t.Helper()
+			return newRecipeDir(t, "valid.toml"), []string{"edit"}
+		},
 		"capture": func(t *testing.T) (string, []string) {
+			t.Helper()
 			return t.TempDir(), []string{"capture", "--root", fakeUbuntuRoot(t, "24.04")}
 		},
 	}

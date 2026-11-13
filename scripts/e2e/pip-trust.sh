@@ -9,6 +9,7 @@
 # virtual environment support. Its URL and checksum are read out of
 # internal/builder/python.go, where PinnedPip is, so this checks the pip
 # frostroot installs today.
+# shellcheck source=scripts/e2e/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 e2e_begin pip-trust

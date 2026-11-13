@@ -14,6 +14,7 @@
 # host, inside the image. A Fedora recipe has no Python packages yet, and
 # its second rebuild also runs with MKOSI_DNF=dnf, which, if it reached
 # mkosi, would install with a dnf the tools tree does not have.
+# shellcheck source=scripts/e2e/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 e2e_begin offline-identical

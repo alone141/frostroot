@@ -22,7 +22,11 @@ That runs, in order:
 - `go test -race ./...`
 - `GOOS=windows go build ./...`, because the module must still compile off
   Linux
-- `golangci-lint run ./...`, at the version CI pins (v2.14.0, configured by
+- `shellcheck` over every script under `scripts/`; the step fails when
+  shellcheck is not installed (`sudo apt-get install shellcheck`), and the
+  builder's unit tests run it over the hooks and scripts it renders whenever
+  it is
+- `golangci-lint run ./...`, at the version CI pins (v2.15.0, configured by
   `.golangci.yml`)
 
 Every step runs even when one fails, and the summary names the failures.

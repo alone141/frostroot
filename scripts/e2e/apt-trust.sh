@@ -15,6 +15,7 @@
 # The hooks are frostroot's own text, which internal/builder's
 # bootstrap_test.go and insecure_test.go pin; change them there and here
 # together. FROSTROOT_E2E_HTTPS_MIRROR picks the mirror.
+# shellcheck source=scripts/e2e/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 e2e_begin apt-trust
@@ -32,7 +33,7 @@ setup_hook() {
 	for setting in "$@"; do
 		quoted+=" '$setting'"
 	done
-	echo "mkdir -p \"\$1/etc/apt/apt.conf.d\" && printf '%s\\n'$quoted > \"\$1$conf\""
+	printf '%s\n' "mkdir -p \"\$1/etc/apt/apt.conf.d\" && printf '%s\\n'$quoted > \"\$1$conf\""
 }
 
 # arm NAME SETTING... bootstraps noble with those settings in place.

@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared by the scenarios in scripts/e2e. Source it; do not run it.
 #
 # Every scenario works under one root, so that one command removes all of it
@@ -59,6 +60,8 @@ e2eStatus=0
 # Python packages pass it as --ca-bundle, which reaches neither the image
 # nor the lock, so their verdicts mean what they mean without it.
 e2eTrustFlags=()
+# The scenarios that source this read it, which shellcheck cannot see.
+# shellcheck disable=SC2034
 if [ -n "${E2E_CA_BUNDLE:-}" ]; then
 	e2eTrustFlags=(--ca-bundle "$E2E_CA_BUNDLE")
 fi
@@ -171,7 +174,9 @@ e2e_build_frostroot() {
 		if [ ! -f "$E2E_FROSTROOT" ]; then
 			e2e_abort "E2E_FROSTROOT=$E2E_FROSTROOT is not a file"
 		fi
-		cp "$E2E_FROSTROOT" "$FROSTROOT" && chmod 755 "$FROSTROOT" || e2e_abort "could not copy $E2E_FROSTROOT"
+		if ! { cp "$E2E_FROSTROOT" "$FROSTROOT" && chmod 755 "$FROSTROOT"; }; then
+			e2e_abort "could not copy $E2E_FROSTROOT"
+		fi
 	else
 		e2e_require go
 		if ! (cd "$e2eRepo" && go build -o "$FROSTROOT" ./cmd/frostroot); then
@@ -315,7 +320,8 @@ e2e_sha() { sha256sum "$1" 2> /dev/null | cut -d' ' -f1; }        # FILE: prints
 # When the image cannot be read there is no file, so every check against
 # the list fails rather than passing on an empty one.
 e2e_entries() {
-	local list=$LAB/entries-$(basename "$1").txt dump
+	local list dump
+	list=$LAB/entries-$(basename "$1").txt || return 1
 	if [ ! -s "$list" ] || [ "$1" -nt "$list" ]; then
 		case "$1" in
 		*.img)
@@ -341,7 +347,8 @@ e2e_entries() {
 # the lab, once per image, by what sfdisk says of its table, and prints the
 # file's path. e2fsprogs' tools read it as the file system it is.
 e2e_disk_root() {
-	local image=$1 root=$LAB/root-of-$(basename "$1" .img).ext4 table start size
+	local image=$1 root table start size
+	root=$LAB/root-of-$(basename "$1" .img).ext4 || return 1
 	if [ ! -s "$root" ] || [ "$image" -nt "$root" ]; then
 		table=$(sfdisk --dump "$image" 2> /dev/null | grep 'name="root-x86-64"') || return 1
 		start=$(printf '%s' "$table" | sed -n 's/.*start= *\([0-9]*\),.*/\1/p')
@@ -357,7 +364,8 @@ e2e_disk_root() {
 # prints the directory: enough to read any file, as e2e_unpack is for a
 # tarball. Ownership and device nodes are not kept.
 e2e_disk_dump() {
-	local image=$1 dir=$LAB/dump-of-$(basename "$1" .img) root
+	local image=$1 dir root
+	dir=$LAB/dump-of-$(basename "$1" .img) || return 1
 	if [ ! -d "$dir" ] || [ "$image" -nt "$dir" ]; then
 		root=$(e2e_disk_root "$image") || return 1
 		rm -rf "$dir"

@@ -457,15 +457,15 @@ func (f *fedoraBuild) cachedPackage(packageManager, repository, fileName string)
 		if !isRepository || configHash == "" || strings.Trim(configHash, "0123456789abcdef") != "" || !entry.IsDir() {
 			continue
 		}
-		path := filepath.Join(cacheRoot, entry.Name(), "packages", fileName)
-		digest, size, err := sha256OfFile(path)
+		cachedPath := filepath.Join(cacheRoot, entry.Name(), "packages", fileName)
+		digest, size, err := sha256OfFile(cachedPath)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
 		if err != nil {
 			return "", 0, err
 		}
-		found = append(found, cachedFile{path: path, digest: digest, size: size})
+		found = append(found, cachedFile{path: cachedPath, digest: digest, size: size})
 	}
 	if len(found) == 0 {
 		return "", 0, fmt.Errorf("%s from %s is %w %s", fileName, repository, errNotCached, f.cacheDir)
@@ -479,9 +479,9 @@ func (f *fedoraBuild) cachedPackage(packageManager, repository, fileName string)
 }
 
 // sha256OfFile returns the SHA-256, as lowercase hex, and the size of the
-// file at path.
-func sha256OfFile(path string) (string, int64, error) {
-	file, err := os.Open(path)
+// file at filePath.
+func sha256OfFile(filePath string) (string, int64, error) {
+	file, err := os.Open(filePath)
 	if err != nil {
 		return "", 0, err
 	}
@@ -489,7 +489,7 @@ func sha256OfFile(path string) (string, int64, error) {
 	digest := sha256.New()
 	size, err := io.Copy(digest, file)
 	if err != nil {
-		return "", 0, fmt.Errorf("reading %s: %w", path, err)
+		return "", 0, fmt.Errorf("reading %s: %w", filePath, err)
 	}
 	return hex.EncodeToString(digest.Sum(nil)), size, nil
 }

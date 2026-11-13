@@ -5,13 +5,15 @@
 # how big first. Nothing outside that root is touched.
 #
 # usage: scripts/e2e/clean.sh [--dry-run]
+# shellcheck source=scripts/e2e/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 case "${1:-}" in
 "") dryRun=0 ;;
 --dry-run) dryRun=1 ;;
 -h | --help)
-	sed -n '2,/^source /{/^#/s/^# \{0,1\}//p}' "$0"
+	# The header, without the directive that tells shellcheck where lib.sh is.
+	sed -n '2,/^source /{/^# shellcheck /!s/^# \{0,1\}//p}' "$0"
 	exit 0
 	;;
 *)
