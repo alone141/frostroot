@@ -875,3 +875,28 @@ func (loopbackOnly) RoundTrip(request *http.Request) (*http.Response, error) {
 	}
 	return http.DefaultTransport.RoundTrip(request)
 }
+
+// TestMirrorRefusalsQuoteNothingOfAQueryOrFragment: --mirror's refusal, which
+// build, vendor, init, edit and capture all give, quoted a URL refused for
+// something before its query whole, a token in the query with it.
+func TestMirrorRefusalsQuoteNothingOfAQueryOrFragment(t *testing.T) {
+	for _, shape := range []string{
+		"https://host.example/x?token=s3cret#frag",
+		"https://host.example/x?token=s3 cret",
+		"https://host.example/x?token=[s3cret]",
+		"ftp://host.example/x?token=s3cret",
+		"https:///x?token=s3cret",
+		"https://host.example/%zz?token=s3cret",
+		"host.example/x?token=s3cret",
+		"https://host.example/x#s3cret",
+	} {
+		err := validateMirrorURL(shape)
+		if err == nil {
+			t.Errorf("validateMirrorURL(%q) = nil, want a refusal", shape)
+			continue
+		}
+		if !strings.Contains(err.Error(), "--mirror") || strings.Contains(err.Error(), "s3") || strings.Contains(err.Error(), "frag") {
+			t.Errorf("validateMirrorURL(%q) = %v, want --mirror named and nothing after the ? or # quoted", shape, err)
+		}
+	}
+}

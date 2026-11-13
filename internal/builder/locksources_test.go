@@ -234,3 +234,31 @@ func TestBuildOfflineRefusesSourceLinesNoBuildWrites(t *testing.T) {
 		})
 	}
 }
+
+// A source line whose URL is refused for something before its query, or
+// for its fragment, was quoted whole, a token after "?" or "#" with it: by
+// recipe.CheckSourceURL's message and by the line the refusal names.
+func TestSourceLineRefusalsQuoteNothingOfAQueryOrFragment(t *testing.T) {
+	for _, sourceURL := range []string{
+		"https://host.example/x?token=s3cret#frag",
+		"https://host.example/x?token=s3 cret",
+		"https://host.example/x?token=[s3cret]",
+		"ftp://host.example/x?token=s3cret",
+		"https:///x?token=s3cret",
+		"https://host.example/%zz?token=s3cret",
+		"host.example/x?token=s3cret",
+		"https://host.example/x#s3cret",
+	} {
+		line := "deb " + sourceURL + " jammy main universe"
+		if err := checkLockSourceLine(line); err == nil || strings.Contains(err.Error(), "s3") || strings.Contains(err.Error(), "frag") {
+			t.Errorf("checkLockSourceLine(%q) = %v, want a refusal quoting nothing after the ? or #", line, err)
+		}
+		err := checkUbuntuLockEntries(recipe.Lockfile{Sources: []string{line}})
+		if !errors.Is(err, pool.ErrBadLock) || strings.Contains(err.Error(), "s3") || strings.Contains(err.Error(), "frag") {
+			t.Errorf("checkUbuntuLockEntries(%q) = %v, want %v quoting nothing after the ? or #", line, err, pool.ErrBadLock)
+		}
+	}
+	if got, want := redactSourceLine("deb https://u:p@host.example/x?token=s3 cret jammy main"), "deb https://REDACTED@host.example/x?REDACTED"; got != want {
+		t.Errorf("redactSourceLine = %q, want %q", got, want)
+	}
+}

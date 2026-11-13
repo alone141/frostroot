@@ -366,6 +366,61 @@ func TestURLChecksRefuseAQueryAndAnUpperCaseScheme(t *testing.T) {
 	}
 }
 
+// queryOrFragmentShapes are URLs refused for something before their query,
+// or for their fragment, whose refusal quoted them whole, the token after
+// "?" or "#" with them.
+var queryOrFragmentShapes = []string{
+	"https://host.example/x?token=s3cret#frag",
+	"https://host.example/x?token=s3 cret",
+	"https://host.example/x?token=[s3cret]",
+	"ftp://host.example/x?token=s3cret",
+	"https:///x?token=s3cret",
+	"https://host.example/%zz?token=s3cret",
+	"host.example/x?token=s3cret",
+	"https://host.example/x#s3cret",
+	"https://user:pw@host.example/x?token=s3cret",
+}
+
+// TestURLRefusalsQuoteNothingOfAQueryOrFragment: a refusal quotes the URL
+// up to its "?" or "#" and nothing after it; a URL with neither is quoted
+// as it was.
+func TestURLRefusalsQuoteNothingOfAQueryOrFragment(t *testing.T) {
+	for _, shape := range queryOrFragmentShapes {
+		for name, err := range map[string]error{
+			"source url":       CheckSourceURL(shape),
+			"python index_url": CheckPythonIndexURL(shape),
+		} {
+			if err == nil {
+				t.Errorf("%s %q: no refusal", name, shape)
+				continue
+			}
+			if strings.Contains(err.Error(), "s3") || strings.Contains(err.Error(), "frag") {
+				t.Errorf("%s %q: the refusal quotes what follows the ? or #: %v", name, shape, err)
+			}
+		}
+	}
+	if err := CheckPythonIndexURL("http://host.example/x?token=s3cret"); err == nil || strings.Contains(err.Error(), "s3cret") {
+		t.Errorf("an http index_url with a query: %v, want a refusal that does not quote the query", err)
+	}
+	if err := CheckSourceURL("ftp://host.example/x"); err == nil || !strings.Contains(err.Error(), `"ftp://host.example/x"`) {
+		t.Errorf("a URL with no query: %v, want it quoted whole", err)
+	}
+}
+
+func TestRedactURL(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://host.example/x":                    "https://host.example/x",
+		"https://host.example/x?token=s3cret":       "https://host.example/x?REDACTED",
+		"https://host.example/x#s3cret?y":           "https://host.example/x#REDACTED",
+		"https://u:p@host.example/x?token=s3cret":   "https://REDACTED@host.example/x?REDACTED",
+		"https://deploy:12?s3cret@host.example/x?q": "https://REDACTED@host.example/x?REDACTED",
+	} {
+		if got := RedactURL(raw); got != want {
+			t.Errorf("RedactURL(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
 func TestCheckSourceKeys(t *testing.T) {
 	dir := t.TempDir()
 	writeKey(t, dir, "keys/docker.asc")

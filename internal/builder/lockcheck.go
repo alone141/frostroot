@@ -165,19 +165,26 @@ func checkUbuntuLockEntries(lock recipe.Lockfile) error {
 	}
 	for _, line := range lock.Sources {
 		if err := checkLockSourceLine(line); err != nil {
-			return fmt.Errorf("%w: source line %q: %w", pool.ErrBadLock, redactLineCredentials(line), err)
+			return fmt.Errorf("%w: source line %q: %w", pool.ErrBadLock, redactSourceLine(line), err)
 		}
 	}
 	return nil
 }
 
-// redactLineCredentials is RedactURLCredentials of every word of line.
-func redactLineCredentials(line string) string {
+// redactSourceLine is line as a refusal may quote it: RedactURLCredentials
+// of every word, and everything after the first "?" or "#" of the line
+// replaced, as recipe.RedactURL does for one URL. The line is cut rather
+// than each word, because a URL with a space in its query spans two words.
+func redactSourceLine(line string) string {
 	words := strings.Fields(line)
 	for index, word := range words {
 		words[index] = recipe.RedactURLCredentials(word)
 	}
-	return strings.Join(words, " ")
+	redacted := strings.Join(words, " ")
+	if cut := strings.IndexAny(redacted, "?#"); cut >= 0 {
+		return redacted[:cut+1] + "REDACTED"
+	}
+	return redacted
 }
 
 // checkLockSourceLine reports why line is not a deb line SourceLines could
@@ -236,7 +243,7 @@ func checkLockSourceLines(lock recipe.Lockfile, release distro.Release) error {
 	for _, line := range lock.Sources {
 		parts := lockSourceLinePattern.FindStringSubmatch(line)
 		if parts == nil {
-			return fmt.Errorf("%w: source line %q: not a deb line frostroot writes", pool.ErrBadLock, redactLineCredentials(line))
+			return fmt.Errorf("%w: source line %q: not a deb line frostroot writes", pool.ErrBadLock, redactSourceLine(line))
 		}
 		signedBy, lineURL, suite, components := parts[1], strings.TrimRight(parts[2], "/"), parts[3], strings.Fields(parts[4])
 		var err error
@@ -247,7 +254,7 @@ func checkLockSourceLines(lock recipe.Lockfile, release distro.Release) error {
 			err = checkRepositorySourceLine(lineURL, suite, components, keyring, repositoryByKeyring, seenRepositories)
 		}
 		if err != nil {
-			return fmt.Errorf("%w: source line %q: %w", pool.ErrBadLock, redactLineCredentials(line), err)
+			return fmt.Errorf("%w: source line %q: %w", pool.ErrBadLock, redactSourceLine(line), err)
 		}
 	}
 	for _, suffix := range archivePocketSuffixes {
@@ -268,7 +275,7 @@ func checkLockSourceLines(lock recipe.Lockfile, release distro.Release) error {
 // pocket seen.
 func checkArchiveSourceLine(lineURL, suite string, components []string, archiveURL string, release distro.Release, seenPockets map[string]bool) error {
 	if lineURL != archiveURL {
-		return fmt.Errorf("the archive is %s in the lock, not %s", recipe.RedactURLCredentials(archiveURL), recipe.RedactURLCredentials(lineURL))
+		return fmt.Errorf("the archive is %s in the lock, not %s", recipe.RedactURL(archiveURL), recipe.RedactURL(lineURL))
 	}
 	if !slices.ContainsFunc(archivePocketSuffixes, func(suffix string) bool { return suite == release.Suite+suffix }) {
 		return fmt.Errorf("suite %s is none of the archive's pockets %s, %s-updates and %s-security", suite, release.Suite, release.Suite, release.Suite)

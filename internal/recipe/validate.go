@@ -254,11 +254,11 @@ func CheckSourceURL(sourceURL string) error {
 	// wrong in another way as well would otherwise be refused for the other
 	// reason, quoting itself whole.
 	if hasURLCredentials(sourceURL) {
-		return fmt.Errorf("invalid source url %q (it carries credentials, which must not be committed in a recipe or shipped in the image)", RedactURLCredentials(sourceURL))
+		return fmt.Errorf("invalid source url %q (it carries credentials, which must not be committed in a recipe or shipped in the image)", RedactURL(sourceURL))
 	}
 	parsed, err := url.Parse(sourceURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || strings.ContainsAny(sourceURL, sourceURLMetacharacters) {
-		return fmt.Errorf("invalid source url %q (expected http or https with no space, bracket or #, such as https://download.docker.com/linux/ubuntu)", sourceURL)
+		return fmt.Errorf("invalid source url %q (expected http or https with no space, bracket or #, such as https://download.docker.com/linux/ubuntu)", RedactURL(sourceURL))
 	}
 	return checkURLAsWritten("source url", sourceURL, parsed)
 }
@@ -279,6 +279,20 @@ func checkURLAsWritten(what, rawURL string, parsed *url.URL) error {
 		return fmt.Errorf("invalid %s (it has a query, a \"?\" part, which apt and pip cannot append a path to)", what)
 	}
 	return nil
+}
+
+// RedactURL returns rawURL as a refusal may quote it: its userinfo
+// redacted as RedactURLCredentials does, and everything after the first
+// "?" or "#" replaced by "REDACTED", because a query is where a repository
+// token usually goes and a fragment can hold one as well. A URL with
+// neither is RedactURLCredentials'. It is for messages only: whether a URL
+// carries credentials is RedactURLCredentials' answer, not this one's.
+func RedactURL(rawURL string) string {
+	redacted := RedactURLCredentials(rawURL)
+	if cut := strings.IndexAny(redacted, "?#"); cut >= 0 {
+		return redacted[:cut+1] + "REDACTED"
+	}
+	return redacted
 }
 
 // RedactURLCredentials returns rawURL with any userinfo replaced by
@@ -407,11 +421,11 @@ func CheckSuite(suite string) error {
 func CheckPythonIndexURL(indexURL string) error {
 	// Credentials first, for the reason CheckSourceURL gives.
 	if hasURLCredentials(indexURL) {
-		return fmt.Errorf("invalid python index_url %q (it carries credentials, which must not be committed in a recipe)", RedactURLCredentials(indexURL))
+		return fmt.Errorf("invalid python index_url %q (it carries credentials, which must not be committed in a recipe)", RedactURL(indexURL))
 	}
 	parsed, err := url.Parse(indexURL)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || strings.ContainsAny(indexURL, sourceURLMetacharacters) {
-		return fmt.Errorf("invalid python index_url %q (expected https with no space or #, such as https://nexus.example.com/repository/pypi/simple)", indexURL)
+		return fmt.Errorf("invalid python index_url %q (expected https with no space or #, such as https://nexus.example.com/repository/pypi/simple)", RedactURL(indexURL))
 	}
 	return checkURLAsWritten("python index_url", indexURL, parsed)
 }
