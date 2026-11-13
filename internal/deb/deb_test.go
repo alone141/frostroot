@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 
 	"frostroot/internal/deb/debtest"
 )
@@ -294,6 +297,49 @@ func TestReadControlAcceptsAControlFileAtTheLimit(t *testing.T) {
 	}
 	if got.Text != strings.TrimRight(control, "\n") {
 		t.Errorf("Text is %d bytes, want the %d of the control file without its final newline", len(got.Text), len(control)-1)
+	}
+}
+
+// TestReadControlRefusesALargeWindow: a .deb is read before anything checks
+// it against the lock, and a few bytes of its control archive may declare
+// the memory the decoder is to allocate.
+func TestReadControlRefusesALargeWindow(t *testing.T) {
+	controlTar := debtest.WriteTar(t, map[string]string{"control": sampleControl})
+	// A zstd frame of one raw block whose header declares a 512 MiB window,
+	// the most the decoder allows by default: magic, frame header
+	// descriptor, window descriptor, block header, block.
+	zstdFrame := []byte{0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x98}
+	zstdFrame = append(zstdFrame, byte(1|len(controlTar)<<3), byte(len(controlTar)>>5), byte(len(controlTar)>>13))
+	zstdFrame = append(zstdFrame, controlTar...)
+	// An xz stream whose one block declares a dictionary of 4 GiB - 1.
+	xzStream := withDictionaryCode(t, debtest.Compress(t, ".xz", controlTar), xzStreamHeaderBytes, 40)
+	testCases := []struct {
+		name       string
+		member     string
+		compressed []byte
+		wantErr    error
+	}{
+		{name: "zstd", member: "control.tar.zst", compressed: zstdFrame, wantErr: zstd.ErrWindowSizeExceeded},
+		{name: "xz", member: "control.tar.xz", compressed: xzStream, wantErr: ErrXZDictionaryTooLarge},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "hello.deb")
+			archive := debtest.WriteAr([]debtest.ArMember{{Name: "debian-binary", Data: []byte("2.0\n")}, {Name: testCase.member, Data: testCase.compressed}})
+			if err := os.WriteFile(path, archive, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			_, err := ReadControl(path)
+			runtime.ReadMemStats(&after)
+			if !errors.Is(err, testCase.wantErr) {
+				t.Errorf("err = %v, want %v", err, testCase.wantErr)
+			}
+			if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 16<<20 {
+				t.Errorf("allocated %d MiB, want far less than the window", allocated>>20)
+			}
+		})
 	}
 }
 
