@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -251,15 +253,46 @@ func decodeStrict(path string, target any) error {
 
 // describeDecodeError turns go-toml errors into messages that point at the
 // offending line, because they are read by people fixing a file.
+//
+// go-toml quotes the offending lines as they are in the file, and a lock is
+// hostile input, so the message is made printable before it reaches a
+// terminal: an escape sequence in a value could otherwise retitle the
+// window or clear the screen.
 func describeDecodeError(path string, err error) error {
+	var message string
 	var unknownFieldErr *toml.StrictMissingError
-	if errors.As(err, &unknownFieldErr) {
-		return fmt.Errorf("%s: unknown field (check the spelling):\n%s", path, unknownFieldErr.String())
-	}
 	var syntaxErr *toml.DecodeError
-	if errors.As(err, &syntaxErr) {
+	switch {
+	case errors.As(err, &unknownFieldErr):
+		message = fmt.Sprintf("%s: unknown field (check the spelling):\n%s", path, unknownFieldErr.String())
+	case errors.As(err, &syntaxErr):
 		line, column := syntaxErr.Position()
-		return fmt.Errorf("%s:%d:%d: %w\n%s", path, line, column, syntaxErr, syntaxErr.String())
+		message = fmt.Sprintf("%s:%d:%d: %v\n%s", path, line, column, syntaxErr, syntaxErr.String())
+	default:
+		message = fmt.Sprintf("%s: %v", path, err)
 	}
-	return fmt.Errorf("%s: %w", path, err)
+	return errors.New(escapeControlCharacters(message))
+}
+
+// escapeControlCharacters returns text with every control character but
+// the newline and the tab, C0, DEL and C1 alike, and every byte that is not
+// UTF-8, written as \xNN, so that the person still sees where in the line
+// it is and the terminal acts on none of it.
+func escapeControlCharacters(text string) string {
+	var escaped strings.Builder
+	for index := 0; index < len(text); {
+		character, size := utf8.DecodeRuneInString(text[index:])
+		switch {
+		case character == utf8.RuneError && size == 1:
+			fmt.Fprintf(&escaped, `\x%02x`, text[index])
+		case character == '\n' || character == '\t':
+			escaped.WriteRune(character)
+		case character < 0x20 || (character >= 0x7f && character <= 0x9f):
+			fmt.Fprintf(&escaped, `\x%02x`, character)
+		default:
+			escaped.WriteString(text[index : index+size])
+		}
+		index += size
+	}
+	return escaped.String()
 }
