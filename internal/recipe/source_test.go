@@ -167,6 +167,47 @@ func TestValidateSources(t *testing.T) {
 	}
 }
 
+// Apt stops at mmdebstrap's first update when one URL and suite reach it
+// on two lines with different signed-by values, so validate refuses what
+// the build would only find out once it had started.
+func TestValidateRefusesARepositoryAptWouldSeeTwice(t *testing.T) {
+	llvm := Source{Name: "llvm", URL: "https://apt.llvm.org/jammy", Suite: "llvm-toolchain-jammy", Key: "keys/llvm.asc"}
+	testCases := []struct {
+		name        string
+		sources     []Source
+		wantMessage string
+	}{
+		{"one url and suite twice", []Source{llvm, {Name: "llvm-two", URL: "https://apt.llvm.org/jammy", Suite: "llvm-toolchain-jammy", Components: []string{"other"}, Key: "keys/two.asc"}}, "is sources[0] again"},
+		{"a trailing slash is the same url", []Source{llvm, {Name: "llvm-two", URL: "https://apt.llvm.org/jammy/", Suite: "llvm-toolchain-jammy", Key: "keys/llvm.asc"}}, "is sources[0] again"},
+		// valid.toml is 22.04, so an empty suite is jammy.
+		{"an empty suite is the release's", []Source{{Name: "a", URL: "https://x.example/ubuntu", Key: "keys/a.asc"}, {Name: "b", URL: "https://x.example/ubuntu", Suite: "jammy", Key: "keys/b.asc"}}, "is sources[0] again"},
+		{"the archive's release pocket", []Source{{Name: "archive", URL: "http://archive.ubuntu.com/ubuntu", Key: "keys/a.asc"}}, "Ubuntu's archive"},
+		{"the archive's updates pocket", []Source{{Name: "archive", URL: "http://archive.ubuntu.com/ubuntu/", Suite: "jammy-updates", Key: "keys/a.asc"}}, "Ubuntu's archive"},
+		{"the archive's security pocket", []Source{{Name: "archive", URL: "http://archive.ubuntu.com/ubuntu", Suite: "jammy-security", Key: "keys/a.asc"}}, "Ubuntu's archive"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			imageRecipe := loadValidRecipe(t)
+			imageRecipe.Sources = testCase.sources
+			problems := Validate(imageRecipe)
+			if len(problems) != 1 || !strings.Contains(problems[0], testCase.wantMessage) {
+				t.Fatalf("Validate = %q, want one problem mentioning %q", problems, testCase.wantMessage)
+			}
+		})
+	}
+	// One URL with two suites is two repositories, and the archive's URL
+	// with a suite that is none of its pockets is not the archive's.
+	imageRecipe := loadValidRecipe(t)
+	imageRecipe.Sources = []Source{
+		llvm,
+		{Name: "llvm-18", URL: "https://apt.llvm.org/jammy", Suite: "llvm-toolchain-jammy-18", Key: "keys/llvm.asc"},
+		{Name: "proposed", URL: "http://archive.ubuntu.com/ubuntu", Suite: "jammy-proposed", Key: "keys/p.asc"},
+	}
+	if problems := Validate(imageRecipe); len(problems) != 0 {
+		t.Errorf("distinct repositories: Validate = %q, want no problems", problems)
+	}
+}
+
 // A refusal is printed to a terminal, kept in a CI log, and quoted in
 // capture's report, which sits beside a recipe people commit: it must name
 // the URL without repeating the secret it refuses.

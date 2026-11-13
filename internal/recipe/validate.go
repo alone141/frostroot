@@ -148,7 +148,31 @@ func Validate(imageRecipe Recipe) []string {
 		}
 		seenCertificateNames[name] = true
 	}
+	problems = append(problems, sourceProblems(imageRecipe, family)...)
+	return problems
+}
+
+// sourceProblems names what is wrong with the recipe's [[sources]]: each
+// one's fields, a name used twice, and a repository apt would be given
+// twice. Apt takes two lines of one URL and suite for one source, and
+// stops mmdebstrap's first update with "Conflicting values set for option
+// Signed-By" when they name two keyrings, as two sources always do, or
+// when one names a keyring and the other none, as the archive's pockets
+// do. Components play no part in it. A --mirror is a build option this
+// check cannot see, so a source on the mirror's URL passes here.
+func sourceProblems(imageRecipe Recipe, family distro.Family) []string {
+	var problems []string
+	var archivePockets []string
+	archiveURL, releaseSuite := "", ""
+	if family == distro.Ubuntu {
+		if release, err := distro.Lookup(imageRecipe.Image.Release, imageRecipe.Image.Arch); err == nil {
+			archiveURL = strings.TrimRight(release.ArchiveURL, "/")
+			releaseSuite = release.Suite
+			archivePockets = []string{release.Suite, release.Suite + "-updates", release.Suite + "-security"}
+		}
+	}
 	seenSourceNames := map[string]bool{}
+	seenRepositories := map[[2]string]int{}
 	for index, source := range imageRecipe.Sources {
 		for _, err := range CheckSource(source) {
 			problems = append(problems, fmt.Sprintf("sources[%d]: %v", index, err))
@@ -157,6 +181,20 @@ func Validate(imageRecipe Recipe) []string {
 			problems = append(problems, fmt.Sprintf("sources[%d]: name %q is used twice", index, source.Name))
 		}
 		seenSourceNames[source.Name] = true
+		// The build writes the URL without its trailing slashes and an
+		// empty suite as the release's, so the comparison does too.
+		sourceURL := strings.TrimRight(source.URL, "/")
+		suite := source.SuiteFor(releaseSuite)
+		if archiveURL != "" && sourceURL == archiveURL && slices.Contains(archivePockets, suite) {
+			problems = append(problems, fmt.Sprintf("sources[%d]: %s %s is Ubuntu's archive, which every build already uses, and apt refuses it a second time with a key", index, sourceURL, suite))
+			continue
+		}
+		repository := [2]string{sourceURL, suite}
+		if first, seen := seenRepositories[repository]; seen {
+			problems = append(problems, fmt.Sprintf("sources[%d]: %s %s is sources[%d] again, and apt refuses one repository with two keys; name all its components in one source", index, sourceURL, suite, first))
+			continue
+		}
+		seenRepositories[repository] = index
 	}
 	return problems
 }
