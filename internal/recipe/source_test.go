@@ -242,6 +242,57 @@ func TestCredentialRefusalsOfOtherwiseBadURLsDoNotQuoteTheSecret(t *testing.T) {
 	}
 }
 
+// credentialsNetURLMisses are URLs that carry a password, s3cret with a "?"
+// or "#" in it, where net/url sees no userinfo or no URL at all: it ends the
+// authority at the first "?" or "#", while apt ends it only at the first "/"
+// and takes the last "@" before that as the end of user:password. The last
+// two have no "//" or no scheme, and are refused anyway, but quoting them
+// whole would print the password.
+var credentialsNetURLMisses = map[string]string{
+	"https://deploy:12?s3cret@apt.example/ubuntu":  "https://REDACTED@apt.example/ubuntu",
+	"https://deploy:pa?s3cret@apt.example/ubuntu":  "https://REDACTED@apt.example/ubuntu",
+	"https://deploy:pa#s3cret@apt.example/ubuntu":  "https://REDACTED@apt.example/ubuntu",
+	"user:s3cret@mirror.example.com/ubuntu":        "REDACTED@mirror.example.com/ubuntu",
+	"https:/user:s3cret@mirror.example.com/ubuntu": "https:/REDACTED@mirror.example.com/ubuntu",
+}
+
+func TestCredentialsNetURLDoesNotSeeAreRefusedAndRedacted(t *testing.T) {
+	for raw, want := range credentialsNetURLMisses {
+		if got := RedactURLCredentials(raw); got != want {
+			t.Errorf("RedactURLCredentials(%q) = %q, want %q", raw, got, want)
+		}
+		refusals := map[string]error{
+			"source url":       CheckSourceURL(raw),
+			"python index_url": CheckPythonIndexURL(raw),
+		}
+		for name, err := range refusals {
+			if err == nil {
+				t.Errorf("%s %q: no refusal", name, raw)
+				continue
+			}
+			if strings.Contains(err.Error(), "s3cret") {
+				t.Errorf("%s: the refusal quotes the secret: %v", name, err)
+			}
+			if !strings.Contains(err.Error(), "credentials") || !strings.Contains(err.Error(), "REDACTED@") {
+				t.Errorf("%s %q: the refusal should say the URL carries credentials: %v", name, raw, err)
+			}
+		}
+	}
+	// An "@" after the first "/" is in the path or the query, not a
+	// userinfo, for apt as for net/url.
+	for _, plain := range []string{"https://host.example/path@x", "https://host.example/a?b=c@d", "host.example/path", "mirror.example.com/ubuntu"} {
+		if got := RedactURLCredentials(plain); got != plain {
+			t.Errorf("RedactURLCredentials(%q) = %q, want it unchanged", plain, got)
+		}
+		if hasURLCredentials(plain) {
+			t.Errorf("hasURLCredentials(%q) = true", plain)
+		}
+	}
+	if err := CheckSourceURL("https://host.example/path@x"); err != nil {
+		t.Errorf("a path with an @ is refused: %v", err)
+	}
+}
+
 func TestCheckSourceKeys(t *testing.T) {
 	dir := t.TempDir()
 	writeKey(t, dir, "keys/docker.asc")

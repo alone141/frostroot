@@ -409,6 +409,28 @@ func TestManifestsRefuseCredentials(t *testing.T) {
 			return err
 		},
 	}
+	// Passwords with "?" or "#" in them, which net/url does not read as a
+	// userinfo while apt and the downloader's text still carry them.
+	for _, shape := range []string{
+		"https://deploy:12?s3cret@archive.example/ubuntu",
+		"https://deploy:pa?s3cret@archive.example/ubuntu",
+		"https://deploy:pa#s3cret@archive.example/ubuntu",
+		"user:s3cret@archive.example/ubuntu",
+		"https:/user:s3cret@archive.example/ubuntu",
+	} {
+		refusals["mirror "+shape] = func() error {
+			_, err := Manifest(withMirror(shape))
+			return err
+		}
+		refusals["repository "+shape] = func() error {
+			_, err := Manifest(withRepository(shape))
+			return err
+		}
+		refusals["wheel url "+shape] = func() error {
+			_, err := WheelManifest(withWheelURL(shape + "/numpy-2.5.3-py3-none-any.whl"))
+			return err
+		}
+	}
 	for name, refusal := range refusals {
 		t.Run(name, func(t *testing.T) {
 			err := refusal()

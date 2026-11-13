@@ -232,39 +232,75 @@ func CheckSourceURL(sourceURL string) error {
 // password, because a token is as often the user name. A URL that carries
 // no userinfo is returned as it is.
 //
-// A URL that does not parse is redacted too, by its text: a password with a
-// stray "%" or "/" in it is exactly what makes url.Parse fail, and that URL
-// is then refused, quoting itself.
+// The userinfo is found by its text first, whatever url.Parse makes of the
+// URL: a password with a stray "%" or "/" in it is exactly what makes
+// url.Parse fail, and one with "?" or "#" in it ends the authority there
+// for net/url, which then reads no userinfo at all while apt still does.
 func RedactURLCredentials(rawURL string) string {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		start, end, found := unparsedUserinfo(rawURL)
-		if !found {
-			return rawURL
-		}
+	if start, end, found := textUserinfo(rawURL); found {
 		return rawURL[:start] + "REDACTED" + rawURL[end:]
 	}
-	if parsed.User == nil {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.User == nil {
 		return rawURL
 	}
 	parsed.User = url.User("REDACTED")
 	return parsed.String()
 }
 
-// hasURLCredentials reports whether rawURL carries a userinfo, a parsed
-// one or one that keeps url.Parse from reading the URL at all.
+// hasURLCredentials reports whether rawURL carries a userinfo: one apt
+// would read, one url.Parse reads, or one that keeps url.Parse from reading
+// the URL at all.
 func hasURLCredentials(rawURL string) bool {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		_, _, found := unparsedUserinfo(rawURL)
-		return found
+	if _, _, found := textUserinfo(rawURL); found {
+		return true
 	}
-	return parsed.User != nil
+	parsed, err := url.Parse(rawURL)
+	return err == nil && parsed.User != nil
+}
+
+// urlSchemePattern matches a scheme and the slashes after it. A scheme with
+// no slash after it is not taken for one: in "user:secret@host/path" the
+// "user:" is the start of a userinfo, not a scheme.
+var urlSchemePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*:/+`)
+
+// textUserinfo finds the userinfo of rawURL by its text, as
+// rawURL[start:end]: the wider of two readings, which both start where the
+// authority does.
+//
+// Apt's: the authority runs to the first "/", and the last "@" before it
+// ends user:password, whatever "?" or "#" stands in between. Any run of
+// slashes after the scheme is skipped, not only "//", and text with no
+// scheme is read as an authority from its start, so that "https:/u:p@host"
+// and "u:p@host" are found too. Neither is a URL apt or pip can use, and
+// both are refused, but the refusal must not quote them.
+//
+// And, for a URL url.Parse cannot read, unparsedUserinfo's: a password
+// holding "/" ends apt's authority early.
+func textUserinfo(rawURL string) (start, end int, found bool) {
+	start = len(urlSchemePattern.FindString(rawURL))
+	authority := rawURL[start:]
+	if slash := strings.Index(authority, "/"); slash >= 0 {
+		authority = authority[:slash]
+	}
+	if at := strings.LastIndex(authority, "@"); at >= 0 {
+		end, found = start+at, true
+	}
+	if _, err := url.Parse(rawURL); err != nil {
+		if fallbackStart, fallbackEnd, fallbackFound := unparsedUserinfo(rawURL); fallbackFound {
+			if !found || fallbackStart < start {
+				start = fallbackStart
+			}
+			end, found = max(end, fallbackEnd), true
+		}
+	}
+	return start, end, found
 }
 
 // unparsedUserinfo finds, by its text, the userinfo of a URL url.Parse
 // could not read: what lies between "://" and the last "@" before any
-// query or fragment, as rawURL[start:end]. Without the structure a parse
+// query or fragment, as rawURL[start:end]. textUserinfo has apt's reading
+// as well, which stops at the first "/" instead. Without the structure a parse
 // gives, the last "@" is the one that ends a userinfo whose password holds
 // "/" or "@" itself; for a URL that is refused anyway, hiding a host along
 // with the secret is the better mistake. Text with no "://" is not a URL.

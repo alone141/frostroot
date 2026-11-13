@@ -165,6 +165,35 @@ func TestCheckLockSourceLines(t *testing.T) {
 	}
 }
 
+// A source line whose URL holds a password with "?" or "#" in it, which
+// net/url does not read as a userinfo while apt does, is refused as
+// carrying credentials, and the refusal does not quote the password.
+func TestCheckUbuntuLockEntriesRefusesCredentialsNetURLDoesNotSee(t *testing.T) {
+	for _, sourceURL := range []string{
+		"https://deploy:12?s3cret@apt.example/ubuntu",
+		"https://deploy:pa?s3cret@apt.example/ubuntu",
+		"https://deploy:pa#s3cret@apt.example/ubuntu",
+		"user:s3cret@mirror.example.com/ubuntu",
+		"https:/user:s3cret@mirror.example.com/ubuntu",
+	} {
+		line := "deb " + sourceURL + " jammy main universe"
+		err := checkUbuntuLockEntries(recipe.Lockfile{Sources: []string{line}})
+		if !errors.Is(err, pool.ErrBadLock) {
+			t.Errorf("checkUbuntuLockEntries(%q) = %v, want %v", line, err, pool.ErrBadLock)
+			continue
+		}
+		if strings.Contains(err.Error(), "s3cret") {
+			t.Errorf("the refusal of %q quotes the secret: %v", line, err)
+		}
+		if !strings.Contains(err.Error(), "REDACTED@") {
+			t.Errorf("the refusal of %q should name the line, redacted: %v", line, err)
+		}
+		if !strings.Contains(err.Error(), "credentials") {
+			t.Errorf("the refusal of %q should say it carries credentials: %v", line, err)
+		}
+	}
+}
+
 func TestBuildOfflineRefusesSourceLinesNoBuildWrites(t *testing.T) {
 	testCases := map[string]func(lock *recipe.Lockfile){
 		"proposed pocket added": func(lock *recipe.Lockfile) {
