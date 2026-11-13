@@ -5,9 +5,11 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"maps"
 	"net/http"
@@ -24,6 +26,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz"
 
+	"frostroot/internal/deb"
 	"frostroot/internal/distro"
 	"frostroot/internal/index/indextest"
 )
@@ -811,5 +814,74 @@ func TestOpenServesTheCacheWhenTheDeadlinePasses(t *testing.T) {
 	served.mutex.Unlock()
 	if _, err := Open(canceled, options); !errors.Is(err, context.Canceled) {
 		t.Errorf("Open after cancel = %v, want context.Canceled even with a cache", err)
+	}
+}
+
+// publishFile puts one compressed index in place as it is, with an
+// InRelease that lists its true size and digest and no uncompressed size.
+func (a *archive) publishFile(pocket, component, extension string, content []byte) {
+	a.t.Helper()
+	path := component + "/binary-amd64/Packages" + extension
+	digest := sha256.Sum256(content)
+	release := fmt.Sprintf("Origin: Ubuntu\nSuite: %s\nSHA256:\n %s %d %s\n", pocket, hex.EncodeToString(digest[:]), len(content), path)
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+	a.files["/dists/"+pocket+"/"+path] = content
+	a.files["/dists/"+pocket+"/InRelease"] = []byte(release)
+}
+
+// TestOpenRefusesAnXZIndexWithAHugeDictionary: the xz library allocates the
+// dictionary a block declares, up to 4 GiB, before it decodes a byte, and
+// an index whose Release came unsigned over plain http could declare one in
+// a file of a few hundred bytes. The file here matches its size and digest
+// and declares 256 MiB, which no xz preset uses.
+func TestOpenRefusesAnXZIndexWithAHugeDictionary(t *testing.T) {
+	served := newArchive(t, ".xz")
+	var buffer bytes.Buffer
+	writer, err := xz.WriterConfig{DictCap: 4096}.NewWriter(&buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write([]byte("Package: git\nVersion: 1\n\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The block header follows the 12-byte stream header: its size, its
+	// flags, the LZMA2 filter's ID, the size of its properties and then the
+	// dictionary's code, covered by the header's CRC32 at its end.
+	forged := buffer.Bytes()
+	header := forged[12 : 12+(int(forged[12])+1)*4]
+	if header[2] != 0x21 || header[3] != 1 {
+		t.Fatalf("block header % x is not the one LZMA2 filter this test expects", header)
+	}
+	header[4] = 32 // 2 << (32/2 + 11) bytes: 256 MiB
+	binary.LittleEndian.PutUint32(header[len(header)-4:], crc32.ChecksumIEEE(header[:len(header)-4]))
+	served.publishFile("noble", "main", ".xz", forged)
+	delete(served.files, "/dists/noble-updates/InRelease")
+	options := optionsFor(t, served)
+
+	var heapBefore, heapAfter runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&heapBefore)
+	_, err = Open(context.Background(), options)
+	runtime.ReadMemStats(&heapAfter)
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, deb.ErrXZDictionaryTooLarge) {
+		t.Fatalf("Open = %v, want ErrUnavailable wrapping deb.ErrXZDictionaryTooLarge", err)
+	}
+	if !strings.Contains(err.Error(), "dictionary") {
+		t.Errorf("err = %v, want it to name the dictionary", err)
+	}
+	if allocated := heapAfter.TotalAlloc - heapBefore.TotalAlloc; allocated > 32<<20 {
+		t.Errorf("Open allocated %d MB for an index of %d bytes", allocated>>20, len(forged))
+	}
+	// A file that declares too large a dictionary will declare it again: it
+	// is not a file that changed while it was fetched.
+	if errors.Is(err, errChanged) {
+		t.Errorf("err = %v; a refused dictionary is not a file that changed", err)
+	}
+	if got := served.served["/dists/noble/main/binary-amd64/Packages.xz"]; got != 1 {
+		t.Errorf("the index was asked for %d times, want once", got)
 	}
 }

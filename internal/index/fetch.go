@@ -17,8 +17,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/ulikunitz/xz"
-
 	"frostroot/internal/deb"
 	"frostroot/internal/distro"
 	"frostroot/internal/pki"
@@ -414,8 +412,10 @@ func (f *fetcher) file(pocket, component string, file listedFile) ([]Entry, erro
 			return nil, fmt.Errorf("%s: %w", url, errTooLarge)
 		}
 		// A server that went quiet is not one that published anew, and
-		// asking it again would only wait as long once more.
-		if errors.Is(err, errStalled) {
+		// asking it again would only wait as long once more. Nor is a file
+		// that asks for a larger xz dictionary than any preset uses: it
+		// would ask for it again.
+		if errors.Is(err, errStalled) || errors.Is(err, deb.ErrXZDictionaryTooLarge) {
 			return nil, fmt.Errorf("%s: %w", url, err)
 		}
 		// A cut download fails in the decompressor before the digest is
@@ -435,11 +435,15 @@ func (f *fetcher) file(pocket, component string, file listedFile) ([]Entry, erro
 	return entries, nil
 }
 
-// decompress returns the text of an index by its file name's extension.
+// decompress returns the text of an index by its file name's extension. An
+// xz file goes through deb's reader, which refuses a dictionary larger than
+// any preset uses: the library's own allocates whatever a block declares,
+// up to 4 GiB, and the Release that lists the file is read unsigned, often
+// over plain http.
 func decompress(path string, reader io.Reader) (io.Reader, error) {
 	switch {
 	case strings.HasSuffix(path, ".xz"):
-		return xz.NewReader(reader)
+		return deb.NewXZReader(reader)
 	case strings.HasSuffix(path, ".gz"):
 		return gzip.NewReader(reader)
 	default:
