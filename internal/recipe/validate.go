@@ -606,6 +606,13 @@ func CheckPackageName(name string) error {
 	if !packageNamePattern.MatchString(name) {
 		return fmt.Errorf("invalid package name %q (apt package names only; versions belong in the lock)", name)
 	}
+	// Apt reads a name ending in "-" as one to remove, says so in a line
+	// nobody reads, and exits 0, so a typo such as "openssh-server-" would
+	// build an image without the package, or without one something else
+	// needs. A trailing "+" is a name of its own, such as g++.
+	if strings.HasSuffix(name, "-") {
+		return fmt.Errorf("invalid package name %q: apt reads a trailing \"-\" as \"remove this package\"", name)
+	}
 	return nil
 }
 

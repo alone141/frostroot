@@ -364,7 +364,7 @@ own server, which `--mirror`, an Ubuntu archive, does not replace.
 | `disk.formats` | formats to write beside the raw image, which is always written; this version writes none and refuses every name (qcow2 and vhdx come later); disk only | none |
 | `locale.lang` | e.g. `en_US.UTF-8`, `tr_TR.UTF-8`, `C.UTF-8` | `en_US.UTF-8` |
 | `locale.timezone` | e.g. `UTC`, `Europe/Istanbul`, `America/Argentina/Buenos_Aires` | the host's timezone, or `UTC` |
-| `packages.include` | apt package names only, or Fedora's rpm names; no versions, no suites | none |
+| `packages.include` | apt package names only, or Fedora's rpm names; no versions, no suites, and no trailing `-`, which apt reads as "remove" | none |
 | `python.include` | PyPI names only; see [Python packages](#python-packages); Ubuntu only so far | none |
 | `python.index_url` | an `https` PEP 691 simple index to resolve from instead of PyPI, with no credentials or query; needs `python.include`; see [Resolving from an internal index](#resolving-from-an-internal-index) | none, which is PyPI |
 | `[[sources]]` | extra apt repositories; see [Third-party sources](#third-party-sources); Ubuntu only | none |

@@ -137,6 +137,9 @@ func TestValidateReportsProblem(t *testing.T) {
 		{"shell in package name", func(imageRecipe *Recipe) { imageRecipe.Packages.Include = []string{"git; rm -rf /"} }, "package name"},
 		{"version pin", func(imageRecipe *Recipe) { imageRecipe.Packages.Include = []string{"git=1:2.34.1-1ubuntu1.11"} }, "package name"},
 		{"one-character package name", func(imageRecipe *Recipe) { imageRecipe.Packages.Include = []string{"a"} }, "package name"},
+		// apt-get install reads "openssh-server-" as "remove openssh-server"
+		// and exits 0.
+		{"package name ending in a dash", func(imageRecipe *Recipe) { imageRecipe.Packages.Include = []string{"openssh-server-"} }, `trailing "-"`},
 		{"shell in locale", func(imageRecipe *Recipe) { imageRecipe.Locale.Lang = "en_US.UTF-8; touch /pwned" }, "locale lang"},
 		{"locale without codeset", func(imageRecipe *Recipe) { imageRecipe.Locale.Lang = "en_US" }, "locale lang"},
 		{"locale with leading dash", func(imageRecipe *Recipe) { imageRecipe.Locale.Lang = "-x.UTF-8" }, "locale lang"},
@@ -218,7 +221,7 @@ func TestValidateAcceptsRealisticValues(t *testing.T) {
 		{
 			name:      "package",
 			adjust:    func(imageRecipe *Recipe, value string) { imageRecipe.Packages.Include = []string{value} },
-			goodValue: []string{"g++", "libstdc++6", "python3.12", "xz-utils", "r-base"},
+			goodValue: []string{"g++", "libstdc++6", "python3.12", "xz-utils", "r-base", "c++", "libsigc++-2.0-0v5"},
 		},
 		{
 			name:      "image name",
