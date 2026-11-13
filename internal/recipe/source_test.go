@@ -293,6 +293,38 @@ func TestCredentialsNetURLDoesNotSeeAreRefusedAndRedacted(t *testing.T) {
 	}
 }
 
+// url.Parse accepts both of these, but apt has no method named "HTTPS",
+// and apt and pip both append a path to the URL, which lands inside a
+// query. The refusal names the rule, never the query's text, which is
+// where a repository token usually goes.
+func TestURLChecksRefuseAQueryAndAnUpperCaseScheme(t *testing.T) {
+	refusals := map[string]struct {
+		err      error
+		wantText string
+	}{
+		"source url, query":             {CheckSourceURL("https://repo.example/ubuntu?token=t0ken"), "query"},
+		"source url, empty query":       {CheckSourceURL("https://repo.example/ubuntu?"), "query"},
+		"source url, upper case":        {CheckSourceURL("HTTPS://repo.example/ubuntu"), "lower case"},
+		"source url, mixed case":        {CheckSourceURL("Http://repo.example/ubuntu"), "lower case"},
+		"source url, both":              {CheckSourceURL("HTTPS://repo.example/ubuntu?token=t0ken"), "lower case"},
+		"python index_url, query":       {CheckPythonIndexURL("https://nexus.example/simple?token=t0ken"), "query"},
+		"python index_url, empty query": {CheckPythonIndexURL("https://nexus.example/simple/?"), "query"},
+		"python index_url, upper case":  {CheckPythonIndexURL("HTTPS://nexus.example/simple"), "lower case"},
+	}
+	for name, refusal := range refusals {
+		if refusal.err == nil {
+			t.Errorf("%s: no refusal", name)
+			continue
+		}
+		if !strings.Contains(refusal.err.Error(), refusal.wantText) {
+			t.Errorf("%s: the refusal should say %q: %v", name, refusal.wantText, refusal.err)
+		}
+		if strings.Contains(refusal.err.Error(), "t0ken") {
+			t.Errorf("%s: the refusal quotes the query: %v", name, refusal.err)
+		}
+	}
+}
+
 func TestCheckSourceKeys(t *testing.T) {
 	dir := t.TempDir()
 	writeKey(t, dir, "keys/docker.asc")

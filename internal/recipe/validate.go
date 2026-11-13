@@ -202,8 +202,9 @@ func CheckSource(source Source) []error {
 const sourceURLMetacharacters = " \t\r\n\v\f[]#"
 
 // CheckSourceURL reports why url cannot be an apt source URL, or nil: it
-// must be http or https with a host, none of the characters that would
-// break the "deb" line it lands in, and no credentials.
+// must be http or https, written in lower case, with a host, none of the
+// characters that would break the "deb" line it lands in, no query and no
+// credentials.
 func CheckSourceURL(sourceURL string) error {
 	// The same rule as [python] index_url, for a stronger reason: a source
 	// URL is written into the recipe, twice into the lock, and into
@@ -221,6 +222,24 @@ func CheckSourceURL(sourceURL string) error {
 	parsed, err := url.Parse(sourceURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || strings.ContainsAny(sourceURL, sourceURLMetacharacters) {
 		return fmt.Errorf("invalid source url %q (expected http or https with no space, bracket or #, such as https://download.docker.com/linux/ubuntu)", sourceURL)
+	}
+	return checkURLAsWritten("source url", sourceURL, parsed)
+}
+
+// checkURLAsWritten reports why rawURL, which url.Parse read as parsed,
+// is still not one apt or pip can fetch from, or nil, for what names it.
+//
+// url.Parse lowercases the scheme, but apt looks its method up by the name
+// as written and has none called "HTTPS". And a query has nowhere to go:
+// apt appends "/dists/..." after it and pip joins the project name into it,
+// so neither fetches what the recipe meant. The query's text is not
+// quoted, because a query is where a repository token usually goes.
+func checkURLAsWritten(what, rawURL string, parsed *url.URL) error {
+	if written := rawURL[:len(parsed.Scheme)]; written != parsed.Scheme {
+		return fmt.Errorf("invalid %s (scheme %q must be written in lower case, as %q)", what, written, parsed.Scheme)
+	}
+	if parsed.RawQuery != "" || parsed.ForceQuery {
+		return fmt.Errorf("invalid %s (it has a query, a \"?\" part, which apt and pip cannot append a path to)", what)
 	}
 	return nil
 }
@@ -346,7 +365,8 @@ func CheckSuite(suite string) error {
 // is the only thing standing between the resolve and whatever answers, and
 // the hashes that first resolve writes into the lock are then pinned
 // forever. It must carry no credentials either, because a recipe is a file
-// people commit and review.
+// people commit and review, and, like a source URL, no query and no scheme
+// in upper case.
 func CheckPythonIndexURL(indexURL string) error {
 	// Credentials first, for the reason CheckSourceURL gives.
 	if hasURLCredentials(indexURL) {
@@ -356,7 +376,7 @@ func CheckPythonIndexURL(indexURL string) error {
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || strings.ContainsAny(indexURL, sourceURLMetacharacters) {
 		return fmt.Errorf("invalid python index_url %q (expected https with no space or #, such as https://nexus.example.com/repository/pypi/simple)", indexURL)
 	}
-	return nil
+	return checkURLAsWritten("python index_url", indexURL, parsed)
 }
 
 // CheckKeyPath reports why keyPath cannot name a key file in the recipe

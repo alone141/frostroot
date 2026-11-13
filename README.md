@@ -366,7 +366,7 @@ own server, which `--mirror`, an Ubuntu archive, does not replace.
 | `locale.timezone` | e.g. `UTC`, `Europe/Istanbul`, `America/Argentina/Buenos_Aires` | the host's timezone, or `UTC` |
 | `packages.include` | apt package names only, or Fedora's rpm names; no versions, no suites | none |
 | `python.include` | PyPI names only; see [Python packages](#python-packages); Ubuntu only so far | none |
-| `python.index_url` | an `https` PEP 691 simple index to resolve from instead of PyPI, with no credentials; needs `python.include`; see [Resolving from an internal index](#resolving-from-an-internal-index) | none, which is PyPI |
+| `python.index_url` | an `https` PEP 691 simple index to resolve from instead of PyPI, with no credentials or query; needs `python.include`; see [Resolving from an internal index](#resolving-from-an-internal-index) | none, which is PyPI |
 | `[[sources]]` | extra apt repositories; see [Third-party sources](#third-party-sources); Ubuntu only | none |
 | `certificates.include` | PEM files beside the recipe; see [Networks that inspect TLS](#networks-that-inspect-tls); Ubuntu only so far | none |
 
@@ -723,9 +723,10 @@ pip included — from the one place such a network allows.
 It must be `https`, because PyPI has no package signing: TLS is the only
 thing between the resolve and whatever answers, and the hashes that first
 resolve writes are pinned from then on. It must carry no credentials, since
-a recipe is committed and reviewed. It replaces PyPI rather than adding to
-it: `--extra-index-url` invites dependency confusion and is deliberately not
-offered. It needs at least one package in `include`: with none there is no
+a recipe is committed and reviewed, and no query, since pip joins each
+project's name onto the URL; the scheme is written in lower case. It
+replaces PyPI rather than adding to it: `--extra-index-url` invites
+dependency confusion and is deliberately not offered. It needs at least one package in `include`: with none there is no
 Python step, so the lock would never record the index and an offline rebuild
 could never match it, and `validate` refuses the recipe. The field has no
 question in the form yet; write it by hand, and `frostroot edit` gives it
