@@ -87,6 +87,27 @@ func expandedLimit(compressedBytes, ceiling int64) int64 {
 	return maxExpansion * compressedBytes
 }
 
+// maxIndexEntries bounds how many packages one index file may list. The
+// bound on its text is hundreds of megabytes, and every stanza becomes an
+// entry that is kept: 32 MB of stanzas that name a package and nothing else
+// kept 1.7 million entries in 802 MB of heap, about 450 bytes each, so the
+// text bound alone let an index hold gigabytes. Ubuntu's largest index,
+// universe, lists about 65,000 packages, and a vendor that lists every
+// version it has published lists thousands; this is several times either,
+// and holds what one file keeps to a few hundred megabytes.
+const maxIndexEntries = 500_000
+
+// tooManyEntriesError means an index file lists more than maxEntries
+// packages. It is errTooLarge, so that the file is not fetched again as one
+// that changed, with a message that says what was too large.
+type tooManyEntriesError struct{ limit int }
+
+func (e tooManyEntriesError) Error() string {
+	return fmt.Sprintf("lists more than %d packages, more than any archive has", e.limit)
+}
+
+func (e tooManyEntriesError) Is(target error) bool { return target == errTooLarge }
+
 // pocketPlan is what to download from one pocket.
 type pocketPlan struct {
 	pocket string
@@ -108,7 +129,11 @@ func fetch(ctx context.Context, options Options, what target) ([]Entry, error) {
 	if maxBodyBytes <= 0 {
 		maxBodyBytes = DefaultMaxBodyBytes
 	}
-	fetcher := &fetcher{ctx: ctx, client: client, baseURL: what.baseURL, components: what.components, progress: options.Progress, maxBodyBytes: maxBodyBytes, stallTimeout: options.StallTimeout}
+	maxEntries := options.maxEntries
+	if maxEntries <= 0 {
+		maxEntries = maxIndexEntries
+	}
+	fetcher := &fetcher{ctx: ctx, client: client, baseURL: what.baseURL, components: what.components, progress: options.Progress, maxBodyBytes: maxBodyBytes, stallTimeout: options.StallTimeout, maxEntries: maxEntries}
 	if len(what.rpmRepositories) > 0 {
 		return fetcher.fedora(what.rpmRepositories)
 	}
@@ -182,6 +207,7 @@ type fetcher struct {
 	// primary metadata when repomd.xml gives no open-size.
 	maxBodyBytes int64
 	stallTimeout time.Duration // Options.StallTimeout
+	maxEntries   int           // how many packages one index file may list
 }
 
 // get opens url. The caller closes the body, which fails a read once it
@@ -422,6 +448,9 @@ func (f *fetcher) file(pocket, component string, file listedFile) ([]Entry, erro
 			return err
 		}
 		if entry, isPackage := reduce(stanza, component); isPackage {
+			if len(entries) >= f.maxEntries {
+				return tooManyEntriesError{limit: f.maxEntries}
+			}
 			entries = append(entries, entry)
 		}
 		return nil
@@ -429,6 +458,9 @@ func (f *fetcher) file(pocket, component string, file listedFile) ([]Entry, erro
 	if err != nil {
 		if f.ctx.Err() != nil {
 			return nil, f.ctx.Err()
+		}
+		if tooMany := (tooManyEntriesError{}); errors.As(err, &tooMany) {
+			return nil, fmt.Errorf("%s: %w", url, tooMany)
 		}
 		if errors.Is(err, errTooLarge) || counted.count > file.size {
 			return nil, fmt.Errorf("%s: %w", url, errTooLarge)

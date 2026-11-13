@@ -992,3 +992,39 @@ func TestOpenRefetchesACacheDatedLaterThanTheClock(t *testing.T) {
 		t.Errorf("the refetched cache: err %v, %d new requests, want none", err, served.requests()-before)
 	}
 }
+
+// TestOpenRefusesAnIndexOfTooManyPackages: the text an index may expand to
+// is bounded, but every stanza in it became an entry that was kept, and an
+// entry of a stanza that names a package and nothing else costs about
+// twenty-five times its text: the bound let one file keep gigabytes. The
+// bound on entries is lowered here so that a small index reaches it.
+func TestOpenRefusesAnIndexOfTooManyPackages(t *testing.T) {
+	stanzas := func(count int) []byte {
+		var text strings.Builder
+		for number := range count {
+			fmt.Fprintf(&text, "Package: p%07d\n\n", number)
+		}
+		return []byte(text.String())
+	}
+	served := newArchive(t, ".gz")
+	served.publishTexts("noble", ".gz", map[string][]byte{"main": stanzas(11)}, func(text []byte) int64 { return int64(len(text)) })
+	delete(served.files, "/dists/noble-updates/InRelease")
+	options := optionsFor(t, served)
+	options.maxEntries = 10
+	_, err := Open(context.Background(), options)
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, errTooLarge) || errors.Is(err, errChanged) {
+		t.Fatalf("Open = %v, want ErrUnavailable wrapping errTooLarge alone", err)
+	}
+	if !strings.Contains(err.Error(), "more than any archive has") {
+		t.Errorf("err = %v, want it to say the index lists more packages than any archive has", err)
+	}
+	if got := served.served["/dists/noble/main/binary-amd64/Packages.gz"]; got != 1 {
+		t.Errorf("the index was asked for %d times, want once", got)
+	}
+
+	// As many as the bound allows open.
+	served.publishTexts("noble", ".gz", map[string][]byte{"main": stanzas(10)}, func(text []byte) int64 { return int64(len(text)) })
+	if opened, err := Open(context.Background(), options); err != nil || opened.Len() != 10 {
+		t.Errorf("Open of 10 packages with a bound of 10 = %v, %v; want all 10", opened, err)
+	}
+}

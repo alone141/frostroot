@@ -94,6 +94,10 @@ type Options struct {
 	// StallTimeout fails a download that receives nothing for this long,
 	// after its headers; 0 means DefaultStallTimeout.
 	StallTimeout time.Duration
+	// maxEntries is how many packages one apt index file may list; 0 means
+	// maxIndexEntries. Only tests set it, to reach the bound with a small
+	// index.
+	maxEntries int
 }
 
 // DefaultMaxBodyBytes is the most a download whose size nothing declares
