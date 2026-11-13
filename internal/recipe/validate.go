@@ -3,7 +3,6 @@ package recipe
 import (
 	"fmt"
 	"net/url"
-	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -491,7 +490,7 @@ func CheckCertificateFiles(recipeDir string, certificatePaths []string) []string
 		if CheckCertificatePath(certificatePath) != nil {
 			continue // already reported by Validate
 		}
-		data, err := os.ReadFile(CertificatePath(recipeDir, certificatePath))
+		data, err := ReadCertificateFile(recipeDir, certificatePath)
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("certificate %s: %v", certificatePath, err))
 			continue
@@ -522,8 +521,7 @@ func CheckSourceKeys(recipeDir string, sources []Source) []string {
 		if CheckKeyPath(source.Key) != nil {
 			continue // already reported by Validate
 		}
-		keyPath := filepath.Join(recipeDir, filepath.FromSlash(source.Key))
-		data, err := os.ReadFile(keyPath)
+		data, err := ReadKeyFile(recipeDir, source.Key)
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("source %s: key file %s: %v", source.Name, source.Key, err))
 			continue

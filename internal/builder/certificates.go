@@ -51,7 +51,7 @@ func ReadCertificates(recipeDir string, certificatePaths []string) (CertificateS
 		if err := recipe.CheckCertificatePath(certificatePath); err != nil {
 			return CertificateSet{}, fmt.Errorf("%w: %w", ErrCertificate, err)
 		}
-		data, err := os.ReadFile(recipe.CertificatePath(recipeDir, certificatePath))
+		data, err := recipe.ReadCertificateFile(recipeDir, certificatePath)
 		if err != nil {
 			return CertificateSet{}, fmt.Errorf("%w: %s: %w", ErrCertificate, certificatePath, err)
 		}

@@ -602,7 +602,11 @@ and takes PPAs as `owner/name`, whose fingerprints come from Launchpad's
 API. When the recipe is written the keys are fetched, checked against those
 fingerprints, and saved as `keys/<name>.asc`; a key that does not match is
 refused. For any other repository, save its public key yourself at the path
-the recipe names, and commit the `keys/` directory with the recipe.
+the recipe names, and commit the `keys/` directory with the recipe. A key
+file, like a certificate file, must be a regular file inside the recipe
+directory, at most 1 MiB (a certificate file 4 MiB): a symbolic link may
+point elsewhere in the directory, never out of it, so that the lock pins
+nothing of the host's.
 
 `build` installs from the archive and the sources together, each source
 verified by its own key and nothing else. The lock records which source
