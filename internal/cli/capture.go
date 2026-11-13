@@ -193,12 +193,15 @@ func writeFileAtomically(path, content string) (err error) {
 func (a *App) writeCapturedCertificates(certificates map[string][]byte) (written []string, err error) {
 	for _, certificatePath := range slices.Sorted(maps.Keys(certificates)) {
 		fullPath := recipe.CertificatePath(a.RecipeDir, certificatePath)
-		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		// A certs/ that is a link out of the recipe directory refuses the
+		// certificate rather than saving it wherever the link leads.
+		writePath, err := recipe.PrepareFilePath(a.RecipeDir, certificatePath)
+		if err != nil {
 			return written, fmt.Errorf("writing %s: %w", certificatePath, err)
 		}
 		// O_EXCL, so that the check and the write are one step: a file
 		// that appears between them is left alone too.
-		file, err := os.OpenFile(fullPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		file, err := os.OpenFile(writePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 		if errors.Is(err, os.ErrExist) {
 			continue
 		}

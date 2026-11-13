@@ -612,7 +612,9 @@ the recipe names, and commit the `keys/` directory with the recipe. A key
 file, like a certificate file, must be a regular file inside the recipe
 directory, at most 1 MiB (a certificate file 4 MiB): a symbolic link may
 point elsewhere in the directory, never out of it, so that the lock pins
-nothing of the host's.
+nothing of the host's. The same holds for the files `init`, `edit` and
+`capture` save: a `keys/` or `certs/` that is a link out of the recipe
+directory is refused, and nothing is written there.
 
 `build` installs from the archive and the sources together, each source
 verified by its own key and nothing else. The lock records which source
