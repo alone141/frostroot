@@ -131,13 +131,16 @@ func TestFedoraManifestRefusesAHostileLock(t *testing.T) {
 // repository URL with credentials names the URL, and must not repeat them.
 // The shapes after the first hold a "?" or "#" in the password, so that
 // net/url reads no userinfo, only a query or a fragment, and a parsed
-// URL's User alone would let them through.
+// URL's User alone would let them through; with a port-like password,
+// "12", it also reads a host and let them through.
 func TestFedoraManifestDoesNotQuoteCredentials(t *testing.T) {
 	for _, shape := range []string{
 		"https://user:s3cret@dl.fedoraproject.org/x",
 		"https://deploy:12?s3cret@dl.fedoraproject.org/x",
+		"https://deploy:12#s3cret@dl.fedoraproject.org/x",
 		"https://deploy:pa?s3cret@dl.fedoraproject.org/x",
 		"https://deploy:pa#s3cret@dl.fedoraproject.org/x",
+		"https://user:pw@dl.fedoraproject.org/x?token=s3cret",
 	} {
 		t.Run(shape, func(t *testing.T) {
 			lock := fedoraLock()
@@ -151,6 +154,32 @@ func TestFedoraManifestDoesNotQuoteCredentials(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "REDACTED@") || !strings.Contains(err.Error(), "credentials") {
 				t.Errorf("the error does not show the URL redacted and say why: %v", err)
+			}
+		})
+	}
+}
+
+// TestFedoraManifestRefusesAQueryAndQuotesNoneOfIt: a build records
+// Fedora's base URLs, which have no query, fragment or space. One with a
+// query was accepted over https, and refused over http quoting the token.
+func TestFedoraManifestRefusesAQueryAndQuotesNoneOfIt(t *testing.T) {
+	for _, shape := range []string{
+		"https://dl.fedoraproject.org/x?token=s3cret",
+		"https://dl.fedoraproject.org/x?token=s3 cret",
+		"https://dl.fedoraproject.org/x?",
+		"https://dl.fedoraproject.org/x#s3cret",
+		"https://dl.fedoraproject.org/x y",
+		"http://dl.fedoraproject.org/x?token=s3cret",
+	} {
+		t.Run(shape, func(t *testing.T) {
+			lock := fedoraLock()
+			lock.Repositories[0].URL = shape
+			_, err := Manifest(lock)
+			if !errors.Is(err, ErrBadLock) {
+				t.Fatalf("Manifest = %v, want %v", err, ErrBadLock)
+			}
+			if strings.Contains(err.Error(), "s3") {
+				t.Errorf("the error quotes the query: %v", err)
 			}
 		})
 	}

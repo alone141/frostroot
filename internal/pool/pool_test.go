@@ -417,6 +417,7 @@ func TestManifestsRefuseCredentials(t *testing.T) {
 		"https://deploy:pa#s3cret@archive.example/ubuntu",
 		"user:s3cret@archive.example/ubuntu",
 		"https:/user:s3cret@archive.example/ubuntu",
+		"https://user:pw@archive.example/ubuntu?token=s3cret",
 	} {
 		refusals["mirror "+shape] = func() error {
 			_, err := Manifest(withMirror(shape))
