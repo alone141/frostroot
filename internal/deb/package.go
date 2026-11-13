@@ -134,9 +134,15 @@ func controlFromTar(memberName string, compressed []byte) (Control, error) {
 		if strings.TrimPrefix(entry.Name, "./") != "control" {
 			continue
 		}
-		text, err := io.ReadAll(io.LimitReader(tarReader, maxControlBytes))
+		// One byte past the limit tells a control file that fills it from one
+		// that is longer: cut short, it would still parse, and its first
+		// mebibyte would go into a Packages file as if it were all of it.
+		text, err := io.ReadAll(io.LimitReader(tarReader, maxControlBytes+1))
 		if err != nil {
 			return Control{}, fmt.Errorf("%s: reading control: %w", memberName, err)
+		}
+		if len(text) > maxControlBytes {
+			return Control{}, fmt.Errorf("%s: control file is larger than %d bytes", memberName, maxControlBytes)
 		}
 		return parseControl(string(text))
 	}

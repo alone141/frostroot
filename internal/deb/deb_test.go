@@ -40,6 +40,26 @@ func buildDeb(t *testing.T, dir, fileName, extension, control string) string {
 	return debtest.Build(t, dir, fileName, extension, control)
 }
 
+// controlOfSize returns a control file of exactly size bytes whose
+// Description is folded over as many lines as that takes.
+func controlOfSize(t *testing.T, size int) string {
+	t.Helper()
+	var control strings.Builder
+	control.WriteString("Package: hello\nVersion: 1\nArchitecture: amd64\nDescription: long\n")
+	for control.Len() < size {
+		remaining := size - control.Len()
+		lineLength := min(64, remaining)
+		if remaining > 64 && remaining < 64+3 {
+			lineLength = 32 // so that the last line is not too short to hold a character
+		}
+		if lineLength < 3 {
+			t.Fatalf("cannot make a control file of exactly %d bytes", size)
+		}
+		control.WriteString(" " + strings.Repeat("x", lineLength-2) + "\n")
+	}
+	return control.String()
+}
+
 // collectStanzas reads every stanza of text.
 func collectStanzas(t *testing.T, text string) []Stanza {
 	t.Helper()
@@ -266,6 +286,17 @@ func TestReadControlEveryCompression(t *testing.T) {
 	}
 }
 
+func TestReadControlAcceptsAControlFileAtTheLimit(t *testing.T) {
+	control := controlOfSize(t, maxControlBytes)
+	got, err := ReadControl(buildDeb(t, t.TempDir(), "long.deb", ".gz", control))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Text != strings.TrimRight(control, "\n") {
+		t.Errorf("Text is %d bytes, want the %d of the control file without its final newline", len(got.Text), len(control)-1)
+	}
+}
+
 func TestReadControlErrors(t *testing.T) {
 	dir := t.TempDir()
 	writeFile := func(name string, content []byte) string {
@@ -280,6 +311,7 @@ func TestReadControlErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	overLimit := controlOfSize(t, maxControlBytes+1)
 	testCases := []struct {
 		name        string
 		path        string
@@ -288,6 +320,11 @@ func TestReadControlErrors(t *testing.T) {
 	}{
 		{name: "not an archive", path: writeFile("text.deb", []byte("hello world, not an archive at all")), wantNotDeb: true},
 		{name: "empty file", path: writeFile("empty.deb", nil), wantNotDeb: true},
+		{
+			name:        "control file one byte over the limit",
+			path:        buildDeb(t, dir, "long.deb", ".gz", overLimit),
+			wantInError: fmt.Sprintf("larger than %d bytes", maxControlBytes),
+		},
 		{name: "truncated", path: writeFile("cut.deb", goodDeb[:len(goodDeb)/2]), wantNotDeb: true},
 		{
 			name:       "no control member",
