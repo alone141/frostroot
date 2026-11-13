@@ -858,6 +858,55 @@ func xzWithAHugeDictionary(t *testing.T, text []byte) []byte {
 	return forged
 }
 
+// xzOfManyDictionaries returns an xz file of 64 empty blocks, 16 bytes
+// each, that each declare a 64 MiB dictionary: no one block asks for more
+// than an xz preset uses, but together they ask for 4 GiB.
+func xzOfManyDictionaries() []byte {
+	const blockCount = 64
+	withCRC32 := func(data []byte) []byte {
+		return binary.LittleEndian.AppendUint32(data, crc32.ChecksumIEEE(data))
+	}
+	// The stream header, with no check.
+	file := append([]byte{0xfd, '7', 'z', 'X', 'Z', 0}, withCRC32([]byte{0, 0})...)
+	for range blockCount {
+		// A block header of the LZMA2 filter with dictionary code 28,
+		// 64 MiB, then LZMA2's end marker and the block's padding.
+		file = append(file, withCRC32([]byte{2, 0, 0x21, 1, 28, 0, 0, 0})...)
+		file = append(file, 0, 0, 0, 0)
+	}
+	// The index: each record is the unpadded size, 12 + 1, and the
+	// uncompressed size, 0, padded to four bytes.
+	index := binary.AppendUvarint([]byte{0}, blockCount)
+	for range blockCount {
+		index = append(index, 13, 0)
+	}
+	index = withCRC32(append(index, make([]byte, (4-len(index)%4)%4)...))
+	file = append(file, index...)
+	footerFields := append(binary.LittleEndian.AppendUint32(nil, uint32(len(index)/4-1)), 0, 0)
+	file = binary.LittleEndian.AppendUint32(file, crc32.ChecksumIEEE(footerFields))
+	return append(append(file, footerFields...), 'Y', 'Z')
+}
+
+// TestOpenRefusesAnXZIndexOfManyDictionaries: a file whose blocks together
+// declare more dictionary than they hold data is refused by deb's reader,
+// and will be refused again, so it is not a file that changed while it was
+// fetched, and is not asked for twice.
+func TestOpenRefusesAnXZIndexOfManyDictionaries(t *testing.T) {
+	served := newArchive(t, ".xz")
+	served.publishFile("noble", "main", ".xz", xzOfManyDictionaries())
+	delete(served.files, "/dists/noble-updates/InRelease")
+	_, err := Open(context.Background(), optionsFor(t, served))
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, deb.ErrXZDictionariesTooLarge) {
+		t.Fatalf("Open = %v, want ErrUnavailable wrapping deb.ErrXZDictionariesTooLarge", err)
+	}
+	if errors.Is(err, errChanged) {
+		t.Errorf("err = %v; refused dictionaries are not a file that changed", err)
+	}
+	if got := served.served["/dists/noble/main/binary-amd64/Packages.xz"]; got != 1 {
+		t.Errorf("the index was asked for %d times, want once", got)
+	}
+}
+
 // TestOpenRefusesAnXZIndexWithAHugeDictionary: the xz library allocates the
 // dictionary a block declares, up to 4 GiB, before it decodes a byte, and
 // an index whose Release came unsigned over plain http could declare one in

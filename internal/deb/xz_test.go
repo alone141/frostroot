@@ -8,7 +8,10 @@ import (
 	"hash/crc32"
 	"io"
 	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 
 	"github.com/ulikunitz/xz"
@@ -176,6 +179,168 @@ func TestXZReaderRefusesALargeDictionaryInEveryBlock(t *testing.T) {
 	}
 }
 
+// xzFileOfEmptyBlocks builds one stream, with no check, of blockCount
+// blocks that each declare the dictionary code and hold no data: a block
+// header, the LZMA2 end marker and padding, 16 bytes a block.
+func xzFileOfEmptyBlocks(blockCount int, code byte) []byte {
+	withCRC32 := func(data []byte) []byte {
+		return binary.LittleEndian.AppendUint32(data, crc32.ChecksumIEEE(data))
+	}
+	file := append(bytes.Clone(xzStreamHeaderMagic), withCRC32([]byte{0, 0})...)
+	for range blockCount {
+		file = append(file, withCRC32([]byte{2, 0, xzLZMA2FilterID, 1, code, 0, 0, 0})...)
+		file = append(file, 0x00, 0, 0, 0)
+	}
+	// Each record is the unpadded size, 12 + 1, and the uncompressed size.
+	index := binary.AppendUvarint([]byte{0}, uint64(blockCount))
+	for range blockCount {
+		index = append(index, 13, 0)
+	}
+	index = withCRC32(append(index, make([]byte, xzPaddingBytes(int64(len(index))))...))
+	file = append(file, index...)
+	footerFields := append(binary.LittleEndian.AppendUint32(nil, uint32(len(index)/4-1)), 0, 0)
+	file = binary.LittleEndian.AppendUint32(file, crc32.ChecksumIEEE(footerFields))
+	return append(append(file, footerFields...), xzStreamFooterMagic...)
+}
+
+// TestXZReaderBoundsTheDictionariesOfManyBlocks: every block allocates its
+// own dictionary, so a small file of empty blocks that each declare the
+// largest one allowed would cost 64 MiB of allocation per 16 bytes.
+func TestXZReaderBoundsTheDictionariesOfManyBlocks(t *testing.T) {
+	// Code 28 is 64 MiB.
+	fewBlocks := xzFileOfEmptyBlocks(2, 28)
+	want, err := decodeXZ(xz.NewReader, fewBlocks)
+	if err != nil || len(want) != 0 {
+		t.Fatalf("the library reads %d bytes and %v from two empty blocks, want nothing and no error", len(want), err)
+	}
+	if got, err := decodeXZ(NewXZReader, fewBlocks); err != nil || len(got) != 0 {
+		t.Errorf("two empty blocks: NewXZReader gave %d bytes and %v, want nothing and no error", len(got), err)
+	}
+
+	manyBlocks := xzFileOfEmptyBlocks(64, 28)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	_, err = decodeXZ(NewXZReader, manyBlocks)
+	runtime.ReadMemStats(&after)
+	if !errors.Is(err, ErrXZDictionariesTooLarge) {
+		t.Errorf("%d bytes of 64 empty blocks: err = %v, want ErrXZDictionariesTooLarge", len(manyBlocks), err)
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > xzFreeDictionaryBytes+(16<<20) {
+		t.Errorf("64 empty blocks allocated %d MiB, want no more than the %d MiB allowed", allocated>>20, xzFreeDictionaryBytes>>20)
+	}
+}
+
+// readXZFixture reads a file of testdata made with xz 5.2.7. The library's
+// writer cannot make these: it writes no sizes in a block header.
+//
+//   - seq-xz9-blocks.xz: seq 1 20000 | xz -9 -T2 --block-size=8KiB, 14
+//     blocks that each declare 64 MiB and their sizes.
+//   - seq-xz6-blocks.xz: seq 1 20000 | xz -6 -T2 --block-size=2KiB, 54
+//     blocks that each declare 8 MiB and their sizes.
+//   - repeat-xz9-block.xz: 5,000 bytes of base64 of random bytes, twice,
+//     through xz -9 -T2 --block-size=16KiB, one block whose second half is a
+//     match 5,000 bytes back.
+//   - streams4-xz9.xz, streams5-xz9.xz: for i in 1 2 3 4 [5]; do echo
+//     "stream $i" | xz -9; done, streams of one block that declares 64 MiB
+//     and no sizes.
+func readXZFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	file, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
+// TestXZReaderDecodesSmallBlocksOfALargeDictionary: xz writes the preset's
+// dictionary into every block header however small the block, so the
+// blocks of xz -9 --block-size=8KiB each declared 64 MiB, and the budget
+// for them refused an honest file after its fourth block. A block that
+// declares its size is given no more dictionary than that.
+func TestXZReaderDecodesSmallBlocksOfALargeDictionary(t *testing.T) {
+	for _, name := range []string{"seq-xz9-blocks.xz", "seq-xz6-blocks.xz", "repeat-xz9-block.xz", "streams4-xz9.xz"} {
+		t.Run(name, func(t *testing.T) {
+			file := readXZFixture(t, name)
+			want, err := decodeXZ(xz.NewReader, file)
+			if err != nil {
+				t.Fatalf("the library refuses %s: %v", name, err)
+			}
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			got, err := decodeXZ(NewXZReader, file)
+			runtime.ReadMemStats(&after)
+			if err != nil || !bytes.Equal(got, want) {
+				t.Fatalf("NewXZReader gave %d bytes and %v, want the library's %d bytes", len(got), err, len(want))
+			}
+			// Four streams of no sizes get 64 MiB each; blocks with sizes
+			// get a dictionary of their size.
+			limit := uint64(16 << 20)
+			if name == "streams4-xz9.xz" {
+				limit += xzFreeDictionaryBytes
+			}
+			if allocated := after.TotalAlloc - before.TotalAlloc; allocated > limit {
+				t.Errorf("NewXZReader allocated %d MiB for %d bytes of xz", allocated>>20, len(file))
+			}
+		})
+	}
+
+	// A fifth stream that declares 64 MiB and holds a line is past what
+	// the budget allows.
+	if _, err := decodeXZ(NewXZReader, readXZFixture(t, "streams5-xz9.xz")); !errors.Is(err, ErrXZDictionariesTooLarge) {
+		t.Errorf("five streams of xz -9 holding a line each: err = %v, want ErrXZDictionariesTooLarge", err)
+	}
+}
+
+// TestXZReaderGivesNoWrongDataForAHeaderThatUndersizesItsBlock: a block's
+// dictionary is cut to the size its header declares, so a header could
+// declare too small a size for the matches its data makes. That must fail
+// and never decode a match from the wrong place: the decoder refuses a
+// match farther back than its dictionary, and NewXZReader a block that
+// decodes more than its header says.
+func TestXZReaderGivesNoWrongDataForAHeaderThatUndersizesItsBlock(t *testing.T) {
+	file := readXZFixture(t, "repeat-xz9-block.xz")
+	want, err := decodeXZ(xz.NewReader, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The block header: its size, flags with both sizes, the compressed
+	// size and then the uncompressed size, 10,000 in two bytes, which 4096
+	// also takes.
+	header := slices.Clone(file[xzStreamHeaderBytes : xzStreamHeaderBytes+(int(file[xzStreamHeaderBytes])+1)*4])
+	fields := header[2:]
+	compressedSize, compressedLength := binary.Uvarint(fields)
+	uncompressedSize, uncompressedLength := binary.Uvarint(fields[compressedLength:])
+	if header[1] != xzCompressedSizeFlag|xzUncompressedSizeFlag || uncompressedSize != 10_000 || uncompressedLength != 2 {
+		t.Fatalf("block header % x is not the one this test expects", header)
+	}
+	binary.PutUvarint(fields[compressedLength:], 4096)
+	binary.LittleEndian.PutUint32(header[len(header)-4:], crc32.ChecksumIEEE(header[:len(header)-4]))
+	forged := slices.Concat(file[:xzStreamHeaderBytes], header, file[xzStreamHeaderBytes+len(header):])
+
+	got, err := decodeXZ(NewXZReader, forged)
+	if err == nil {
+		t.Errorf("a block declared as 4,096 bytes that holds 10,000 decoded without an error")
+	}
+	if !bytes.HasPrefix(want, got) {
+		t.Errorf("NewXZReader gave %d bytes that are not the start of the block's data", len(got))
+	}
+
+	// The decoder alone, given the smallest dictionary, refuses the match
+	// 5,000 bytes back rather than read it from what the dictionary holds.
+	lzma2 := file[xzStreamHeaderBytes+len(header):][:compressedSize]
+	decoder, err := lzma.Reader2Config{DictCap: lzma.MinDictCap}.NewReader2(bytes.NewReader(lzma2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = io.ReadAll(decoder)
+	if err == nil {
+		t.Errorf("a %d-byte dictionary decoded a match 5,000 bytes back", lzma.MinDictCap)
+	}
+	if !bytes.HasPrefix(want, got) {
+		t.Errorf("the decoder gave %d bytes that are not the start of the block's data", len(got))
+	}
+}
+
 func TestXZReaderRefusesACutOrExtendedFile(t *testing.T) {
 	tinyBlocks := xz.WriterConfig{DictCap: lzma.MinDictCap, BlockSize: 1 << 10}
 	firstStream := compressXZ(t, xzTestData(2500), tinyBlocks)
@@ -217,6 +382,14 @@ func FuzzXZReader(f *testing.F) {
 	f.Add(append(append(compressXZ(f, []byte("a"), xz.WriterConfig{NoCheckSum: true}), 0, 0, 0, 0), compressXZ(f, []byte("b"), xz.WriterConfig{CheckSum: xz.SHA256})...))
 	f.Add(withDictionaryCode(f, compressXZ(f, []byte("x"), xz.WriterConfig{}), xzStreamHeaderBytes, 40))
 	f.Add(xzFileWithAShortChunk(0))
+	f.Add(xzFileOfEmptyBlocks(3, 0))
+	for _, name := range []string{"seq-xz9-blocks.xz", "repeat-xz9-block.xz", "streams4-xz9.xz"} {
+		file, err := os.ReadFile(filepath.Join("testdata", name))
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(file)
+	}
 	f.Fuzz(func(t *testing.T, file []byte) {
 		got, err := decodeXZ(NewXZReader, file)
 		if err != nil {

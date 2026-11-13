@@ -462,6 +462,24 @@ func TestOpenFedoraRefusesAnXZPrimaryWithAHugeDictionary(t *testing.T) {
 	}
 }
 
+// TestOpenFedoraRefusesAnXZPrimaryOfManyDictionaries: blocks that together
+// declare more dictionary than they hold data will be refused again, so
+// they are not a repository republished between two requests.
+func TestOpenFedoraRefusesAnXZPrimaryOfManyDictionaries(t *testing.T) {
+	mirror := newFedoraMirror(t, ".xz")
+	primary := mirror.publishFile(fedoraReleasePath, xzOfManyDictionaries(), nil, ".xz", 0)
+	_, err := OpenFedora(context.Background(), fedoraOptions(t), mirror.release())
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, deb.ErrXZDictionariesTooLarge) {
+		t.Fatalf("OpenFedora = %v, want ErrUnavailable wrapping deb.ErrXZDictionariesTooLarge", err)
+	}
+	if errors.Is(err, errChanged) {
+		t.Errorf("err = %v; refused dictionaries are not a file that changed", err)
+	}
+	if got := mirror.requestsFor(primary); got != 1 {
+		t.Errorf("the primary metadata was asked for %d times, want once", got)
+	}
+}
+
 func TestOpenFedoraStopsWhenTheContextEnds(t *testing.T) {
 	mirror := newFedoraMirror(t, ".zst")
 	ctx, cancel := context.WithCancel(context.Background())

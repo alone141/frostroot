@@ -467,9 +467,9 @@ func (f *fetcher) file(pocket, component string, file listedFile) ([]Entry, erro
 		}
 		// A server that went quiet is not one that published anew, and
 		// asking it again would only wait as long once more. Nor is a file
-		// that asks for a larger xz dictionary than any preset uses: it
-		// would ask for it again.
-		if errors.Is(err, errStalled) || errors.Is(err, deb.ErrXZDictionaryTooLarge) {
+		// whose xz dictionaries deb's reader refuses: it would ask for them
+		// again.
+		if errors.Is(err, errStalled) || isRefusedXZDictionary(err) {
 			return nil, fmt.Errorf("%s: %w", url, err)
 		}
 		// A cut download fails in the decompressor before the digest is
@@ -489,11 +489,18 @@ func (f *fetcher) file(pocket, component string, file listedFile) ([]Entry, erro
 	return entries, nil
 }
 
+// isRefusedXZDictionary reports whether deb's xz reader refused the
+// dictionary one block declares, or the dictionaries all of them declare.
+func isRefusedXZDictionary(err error) bool {
+	return errors.Is(err, deb.ErrXZDictionaryTooLarge) || errors.Is(err, deb.ErrXZDictionariesTooLarge)
+}
+
 // decompress returns the text of an index by its file name's extension. An
 // xz file goes through deb's reader, which refuses a dictionary larger than
-// any preset uses: the library's own allocates whatever a block declares,
-// up to 4 GiB, and the Release that lists the file is read unsigned, often
-// over plain http.
+// any preset uses, and more dictionary across its blocks than they hold
+// data: the library's own allocates whatever each block declares, up to
+// 4 GiB, and the Release that lists the file is read unsigned, often over
+// plain http.
 func decompress(path string, reader io.Reader) (io.Reader, error) {
 	switch {
 	case strings.HasSuffix(path, ".xz"):

@@ -249,9 +249,9 @@ func (f *fetcher) primary(plan rpmPlan) ([]Entry, error) {
 			return nil, fmt.Errorf("%s: %w", url, errTooLarge)
 		}
 		// A server that went quiet is not one that published anew, nor is a
-		// file that asks for a larger xz dictionary than any preset uses: it
-		// would ask for it again.
-		if errors.Is(err, errStalled) || errors.Is(err, deb.ErrXZDictionaryTooLarge) {
+		// file whose xz dictionaries deb's reader refuses: it would ask for
+		// them again.
+		if errors.Is(err, errStalled) || isRefusedXZDictionary(err) {
 			return nil, fmt.Errorf("%s: %w", url, err)
 		}
 		// A cut download fails in the decompressor or the parser before

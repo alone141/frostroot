@@ -24,6 +24,26 @@ const maxXZDictionaryBytes = 64 << 20
 // dictionary larger than any xz preset uses.
 var ErrXZDictionaryTooLarge = fmt.Errorf("xz: a block declares a dictionary larger than %d MiB", maxXZDictionaryBytes>>20)
 
+// xzFreeDictionaryBytes is how much dictionary the blocks of an xz file may
+// be given between them before the data they decode has to pay for more:
+// four of the largest. Every block gets a dictionary of its own, allocated
+// whole before it decodes a byte, so without a bound a file of empty blocks
+// costs 64 MiB for every 20 bytes.
+//
+// A block whose header declares its uncompressed size is given no more
+// dictionary than that size (xzDecoderDictionaryBytes), so it pays for its
+// own and the bound never refuses one. xz writes every block's dictionary
+// as the preset's whatever the block's size, but writes the sizes too when
+// it splits the data into blocks, with -T or --block-size. A block without
+// sizes is what xz writes alone in a stream, so what the bound refuses is
+// more than four concatenated streams that each declare a large dictionary
+// and hold almost nothing.
+const xzFreeDictionaryBytes = 4 * maxXZDictionaryBytes
+
+// ErrXZDictionariesTooLarge means the blocks of an xz file ask for more
+// dictionary between them than the data they decode accounts for.
+var ErrXZDictionariesTooLarge = fmt.Errorf("xz: the blocks ask for more than %d MiB of dictionary beyond the size of the data they hold", xzFreeDictionaryBytes>>20)
+
 // Layout of the xz container, from its file format specification.
 const (
 	xzStreamHeaderBytes    = 12
@@ -44,8 +64,11 @@ var (
 
 // NewXZReader returns a reader of the data an xz file holds, all of its
 // streams. It refuses with ErrXZDictionaryTooLarge a block that declares a
-// dictionary larger than any xz preset uses, and gives what
-// github.com/ulikunitz/xz's NewReader gives for every file it accepts. That
+// dictionary larger than any xz preset uses, and with
+// ErrXZDictionariesTooLarge a block whose dictionary would bring the file's
+// total past xzFreeDictionaryBytes plus the bytes decoded before it. It
+// gives what github.com/ulikunitz/xz's NewReader gives for every file it
+// accepts. That
 // reader allocates whatever dictionary a block declares, up to 4 GiB, before
 // it decodes a byte of it, so a few bytes of a hostile file could ask for
 // gigabytes.
@@ -71,6 +94,8 @@ type xzReader struct {
 	checkFlags   byte   // the current stream's check method
 	blockCount   uint64 // blocks read in the current stream
 	records      hash.Hash
+	decoded      int64    // bytes decoded from every block so far
+	dictionaries int64    // bytes of dictionary every block so far declared
 	block        *xzBlock // nil between blocks
 	err          error
 }
@@ -220,12 +245,16 @@ func (x *xzReader) startBlock() error {
 	if dictionaryBytes > maxXZDictionaryBytes {
 		return ErrXZDictionaryTooLarge
 	}
+	dictionaryBytes = xzDecoderDictionaryBytes(dictionaryBytes, declaredUncompressed)
+	if x.dictionaries+dictionaryBytes > xzFreeDictionaryBytes+x.decoded {
+		return ErrXZDictionariesTooLarge
+	}
+	x.dictionaries += dictionaryBytes
 	if !allZero(header[fieldsEnd-fields.Len() : fieldsEnd]) {
 		return errors.New("xz: non-zero block header padding")
 	}
-	// The library's own reader gives the decoder this dictionary, whatever
-	// its configuration says. The decoder reads its first chunk header at
-	// once, so the offset is taken before.
+	// The decoder reads its first chunk header at once, so the offset is
+	// taken before.
 	compressedStart := x.source.offset
 	decoder, err := lzma.Reader2Config{DictCap: int(dictionaryBytes)}.NewReader2(x.source)
 	if err != nil {
@@ -242,12 +271,29 @@ func (x *xzReader) startBlock() error {
 	return nil
 }
 
+// xzDecoderDictionaryBytes returns the dictionary a block's decoder is
+// given: the one its header declares, or, when the header declares the
+// block's uncompressed size, no more than that size, and never less than
+// the smallest LZMA2 allows. LZMA2 starts every block with an empty
+// dictionary, so a match in an honest block reaches back no further than
+// the block's own data. A header that declares too small a size cannot
+// make the decoder give wrong data either: the decoder refuses a match
+// farther back than its dictionary, and readBlock a block that decodes
+// more than its header says.
+func xzDecoderDictionaryBytes(declared, declaredUncompressed int64) int64 {
+	if declaredUncompressed < 0 {
+		return declared
+	}
+	return max(min(declared, declaredUncompressed), lzma.MinDictCap)
+}
+
 // readBlock reads decoded data from the current block and, at its end,
 // checks its padding, its check and the sizes its header declares.
 func (x *xzReader) readBlock(p []byte) (int, error) {
 	block := x.block
 	n, err := block.decoder.Read(p)
 	block.uncompressed += int64(n)
+	x.decoded += int64(n)
 	if block.check != nil {
 		block.check.Write(p[:n])
 	}
