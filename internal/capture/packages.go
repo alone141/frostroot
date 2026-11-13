@@ -269,13 +269,16 @@ type aptIndex struct {
 }
 
 // Describe renders an index the way the report should name it: the URL apt
-// built the file name from, and the suite.
+// built the file name from, and the suite. Apt clears a URL's credentials
+// before it names the file, but not its query, so a token a sources.list
+// passed in a query is in the file name too, and is redacted here as the
+// source's own line is.
 func (index aptIndex) Describe() string {
 	path := strings.ReplaceAll(index.prefix, "_", "/")
 	if decoded, err := url.PathUnescape(path); err == nil {
 		path = decoded
 	}
-	return path + " " + index.suite
+	return recipe.RedactURL(path) + " " + index.suite
 }
 
 // aptIndexOf reads an apt list file name back into the repository it came

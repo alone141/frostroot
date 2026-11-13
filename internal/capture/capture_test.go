@@ -576,6 +576,51 @@ func TestSourcesForRecipeLeavesACredentialedSourceWithoutItsPassword(t *testing.
 	}
 }
 
+// TestCaptureReportQuotesNoTokenOfASourceURL: a repository token is as
+// often in a query or a fragment as in the userinfo, and the report is a
+// file written beside the recipe, so neither the line that says why the
+// source was left out nor anything else capture says may quote it. One-line
+// and deb822 files both, since capture reads both.
+func TestCaptureReportQuotesNoTokenOfASourceURL(t *testing.T) {
+	machine := wslMachine()
+	machine["etc/apt/sources.list"] = "deb [signed-by=/etc/apt/keyrings/docker.gpg] https://query.example/ubuntu?token=s3cretquery noble main\n" +
+		"deb [signed-by=/etc/apt/keyrings/docker.gpg] https://bot:s3cretpass@both.example/ubuntu?token=s3cretboth noble main\n" +
+		// "#" starts a comment in a one-line file, so this one names no
+		// suite and is not a source at all; it must not be quoted either.
+		"deb [signed-by=/etc/apt/keyrings/docker.gpg] https://fragment.example/ubuntu#s3cretfragment noble main\n"
+	machine["etc/apt/sources.list.d/tokens.sources"] = "Types: deb\n" +
+		"URIs: https://query822.example/ubuntu?token=s3cretquery822 https://fragment822.example/ubuntu#s3cretfragment822 https://bot:s3cretpass822@both822.example/ubuntu?k=s3cretboth822\n" +
+		"Suites: noble\nComponents: main\nSigned-By: /etc/apt/keyrings/docker.gpg\n"
+	snapshot, err := Read(buildRoot(t, machine))
+	if err != nil {
+		t.Fatal(err)
+	}
+	said := strings.Join([]string{snapshot.Report(), strings.Join(snapshot.Summary(), "\n"), strings.Join(snapshot.Evidence, "\n"), fmt.Sprint(snapshot.Recipe())}, "\n")
+	if strings.Contains(said, "s3cret") {
+		t.Errorf("capture quotes a token of a source URL:\n%s", said)
+	}
+	// Each refused source is still named, so a person knows what to fix.
+	left := strings.Join(findingByArea(t, snapshot, AreaThirdPartySources).Examples, "\n")
+	for _, wantText := range []string{"https://query.example/ubuntu?REDACTED", "https://REDACTED@both.example/ubuntu?REDACTED", "https://query822.example/ubuntu?REDACTED", "https://fragment822.example/ubuntu#REDACTED", "https://REDACTED@both822.example/ubuntu?REDACTED"} {
+		if !strings.Contains(left, wantText) {
+			t.Errorf("the left-out sources lack %q:\n%s", wantText, left)
+		}
+	}
+}
+
+// TestAptIndexDescribeQuotesNoQueryToken: apt clears a URL's credentials
+// before it names the index file, but keeps its query, so the third-party
+// package lines of the report would quote a token read from a file name.
+func TestAptIndexDescribeQuotesNoQueryToken(t *testing.T) {
+	index, ok := aptIndexOf("query.example_ubuntu?token%3ds3cret_dists_noble_main_binary-amd64_Packages")
+	if !ok {
+		t.Fatal("the index was not recognized")
+	}
+	if got, want := index.Describe(), "query.example/ubuntu?REDACTED noble"; got != want {
+		t.Errorf("Describe = %q, want %q", got, want)
+	}
+}
+
 // TestPackageOriginsSeparateRepositoriesOnOneHost is the PPA case: every
 // Launchpad PPA lives on ppa.launchpadcontent.net, so attributing packages
 // to the host alone let one carried PPA vouch for all the others.

@@ -156,3 +156,71 @@ func TestOpenCheckedFileRefusesAFileOtherThanTheOneChecked(t *testing.T) {
 		t.Errorf("a file other than the one checked opened with error %v, want it refused", err)
 	}
 }
+
+// emptyDirectory fails unless directory holds nothing.
+func emptyDirectory(t *testing.T, directory string) {
+	t.Helper()
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("%s holds %v, want nothing", directory, entries)
+	}
+}
+
+// TestPrepareFilePathRefusesALinkOutOfTheRecipeDirectory: edit and capture
+// saved a key or a certificate through a keys/ or certs/ that a cloned
+// recipe made a link to anywhere, so the file landed there. Neither the file
+// nor a directory on its way may be made outside.
+func TestPrepareFilePathRefusesALinkOutOfTheRecipeDirectory(t *testing.T) {
+	outside := t.TempDir()
+	recipeDir := t.TempDir()
+	symlinkOrSkip(t, outside, filepath.Join(recipeDir, "keys"))
+	for _, relativePath := range []string{"keys/vendor.asc", "keys/deeper/vendor.asc"} {
+		_, err := PrepareFilePath(recipeDir, relativePath)
+		if err == nil || !strings.Contains(err.Error(), "outside the recipe directory") {
+			t.Errorf("%s: err = %v, want a refusal", relativePath, err)
+		}
+	}
+	emptyDirectory(t, outside)
+}
+
+func TestPrepareFilePathFollowsALinkInsideTheRecipeDirectory(t *testing.T) {
+	recipeDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(recipeDir, "shared"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	symlinkOrSkip(t, "shared", filepath.Join(recipeDir, "keys"))
+	writePath, err := PrepareFilePath(recipeDir, "keys/deeper/vendor.asc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(writePath, fakeKeyPacket, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadKeyFile(recipeDir, "keys/deeper/vendor.asc"); err != nil {
+		t.Errorf("the file written is not the one the recipe names: %v", err)
+	}
+
+	// A recipe directory reached through a link, and a file directly in it.
+	linkedDir := filepath.Join(t.TempDir(), "linked")
+	symlinkOrSkip(t, recipeDir, linkedDir)
+	for _, relativePath := range []string{"keys/vendor.asc", "vendor.asc", "certs/new/corp.pem"} {
+		if _, err := PrepareFilePath(linkedDir, relativePath); err != nil {
+			t.Errorf("%s in a linked recipe directory: %v", relativePath, err)
+		}
+	}
+	if info, err := os.Stat(filepath.Join(recipeDir, "certs", "new")); err != nil || !info.IsDir() {
+		t.Errorf("the directories on the way were not made: %v", err)
+	}
+}
+
+func TestPrepareFilePathNamesADanglingLink(t *testing.T) {
+	recipeDir := t.TempDir()
+	symlinkOrSkip(t, "gone", filepath.Join(recipeDir, "keys"))
+	_, err := PrepareFilePath(recipeDir, "keys/vendor.asc")
+	if err == nil || !strings.Contains(err.Error(), "keys is a symbolic link to gone, which does not exist") {
+		t.Errorf("err = %v", err)
+	}
+}

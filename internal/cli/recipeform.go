@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -316,13 +315,16 @@ func (a *App) fetchMissingKeys(ctx context.Context, commandName string, recipeSo
 			failed = true
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(keyPath), 0o755); err != nil {
-			a.stderrf("frostroot %s: %v\n", commandName, err)
+		// A keys/ that is a link out of the recipe directory refuses the
+		// key rather than saving it wherever the link leads.
+		writePath, err := recipe.PrepareFilePath(a.RecipeDir, source.Key)
+		if err != nil {
+			a.stderrf("frostroot %s: writing %s: %v\n", commandName, source.Key, err)
 			missing = append(missing, source.Name)
 			failed = true
 			continue
 		}
-		if err := writeFileAtomically(keyPath, string(armored)); err != nil {
+		if err := writeFileAtomically(writePath, string(armored)); err != nil {
 			a.stderrf("frostroot %s: writing %s: %v\n", commandName, source.Key, err)
 			missing = append(missing, source.Name)
 			failed = true

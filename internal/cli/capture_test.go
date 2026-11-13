@@ -259,6 +259,54 @@ func TestCaptureCarriesCertificateAuthorities(t *testing.T) {
 	}
 }
 
+// TestCaptureRefusesToWriteACertificateThroughALinkOutOfTheRecipeDirectory:
+// a certs/ that is a link to anywhere had capture write the machine's
+// authorities there. A link that stays inside keeps working.
+func TestCaptureRefusesToWriteACertificateThroughALinkOutOfTheRecipeDirectory(t *testing.T) {
+	root := fakeUbuntuRoot(t, "24.04")
+	authority := corpCertificatePEM(t)
+	withLocalAuthority(t, root, authority)
+
+	outside := t.TempDir()
+	recipeDir := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(recipeDir, "certs")); err != nil {
+		t.Skipf("cannot make a symbolic link here: %v", err)
+	}
+	exitCode, _, stderr := runCaptureWithAnswers(recipeDir, root, answersWith(nil))
+	if exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d; stderr %s", exitCode, exitUserError, stderr)
+	}
+	if !strings.Contains(stderr, "writing certs/corp-root.pem") || !strings.Contains(stderr, "outside the recipe directory") {
+		t.Errorf("stderr does not say which certificate leads where: %s", stderr)
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("capture wrote %v outside the recipe directory", entries)
+	}
+	if _, err := os.Stat(filepath.Join(recipeDir, "frostroot.toml")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("capture wrote a recipe after refusing its certificate: %v", err)
+	}
+
+	insideDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(insideDir, "shared"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("shared", filepath.Join(insideDir, "certs")); err != nil {
+		t.Skipf("cannot make a symbolic link here: %v", err)
+	}
+	exitCode, _, stderr = runCaptureWithAnswers(insideDir, root, answersWith(nil))
+	if exitCode != exitSuccess {
+		t.Fatalf("a link inside: exit code = %d, stderr %s", exitCode, stderr)
+	}
+	written, err := os.ReadFile(filepath.Join(insideDir, "shared", "corp-root.pem"))
+	if err != nil || !bytes.Equal(written, authority) {
+		t.Errorf("capture did not write the certificate through a link inside the recipe directory: %v", err)
+	}
+}
+
 // interruptedPrompt answers with the defaults, then is interrupted at its
 // question number at: what the line prompt does when Ctrl-C arrives while
 // it waits for an answer.

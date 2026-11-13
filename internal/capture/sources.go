@@ -215,10 +215,11 @@ func (root systemRoot) sourcesForRecipe(releaseSuite string) (carried []carriedS
 
 // describeAptSource names an entry for the report. The report is a file
 // written beside the recipe, so a machine whose sources.list carries a
-// password must not have it copied there: the recipe refuses such a URL,
-// and the line that says so is this one.
+// password, or a token in a query or a fragment, must not have it copied
+// there: the recipe refuses such a URL, and the line that says so is this
+// one.
 func describeAptSource(entry aptSource) string {
-	return fmt.Sprintf("%s (%s %s)", entry.file, recipe.RedactURLCredentials(entry.uri), entry.suite)
+	return fmt.Sprintf("%s (%s %s)", entry.file, recipe.RedactURL(entry.uri), entry.suite)
 }
 
 // carryOneSource turns every copy of one URI and suite into a single recipe

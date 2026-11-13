@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -54,9 +55,8 @@ func readInsideRecipeDirectory(recipeDir, relativePath string, maxBytes int64) (
 	if err != nil {
 		return nil, explainUnresolvable(recipeDir, relativePath, err)
 	}
-	relative, err := filepath.Rel(resolvedDir, resolvedFile)
-	if err != nil || !filepath.IsLocal(relative) {
-		return nil, fmt.Errorf("a symbolic link leads it outside the recipe directory, to %s", resolvedFile)
+	if err := checkInside(resolvedDir, resolvedFile); err != nil {
+		return nil, err
 	}
 	info, err := os.Stat(resolvedFile)
 	if err != nil {
@@ -78,6 +78,74 @@ func readInsideRecipeDirectory(recipeDir, relativePath string, maxBytes int64) (
 		return nil, fmt.Errorf("it is larger than %d KiB, the most such a file may be", maxBytes>>10)
 	}
 	return data, nil
+}
+
+// PrepareFilePath creates the directories the file relativePath names in
+// recipeDir goes in, as os.MkdirAll would, and returns the path to write
+// the file at, with every link on the way resolved. It is the write side of
+// readInsideRecipeDirectory: a cloned recipe's keys/ or certs/ can be a
+// symbolic link to anywhere, and a key or certificate saved through it
+// would land there. So the deepest directory that already exists is
+// resolved and must be inside the resolved recipe directory before
+// anything is created, the rest is created under the resolved path, and
+// the result is resolved and checked again. A link that stays inside the
+// directory is fine. The error does not name the file; the caller says
+// which one, as the recipe wrote it.
+//
+// The caller writes at the returned path, which held no link when it was
+// checked. Only someone who can change the recipe directory between the
+// check and the write can still lead the file elsewhere, and they can
+// change the recipe as well.
+func PrepareFilePath(recipeDir, relativePath string) (string, error) {
+	if !insideRecipeDirectory(relativePath) {
+		return "", errors.New("not a relative path inside the recipe directory")
+	}
+	resolvedRecipeDir, err := resolvePath(recipeDir)
+	if err != nil {
+		return "", fmt.Errorf("resolving the recipe directory: %w", err)
+	}
+	components := strings.Split(path.Dir(path.Clean(filepath.ToSlash(relativePath))), "/")
+	if components[0] == "." {
+		components = nil
+	}
+	existing := recipeDir
+	created := 0
+	for _, component := range components {
+		if _, err := os.Lstat(filepath.Join(existing, component)); err != nil {
+			break
+		}
+		existing = filepath.Join(existing, component)
+		created++
+	}
+	resolvedExisting, err := resolvePath(existing)
+	if err != nil {
+		return "", explainUnresolvable(recipeDir, relativePath, err)
+	}
+	if err := checkInside(resolvedRecipeDir, resolvedExisting); err != nil {
+		return "", err
+	}
+	directory := filepath.Join(append([]string{resolvedExisting}, components[created:]...)...)
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return "", withoutPath(err)
+	}
+	resolvedDirectory, err := resolvePath(directory)
+	if err != nil {
+		return "", withoutPath(err)
+	}
+	if err := checkInside(resolvedRecipeDir, resolvedDirectory); err != nil {
+		return "", err
+	}
+	return filepath.Join(resolvedDirectory, path.Base(filepath.ToSlash(relativePath))), nil
+}
+
+// checkInside reports, as the refusals of a file a recipe names say it,
+// that resolvedPath is not inside resolvedRecipeDir, or nil.
+func checkInside(resolvedRecipeDir, resolvedPath string) error {
+	relative, err := filepath.Rel(resolvedRecipeDir, resolvedPath)
+	if err != nil || !filepath.IsLocal(relative) {
+		return fmt.Errorf("a symbolic link leads it outside the recipe directory, to %s", resolvedPath)
+	}
+	return nil
 }
 
 // openCheckedFile opens path, which was stat'ed as checked. What was opened

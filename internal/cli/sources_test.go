@@ -222,6 +222,54 @@ func TestEditFetchesMissingSourceKeys(t *testing.T) {
 	}
 }
 
+// TestEditRefusesToSaveAKeyThroughALinkOutOfTheRecipeDirectory: a cloned
+// recipe's keys/ can be a link to anywhere, and edit saved the keys it
+// fetched wherever it led. A link that stays inside keeps working.
+func TestEditRefusesToSaveAKeyThroughALinkOutOfTheRecipeDirectory(t *testing.T) {
+	docker, _ := sources.Lookup("docker")
+	dockerKey := dockerKeyFixture(t)
+	client := &fakeKeyClient{answers: map[string][]byte{
+		docker.KeyURL: dockerKey,
+		"https://api.launchpad.net/1.0/~deadsnakes/+archive/ubuntu/ppa":                                []byte(`{"signing_key_fingerprint": "` + docker.Fingerprints[0] + `"}`),
+		"https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x" + docker.Fingerprints[0]: dockerKey,
+	}}
+
+	outside := t.TempDir()
+	recipeDir := newRecipeDir(t, "sources.toml")
+	if err := os.Symlink(outside, filepath.Join(recipeDir, "keys")); err != nil {
+		t.Skipf("cannot make a symbolic link here: %v", err)
+	}
+	exitCode, _, stderr := runEditWithKeyClient(recipeDir, answersWith(map[int]string{answerWrite: "y"}), client)
+	if exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d; stderr %s", exitCode, exitUserError, stderr)
+	}
+	if !strings.Contains(stderr, "writing keys/docker.asc") || !strings.Contains(stderr, "outside the recipe directory") {
+		t.Errorf("stderr does not say which key leads where: %s", stderr)
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("edit wrote %v outside the recipe directory", entries)
+	}
+
+	insideDir := newRecipeDir(t, "sources.toml")
+	if err := os.Mkdir(filepath.Join(insideDir, "shared"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("shared", filepath.Join(insideDir, "keys")); err != nil {
+		t.Skipf("cannot make a symbolic link here: %v", err)
+	}
+	exitCode, _, stderr = runEditWithKeyClient(insideDir, answersWith(map[int]string{answerWrite: "y"}), client)
+	if exitCode != exitSuccess {
+		t.Fatalf("a link inside: exit code = %d, stderr %s", exitCode, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(insideDir, "shared", "docker.asc")); err != nil {
+		t.Errorf("edit did not save the key through a link inside the recipe directory: %v", err)
+	}
+}
+
 func TestValidateRecipeWithSourcesAndKeys(t *testing.T) {
 	recipeDir := newRecipeDir(t, "sources.toml")
 	exitCode, _, stderr := runValidateIn(recipeDir)
