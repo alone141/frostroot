@@ -414,3 +414,72 @@ the pull request: all four jobs green on the heads before the scenario's
 one-line fix, and the three fast jobs green on it while its integration
 job was still running as this was written. A real PC with Secure Boot on,
 and the first login of a 26.04 disk, are still to check.
+
+Master at 41c8cdd, after the fixes of the 2026-11-10 audit and the
+reviews that followed it (#153 to #161), went through every check
+this repository has, from 13 to 15 November, in a test VM: Ubuntu 24.04,
+kernel 6.8.0-147, under QEMU for Windows without a hypervisor (TCG, 8
+CPUs, 6 GB), behind a network that re-signs HTTPS with a corporate root,
+with mmdebstrap 1.4.3, mkosi 20.2, bubblewrap 0.9.0, QEMU 8.2.2 and OVMF
+2024.02 inside it, on go1.27.3, as an unprivileged user. That host is
+roughly ten times slower than real hardware, and what failed below failed
+on it, not on frostroot, unless it says otherwise. `scripts/check.sh`: fmt,
+vet, the Windows build, shellcheck 0.9.0 over 20 scripts and the rendered
+ones, and golangci-lint v2.15.0, all clean; under `go test -race` every
+package passed but three tests, each a bound on time: the two that type
+keys into the full-screen form 30 ms apart,
+`TestTheFullScreenFormAsksTheFamilyWhereItShould` and
+`TestRunFormEndToEnd`, whose keys arrived before the form was ready, and
+`TestReadStanzasLongFoldedFieldTakesLinearTime`, 7.4 s where it wants under
+5. Without `-race` all three passed, the stanza test in 0.4 s; with it, run
+alone, the stanza test passed twice and the form tests failed three runs of
+four; no data race was reported. The 11 fuzz targets ran 10 s each with no
+crasher. `scripts/check.sh --only vuln` found one vulnerability reachable
+from frostroot's fetches, GO-2026-6859 in net/http, fixed in go1.27.4,
+while go.mod pins go1.27.3. `scripts/integration.sh` saw 8 of its 11
+required tests pass, the Ubuntu and Fedora builds, the offline rebuild and
+the disk tools tree among them. `TestIntegrationPython` and
+`TestIntegrationFedoraOfflineRebuild` failed fetching through the
+re-signing network, since the tests give pip and dnf no extra root; with a
+change made in the VM only, never committed, that hands the corporate root
+to their online builds as `--ca-bundle` would, both passed, in 2056 s and
+2233 s. `TestIntegrationOpenEveryRelease` passed every check but its bound
+on one search, 100 ms: 145 to 200 ms here, twice.
+The disk integration tests, with `FROSTROOT_INTEGRATION_DISK=1`, which CI
+never runs, all passed: `TestIntegrationResoluteDisk` in 1530 s, a 26.04
+disk read back with the host's sfdisk, e2fsprogs, dosfstools and mtools;
+`TestIntegrationDiskOfflineRebuild` in 3955 s, two rebuilds from the pool
+alone the same bytes and the lock untouched; and
+`TestIntegrationDiskToolsTree` again, in 383 s.
+The scenarios ran with `E2E_CA_BUNDLE` naming the corporate root. For
+Ubuntu, `harness` passed its 12 checks, `pip-trust` its 7, `tui` its 6,
+`apt-trust` its 16, `failed-build` its 8, `capture-roundtrip` its 10,
+`insecure` its 17, `no-build-leaks` its 15 and `offline-identical` its 12,
+two offline rebuilds byte-identical. `certificates` failed at its first
+build: it trusts only the scenario's own proxy root, so pip could not reach
+files.pythonhosted.org through this network. `wsl-boot` skipped, needing
+Windows. `disk-boot` built its 24.04 disk in 28 minutes and could not boot
+it: its QEMU, without KVM inside an emulated VM, is two layers of
+emulation. At the default 420 s the kernel was still starting. With 5400 s,
+a change made in the VM only, the firmware with Microsoft's keys loaded the
+signed shim and kernel, the root mounted, and systemd detected the first
+boot, received the password credential and set the host name `e2e-disk`,
+then froze 110 s later with "Failed to fork off sandboxing environment for
+executing generators: Protocol error", past the 90 s systemd gives its
+generators. The scenario's last check, run by hand on its lab, passed: the
+firmware with OVMF's snakeoil variables refused the disk, "Access Denied",
+in 50 s. For Fedora, `tui` passed its 7 checks and `offline-identical` its
+10, two offline rebuilds byte-identical; `no-build-leaks` and
+`failed-build` failed because their plain online builds, given no
+`--ca-bundle` on purpose, could not reach Fedora's metalink here, so in
+`failed-build` dnf5's explanation was about `filesystem`, which no
+repository offered, rather than the misspelled package: 7 of 8 checks. And
+with `E2E_TARGET=disk`, `failed-build` passed its 8 checks, `no-build-leaks`
+its 15 and `offline-identical` its 14, two offline disk images
+byte-identical. The host slept for 36 hours in the middle of the run, which
+paused the VM and its clock; the first disk integration run after it failed
+on apt's "not valid yet" and was run again once the clock was set. Still to
+check, on a host with KVM or a real machine: `disk-boot`, the first login
+of an imported 24.04, 26.04 and Fedora 44 image (`wsl-boot`, on Windows),
+`certificates` and Fedora's `no-build-leaks` and `failed-build` on a
+network that does not re-sign TLS, and the time bounds above.
