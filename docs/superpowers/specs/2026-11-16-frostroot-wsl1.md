@@ -1,15 +1,16 @@
 # frostroot on WSL 1
 
 Date: 2026-11-16
-Status: **draft for the owner; nothing is implemented. The owner approved
-the spike on 2026-11-16 ("Yes, run it") and part of it ran the same day:
-see "Spike results". Its main finding is against the build half as
-proposed: Ubuntu 24.04's systemd does not configure on this WSL 1
-kernel, so a 24.04 image cannot be built there.** This document is desk
-research and read-only probes of one such machine, a proposed design,
-the experiments, and what the ones that ran found. The design sections
-are as written before the spike; "What the spike changes" says which of
-them no longer stand. The version this ships in is the owner's to
+Status: **the owner decided on 2026-11-16: the import half only.** The
+spike, approved the same day ("Yes, run it"), found that Ubuntu 24.04's
+systemd does not configure on the WSL 1 kernel, so building inside WSL 1
+could offer 20.04 and perhaps 22.04 only, and the owner dropped it.
+Nothing is implemented. This document is desk research and read-only
+probes of one such machine, the design as first proposed, the spike and
+its results, and the decision. Everything it says about building on
+WSL 1 (in "Goal", "What is promised", "The build mode" and the rules) is
+kept as the record of what was considered and is **not** what will be
+built; "The import path" is. The version this ships in is the owner's to
 number.
 Extends: [`2026-09-14-frostroot-design.md`](2026-09-14-frostroot-design.md).
 A sibling document, planned separately, covers a Windows builder that
@@ -870,6 +871,24 @@ frostroot running on a 24.04 host. 7 and 13 were not reached.
 - **Before the 22.04 question can be closed** it needs mmdebstrap 1.4.3
   on WSL 1, which needs a 22.04 or 24.04 distribution registered, which
   needs the import half. The order of the plan follows from that.
+
+## The decision (the owner, 2026-11-16)
+
+Asked whether to drop the WSL 1 build half and keep only the import
+half, the owner answered: "Import half only".
+
+- frostroot does not build inside WSL 1. `build` there is refused before
+  it starts, for every family and target and as root too, and says to
+  build on Linux or WSL 2 and bring the tarball over. Today root on
+  WSL 1 passes Preflight and fails minutes later in systemd's script.
+- `frostroot import`, in a published Windows binary, is what these
+  machines get. It is also what the Windows builder needs.
+- Of the questions below, 2, 4, 5 and 6 were about the build half and
+  fall away. 3 (one binary or a separate launcher), 7 (the distribution
+  that does not start) and 8 (the version, and which of the two plans
+  goes first) stay open.
+- Experiments 1, 2 and 12 are still to run, and decide the shape of
+  `import`; the plan puts them first.
 
 ## Open questions for the owner
 
