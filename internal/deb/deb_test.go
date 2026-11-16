@@ -175,27 +175,60 @@ func TestReadStanzas(t *testing.T) {
 
 // TestReadStanzasLongFoldedFieldTakesLinearTime: a Packages index comes from
 // the network, and a field folded over many lines must not cost time in the
-// square of its length.
+// square of its length. The test compares a field eight times as long with
+// a short one rather than holding either to a number of seconds: 400,000
+// lines in under 5s failed at 9s on a slow machine under -race, reading in
+// linear time. Eight times the lines take about eight times as long in
+// linear time and sixty-four times as long in the square; the bound sits
+// between them with room on both sides. The short field takes the best of
+// three readings, and the long one is read again, up to three times, only
+// while it is over the bound, so that a pause in one reading does not decide.
 func TestReadStanzasLongFoldedFieldTakesLinearTime(t *testing.T) {
-	const continuationLines = 400_000
-	var text strings.Builder
-	text.WriteString("Package: a\nDescription: long\n")
-	for range continuationLines {
-		text.WriteString(" xx\n")
+	const (
+		shortLines   = 5_000
+		longLines    = 8 * shortLines
+		maximumRatio = 22
+		readings     = 3
+	)
+	folded := func(continuationLines int) string {
+		var text strings.Builder
+		text.WriteString("Package: a\nDescription: long\n")
+		for range continuationLines {
+			text.WriteString(" xx\n")
+		}
+		text.WriteString("Section: x\n")
+		return text.String()
 	}
-	text.WriteString("Section: x\n")
-	start := time.Now()
-	stanzas := collectStanzas(t, text.String())
-	elapsed := time.Since(start)
-	t.Logf("reading %d continuation lines took %v", continuationLines, elapsed)
-	if elapsed > 5*time.Second {
-		t.Errorf("reading %d continuation lines took %v, want well under 5s", continuationLines, elapsed)
+	var stanzas []Stanza
+	read := func(text string) time.Duration {
+		start := time.Now()
+		stanzas = collectStanzas(t, text)
+		return time.Since(start)
+	}
+	shortText, longText := folded(shortLines), folded(longLines)
+	short := read(shortText)
+	for range readings - 1 {
+		short = min(short, read(shortText))
+	}
+	short = max(short, time.Microsecond)
+	long := read(longText)
+	for range readings - 1 {
+		if float64(long)/float64(short) <= maximumRatio {
+			break
+		}
+		long = min(long, read(longText))
+	}
+	ratio := float64(long) / float64(short)
+	t.Logf("reading %d continuation lines took %v, %d took %v: %.1f times as long", shortLines, short, longLines, long, ratio)
+	if ratio > maximumRatio {
+		t.Errorf("%d continuation lines took %.1f times as long as %d (%v against %v), want about %d times: reading a folded field is not linear",
+			longLines, ratio, shortLines, long, short, longLines/shortLines)
 	}
 	if len(stanzas) != 1 {
 		t.Fatalf("got %d stanzas, want 1", len(stanzas))
 	}
 	description := stanzas[0]["Description"]
-	if wantLength := len("long") + continuationLines*len("\nxx"); len(description) != wantLength {
+	if wantLength := len("long") + longLines*len("\nxx"); len(description) != wantLength {
 		t.Errorf("Description is %d bytes, want %d", len(description), wantLength)
 	}
 	if stanzas[0]["Section"] != "x" {

@@ -6,8 +6,10 @@ import (
 	"io"
 	"os"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -188,8 +190,9 @@ func TestFormModelCancels(t *testing.T) {
 }
 
 // pacedKeys returns a reader that delivers each key sequence as its own
-// read, a moment apart, the way a person types: fast enough for a test, slow
-// enough for the program to move focus between keys.
+// read, a moment apart, the way a person types. A moment is no promise that
+// the program has moved focus on: a key that must reach the next field or
+// page is typed with screen.typeKeys.
 func pacedKeys(keys ...string) io.Reader {
 	reader, writer := io.Pipe()
 	go func() {
@@ -202,6 +205,115 @@ func pacedKeys(keys ...string) io.Reader {
 		// Leave the pipe open: a closed input would end the program early.
 	}()
 	return reader
+}
+
+// keystroke is a key a test types, and what the screen shows once the
+// program has taken it. huh moves focus with a command: Enter on a field
+// returns one, and the message it makes reaches the program after the key
+// did, from another goroutine. A key read before that message goes to the
+// field Enter left, so a key meant for the next field or page waits until
+// the screen shows that field or page. On a slow machine, under -race, the
+// moment pacedKeys waits was not enough: the n meant for the summary
+// answered the sudo question no, and the move to the next field that answer
+// asked for reached the summary and chose Write.
+type keystroke struct {
+	key  string
+	then string // what the screen shows after key; "" types the next key a moment later
+}
+
+// escapeSequence matches what a terminal draws with rather than shows: the
+// CSI and OSC sequences and the two-byte escapes.
+var escapeSequence = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[@-Z\\-_]`)
+
+// screenPatience is how long typeKeys waits for the screen to show what a
+// keystroke names, well inside the tests' 30 seconds.
+const screenPatience = 20 * time.Second
+
+// screen keeps everything a program draws, so that a test can type a key
+// only once the program shows the field or page it is meant for. The
+// renderer draws only the lines that changed, so what a keystroke waits
+// for is text that appears only in the state it waits for.
+type screen struct {
+	mutex   sync.Mutex
+	written []byte
+	missed  string
+	wrote   chan struct{}
+}
+
+func newScreen() *screen {
+	return &screen{wrote: make(chan struct{}, 1)}
+}
+
+// Write implements io.Writer.
+func (s *screen) Write(p []byte) (int, error) {
+	s.mutex.Lock()
+	s.written = append(s.written, p...)
+	s.mutex.Unlock()
+	select {
+	case s.wrote <- struct{}{}:
+	default: // a wake-up is already pending
+	}
+	return len(p), nil
+}
+
+// length is how much has been drawn, the mark shows reads from.
+func (s *screen) length() int {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	return len(s.written)
+}
+
+// shows reports whether text was drawn after mark.
+func (s *screen) shows(mark int, text string) bool {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	return strings.Contains(escapeSequence.ReplaceAllString(string(s.written[mark:]), ""), text)
+}
+
+// waitFor waits until text is drawn after mark, for at most screenPatience.
+func (s *screen) waitFor(mark int, text string) bool {
+	deadline := time.After(screenPatience)
+	for !s.shows(mark, text) {
+		select {
+		case <-s.wrote:
+		case <-deadline:
+			return false
+		}
+	}
+	return true
+}
+
+// typeKeys returns a reader that types each keystroke as its own read, a
+// moment after the one before, and once a keystroke names what the screen
+// then shows, only after it shows it. A screen that never does gets
+// Ctrl-C, which ends the program, and missedText says what it lacked.
+func (s *screen) typeKeys(strokes ...keystroke) io.Reader {
+	reader, writer := io.Pipe()
+	go func() {
+		for _, stroke := range strokes {
+			time.Sleep(30 * time.Millisecond)
+			mark := s.length()
+			if _, err := io.WriteString(writer, stroke.key); err != nil {
+				return // the program has stopped reading
+			}
+			if stroke.then != "" && !s.waitFor(mark, stroke.then) {
+				s.mutex.Lock()
+				s.missed = stroke.then
+				s.mutex.Unlock()
+				_, _ = io.WriteString(writer, "\x03")
+				return
+			}
+		}
+		// Leave the pipe open: a closed input would end the program early.
+	}()
+	return reader
+}
+
+// missedText is what the screen never showed, or "" if it showed all of it.
+func (s *screen) missedText() string {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	return s.missed
 }
 
 func TestRunFormEndToEnd(t *testing.T) {
@@ -257,7 +369,14 @@ func TestRunFormEndToEnd(t *testing.T) {
 				sudo = append(sudo, field)
 			}
 		}
-		values, err := RunForm(ctx, sudo, form.Defaults(noHost), nil, pacedKeys("\r", "n"), io.Discard)
+		// The n waits for the summary: typed while the sudo question still
+		// had the key, it answered that question no.
+		output := newScreen()
+		keys := output.typeKeys(keystroke{key: "\r", then: "Write frostroot.toml?"}, keystroke{key: "n"})
+		values, err := RunForm(ctx, sudo, form.Defaults(noHost), nil, keys, output)
+		if missed := output.missedText(); missed != "" {
+			t.Fatalf("the screen never showed %q", missed)
+		}
 		if !errors.Is(err, ErrDeclined) {
 			t.Fatalf("err = %v, want ErrDeclined", err)
 		}
