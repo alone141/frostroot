@@ -7,8 +7,12 @@ WSL 1", with two halves: building inside WSL 1, and importing on a
 Windows whose `wsl.exe` has no `--import`. The spike, approved and partly
 run the same day, found that Ubuntu 24.04's systemd does not configure on
 the WSL 1 kernel, and the owner dropped the build half. Nothing is
-implemented. The experiments that decide the shape of `import` have not
-run and need the owner's go-ahead.
+implemented. The experiments that decide the shape of `import` ran the
+same day, with the owner's go-ahead: it works on build 17763 for an
+ordinary user, and both a 24.04 and a 26.04 image start there, once two
+ACL attributes are taken off one directory. See "Import experiments:
+results", which also says which of the assumptions below turned out
+wrong.
 Extends: [`2026-09-14-frostroot-design.md`](2026-09-14-frostroot-design.md).
 Beside it: the Windows builder that needs no WSL, pull request #173;
 "What `import` shares with the Windows builder" is the seam.
@@ -852,10 +856,11 @@ frostroot running on a 24.04 host. 7 and 13 were not reached.
   on WSL 1, which needs a 22.04 or 24.04 distribution registered, which
   needs the import half. The order of the plan follows from that.
 
-## The experiments that remain: NOT yet run
+## The experiments that remained (run; results below)
 
-Lettered, so as not to be confused with the numbered list above. None
-has run. Each needs the owner's go-ahead, and A needs two things not yet
+Lettered, so as not to be confused with the numbered list above. This
+is the list as written before they ran; A to E have run, and F, the
+clean-up, has not. Each needed the owner's go-ahead, and A needs two things not yet
 approved: a Go toolchain unpacked in a scratch directory on the Windows
 side, or a throwaway program cross-compiled in the Linux VM and carried
 over, which installs nothing; and one new distribution, named
@@ -935,6 +940,166 @@ importable on WSL 1.
 distributions, remove their directories, and write the results into
 "Spike results", dated, before the plan is revised.
 
+## Import experiments: results (2026-11-16, Windows 10 build 17763, WSL 1, an ordinary user)
+
+The owner approved experiments A to E ("Yes, run them"): the program
+cross-compiled in the test VM, nothing installed on Windows, new
+distributions named `frostroot-spike` only. Everything is under
+`%USERPROFILE%\frostroot-spike`: `program\` (the test program),
+`images\` (the tarballs), and `install\`, `install-2\`, `install-3\`
+(one per distribution). **Three distributions are left registered, all
+made by these experiments: `frostroot-spike`, `frostroot-spike-2` and
+`frostroot-spike-3`**, 2.8 GB together. None is the default; `Ubuntu`
+and `Ubuntu-24.04` were not touched. Removing them waits for the
+owner's word.
+
+**The program** is
+[`2026-11-16-frostroot-wsl1-spike-import.go.txt`](2026-11-16-frostroot-wsl1-spike-import.go.txt),
+some 250 lines of Go with the standard library's `syscall`, built in the
+VM with Go 1.27.3 (`GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build
+-trimpath`), SHA-256 `64039129…436f58`, unsigned. **The images** were
+built in the VM by the released v0.15.1 binary from a recipe asking for
+`git` and `jq`, user `student`, timezone `Europe/Istanbul`: 24.04 in
+716 s (143 MB, `0bdb7b65…934345f`) and 26.04 in 732 s (150 MB,
+`9ac9d6f1…caafa7cf`).
+
+**The security software did nothing that was seen**: the unsigned
+program ran from a user directory every time, nothing vanished, and no
+notice appeared.
+
+### A. Registering
+
+- **An ordinary user's unsigned program may call the API.** No
+  administrator, no prompt.
+- **No COM set-up is needed.** `WslIsDistributionRegistered` and
+  `WslGetDistributionConfiguration` answered correctly for `Ubuntu`
+  (registered, version 1, uid 1000, flags 7) with nothing initialized,
+  with `CoInitializeEx` alone, and with `CoInitializeSecurity` for
+  impersonation. Registering behaved the same with none and with the
+  last. So the access-denied answers from PowerShell were PowerShell's.
+- **The file system lands beside the calling executable**, whatever the
+  working directory: started from `%TEMP%`, the program in `install\`
+  got `BasePath = …\frostroot-spike\install`, with `rootfs\` and an
+  empty `temp\` there.
+- **A frostroot tarball as built is refused.**
+  `WslRegisterDistribution` returned `0x80004005` (E_FAIL) after 19 to
+  24 s for the 24.04 image, twice, and for the 26.04 image. Each
+  time nothing was registered and the directory held only the empty
+  `temp\`: Windows cleans up after itself.
+- **The cause is two extended attributes on one directory.** The image
+  carries three pax `SCHILY.xattr` records: `security.capability` on
+  `/usr/bin/ping`, and `system.posix_acl_access` and
+  `system.posix_acl_default` on `/var/log/journal`, which
+  systemd-tmpfiles sets. Copies of the 24.04 tarball rewritten entry by
+  entry in the VM (Python's `tarfile`, nothing unpacked):
+
+  | Copy | Result |
+  |---|---|
+  | without the eight device entries | `0x80004005` |
+  | without device entries and without all three attributes | registered, 12.7 s |
+  | with device entries, without all three attributes | registered, 13.1 s |
+  | with device entries and the capability, without the two ACL attributes | registered, 12.9 s |
+
+  So device entries are fine, the capability is fine, and the ACLs are
+  what WSL 1's unpacking cannot take. The 26.04 image without them
+  registered in 15.0 s.
+- Registering takes 13 to 15 s for a 140 MB tarball.
+
+### B. Configuring, and undoing
+
+- `WslLaunch` with an inheritable pipe returns a command's output:
+  `cat /etc/wsl.conf` printed the file frostroot wrote, and `id -u
+  student` printed `1000`. About 0.3 s each.
+- **Before configuring, the default user is root**: `[user] default` in
+  `wsl.conf` does nothing on this Windows, as read. After
+  `WslConfigureDistribution(name, 1000, 7)`,
+  `WslGetDistributionConfiguration` reports uid 1000 and `wsl -d
+  frostroot-spike` is `student`.
+- `WslUnregisterDistribution` on `frostroot-spike-2` returned 0 after
+  7 s, the name was no longer registered, and `rootfs\` was gone. It
+  leaves the directory, the empty `temp\` and whatever else was there.
+  (The name was then used again for the last row of the table above,
+  which is why it is registered now.)
+- Registering never changed `DefaultDistribution`.
+
+### C. Logging in, and what Windows kept
+
+In the 24.04 image, as the default user: `whoami` is `student`;
+`sudo -n id -u` prints 0, with no complaint about the host name, which
+WSL writes into `/etc/hostname` itself; `getent hosts
+archive.ubuntu.com` resolves, through a `resolv.conf` WSL generates;
+`locale` is `en_US.UTF-8` with no warning; `git`, `jq` and Python's
+`ssl` and `sqlite3` run; `sleep 1` returns; `systemctl
+is-system-running` says `offline`, and PID 1 is WSL's `init`.
+
+- **The umask is 0000**, in `wsl -e` and in a login shell alike.
+- **Hardlinks survive**: six files with more than one link, the three
+  pairs the tarball has; `perl` and `perl5.38.2` share an inode.
+- **Owners and modes survive**: `/etc/shadow` 0640 root:shadow, the
+  sudoers drop-in 0440, `/home/student` 0750 student:student,
+  `/var/log/journal` setgid root:systemd-journal, `/etc/credstore` and
+  `/root/.ssh` 0700, `sudo` setuid.
+- **The capability survives**: `getcap /usr/bin/ping` prints
+  `cap_net_raw=ep` in the copy that kept it.
+- **The device entries are not used**: `/dev` is WSL's own tmpfs.
+- **The timezone was not put to the test**: the recipe's zone and the
+  Windows zone are both +03 here. `/etc/localtime` is still the
+  recipe's symlink.
+
+### D. What breaks inside
+
+- `apt-get update` and `apt-get install -y hello` work, and `hello`
+  runs.
+- **`apt-get install --reinstall systemd` fails as the spike's build
+  did**: `Failed to take /etc/passwd lock: Invalid argument`, and dpkg
+  leaves systemd half configured (`iF`). From then on every apt run
+  ends with "Errors were encountered while processing: systemd" and
+  dpkg's error, though it still installs what was asked: `sl` installed
+  after it. So the first security update of systemd breaks apt's exit
+  status in such a distribution for good. `frostroot-spike` and
+  `frostroot-spike-3` are in that state now.
+- The reinstall also wrote a machine id ("Initializing machine ID from
+  random generator").
+
+### E. 26.04
+
+The same throughout: refused as built, registered without the ACLs in
+15 s, `student` with `sudo-rs` 0.2.13 answering `sudo -n`, the Rust
+coreutils, git 2.53, Python with OpenSSL 3.5.5, the capability on
+`ping`, umask 0000, `hello` installed, and systemd 259.9 failing to
+reconfigure the same way.
+
+### What these results change
+
+- **`import` works, and is simpler than proposed**: no COM set-up, and
+  the copy-itself step is confirmed as needed, since the install
+  directory is wherever the executable is.
+- **`import` cannot hand over the tarball untouched.** Something has to
+  take the two ACL attributes off `/var/log/journal` first, and that
+  meets the rule that Go never tars a root filesystem. Three ways:
+  1. `import` copies the tarball entry by entry into a temporary
+     `.tar.gz` beside the install directory, dropping only pax records
+     named `SCHILY.xattr.system.posix_acl_*`, and registers that. No
+     file is unpacked and no owner, mode, link or capability is
+     decided by Go: every header passes through as mmdebstrap wrote
+     it. This is what this document proposes, with the rule reworded
+     to say what it protects: Go never *makes* an archive from a tree
+     or a tree from an archive.
+  2. `build` gains a way to leave the ACLs out. It changes the bytes
+     of images, or adds a recipe field, for the sake of one old
+     Windows.
+  3. The README tells people to filter the tarball themselves on the
+     build host. Nobody will.
+- **What is lost with the ACLs** is read access to the journal for the
+  `adm` group and the like, in a distribution that runs no journal.
+- **The README has three things to say** about such a Windows: no
+  systemd; hold the systemd package (`apt-mark hold systemd`) before
+  the first upgrade, or apt's exit status is broken from then on; and
+  the umask is 0000 unless the user sets one. Whether `import` should
+  do the hold itself is the owner's question.
+- **Both current releases are importable.** Nothing here was tried
+  with 22.04 or 20.04, or with Fedora.
+
 ## The decision (the owner, 2026-11-16)
 
 Asked whether to drop the WSL 1 build half and keep only the import
@@ -950,25 +1115,31 @@ import command in that plan?", "Yes, import only".
 
 ## Open questions for the owner
 
-1. **May experiments A to E run**, with a throwaway program
-   cross-compiled in the VM (or a toolchain in a scratch directory on
-   Windows) and a new distribution named `frostroot-spike`?
-2. **One Windows binary with `import`, or a separate small launcher?**
+1. **How `import` gets rid of the two ACL attributes** that WSL 1
+   refuses: an entry-by-entry copy of the tarball that drops only those
+   pax records, with the rule in AGENTS.md reworded to allow it (this
+   document's proposal), or one of the other two ways under "What these
+   results change".
+2. **Should `import` hold the systemd package** in what it registers on
+   a Windows with WSL 1 only, or is a README warning enough? This
+   document proposes the warning.
+3. **May the three spike distributions be removed** (`frostroot-spike`,
+   `frostroot-spike-2`, `frostroot-spike-3`, and the 2.8 GB under
+   `%USERPROFILE%rostroot-spike`), or should one stay for the
+   implementation to be tried against?
+4. **One Windows binary with `import`, or a separate small launcher?**
    This document proposes the first, shared with pull request #173.
-3. **Which goes first**, this or the Windows builder? Whichever does
+5. **Which goes first**, this or the Windows builder? Whichever does
    carries the release changes.
-4. **Signing**: unsigned for now, for both plans?
-5. **If a 24.04 image starts on WSL 1 but cannot upgrade systemd**, is
-   a README warning enough, or should `import` hold the package for the
-   user on such a Windows? This document proposes the warning only.
-6. **Is the Ubuntu 24.04 registration that does not start** on this
+6. **Signing**: unsigned for now, for both plans? The unsigned test
+   program ran here without objection.
+7. **Is the Ubuntu 24.04 registration that does not start** on this
    machine safe to unregister, or is it someone's? Nothing here needs
    it gone.
-7. **The version number.**
+8. **The version number.**
 
 ## What follows
 
-Experiments A to F, with their results written into this document; then
-the plan in
+The owner's answers above; then the plan in
 [`../plans/2026-11-16-frostroot-wsl1.md`](../plans/2026-11-16-frostroot-wsl1.md),
-revised by what they found.
+which the experiments' results have already revised.

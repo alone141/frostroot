@@ -49,30 +49,23 @@ by a byte.
   requests 3 and 4 here are the part the two share, and whichever plan
   lands first carries them.
 
-## Still to find out, before pull request 3 is written
+## What the experiments found (2026-11-16)
 
-The spec's experiments A to E have not run. They decide the shape of
-`import` and what the README may say, so they come first, with the
-owner's go-ahead for a throwaway program cross-compiled in the VM and
-for one test distribution named `frostroot-spike`, removed only when the
-owner says.
+The spec's experiments A to E have run; its "Import experiments:
+results" has them. For this plan:
 
-- **A** registers a tarball: whether an ordinary user's unsigned program
-  may, what COM set-up the call needs, where the file system lands.
-- **B** configures and undoes: how `import` sets the default user and
-  takes back a failed import.
-- **C** logs in and compares with the tarball: whether a 24.04 image
-  runs on WSL 1, and what Windows' unpacking kept.
-- **D** looks at what breaks inside: installing a package, reinstalling
-  systemd.
-- **E** repeats them for 26.04.
-
-Their results go into the spec's "Spike results".
-`docs: record the import experiments`.
-
-What stops the plan: the call refused for an ordinary user whatever the
-set-up, or no release whose image starts. Then the answer for these
-machines is a paragraph in the README.
+- The API works for an ordinary user from an unsigned program, with no
+  COM set-up. Task 6 loses that part.
+- The file system lands beside the calling executable. Task 7's
+  "place the executable" is: create the install directory, copy the
+  binary into it, run the copy, remove it afterwards.
+- A tarball as frostroot builds it is refused, for two POSIX ACL
+  attributes on `/var/log/journal`; without them 24.04 and 26.04 both
+  register in about 15 s and log in. Task 7 gains a step, pending the
+  owner's answer to the spec's first question.
+- Reinstalling systemd inside such a distribution fails and leaves apt
+  exiting with an error from then on; the umask is 0000. Both go into
+  the README in pull request 6.
 
 ## Pull request 1: the spec and this plan
 
@@ -108,7 +101,7 @@ machines is a paragraph in the README.
 
 6. **`internal/wslapi`.** `wslapi_windows.go`: the DLL loaded by its full
    path under the system directory with the standard library's
-   `syscall`; COM set up as experiment A found; `Register`,
+   `syscall`; no COM set-up, which the experiments found unnecessary; `Register`,
    `Unregister`, `IsRegistered`, `Configure` and `Launch` (a command,
    its stdout through a pipe, a timeout from the context).
    `wslapi_other.go`: each returns `ErrNotWindows`. It imports no
@@ -121,13 +114,23 @@ machines is a paragraph in the README.
    order: validate the name (the recipe's image-name pattern, exported
    from `internal/recipe` as a function, not copied), the tarball
    (exists, regular, `.tar.gz`), the install directory (absent or
-   empty), the name not registered; place the executable as experiment
-   A requires; register; read the default user from the distribution's
+   empty), the name not registered; copy the binary into the install
+   directory and continue from the copy, since Windows puts the file
+   system beside the calling executable; write a copy of the tarball
+   there without the pax records `SCHILY.xattr.system.posix_acl_*`,
+   entry by entry, every other header and every byte of content as it
+   was, nothing unpacked (if the owner agrees to this way); register
+   that copy and remove it; read the default user from the distribution's
    `/etc/wsl.conf`, hold it to the recipe's user-name pattern, ask for
    its uid, configure; on any failure after registering, unregister.
    Never prompts; exit 0, 1 or 2; on anything but Windows, exit 1 naming
    the Windows binary. Tests: every refusal; the order of calls;
-   unregistering after a failed configure; a hostile `wsl.conf` (a user
+   unregistering after a failed configure; the filtered copy of a
+   fixture tarball equal to the original in every entry's name, type,
+   owner, mode, time, link target, device numbers, content and
+   remaining pax records, with hardlinks still hardlinks and
+   `security.capability` kept, and a fuzz target for the filter, which
+   reads a file a user hands over; a hostile `wsl.conf` (a user
    name with a quote or a newline, a section that is not `[user]`, no
    file, which leaves root the default and says so); the usage text. A
    fuzz target for the `wsl.conf` reader, since it parses what an image

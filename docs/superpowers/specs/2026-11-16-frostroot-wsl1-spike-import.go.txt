@@ -1,0 +1,239 @@
+// spike-import is the throwaway program of the import experiments in
+// 2026-11-16-frostroot-wsl1.md. It is the record of what ran, not code
+// frostroot ships: it is kept as .go.txt so that no Go tool builds it.
+//
+// Built in the test VM, with nothing installed on Windows:
+//
+//	mkdir spike-import && cp THIS-FILE spike-import/main.go && cd spike-import
+//	go mod init spike-import
+//	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o spike-import.exe .
+//
+// Usage, on Windows:
+//
+//	spike-import isreg NAME
+//	spike-import getconf NAME
+//	spike-import register NAME TARBALL
+//	spike-import configure NAME UID FLAGS
+//	spike-import launch NAME COMMAND
+//	spike-import unregister NAME
+//
+// SPIKE_COM chooses what is set up before the first call into wslapi.dll:
+// "none", "init" (CoInitializeEx alone) or "security" (the default:
+// CoInitializeEx, then CoInitializeSecurity with impersonation and static
+// cloaking).
+package main
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"syscall"
+	"time"
+	"unsafe"
+)
+
+const (
+	coinitMultithreaded      = 0x0
+	rpcCAuthnLevelDefault    = 0
+	rpcCImpLevelImpersonate  = 3
+	eoacStaticCloaking       = 0x20
+	waitTimeout              = 0x102
+	launchTimeoutMillisecond = 120_000
+)
+
+func main() {
+	os.Exit(run(os.Args[1:]))
+}
+
+func run(args []string) int {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: spike-import isreg|getconf|register|configure|launch|unregister NAME [ARG...]")
+		return 1
+	}
+	// COM is initialized per thread, so every call below stays on this one.
+	runtime.LockOSThread()
+	executable, _ := os.Executable()
+	workingDir, _ := os.Getwd()
+	fmt.Printf("executable: %s\nworking directory: %s\n", executable, workingDir)
+
+	if code := setUpCOM(os.Getenv("SPIKE_COM")); code != 0 {
+		return code
+	}
+	systemDir, err := systemDirectory()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "GetSystemDirectory:", err)
+		return 2
+	}
+	// By full path, never by bare name: a wslapi.dll beside this file must
+	// not be what runs.
+	wslapi, err := syscall.LoadDLL(filepath.Join(systemDir, "wslapi.dll"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "loading wslapi.dll:", err)
+		return 2
+	}
+	name, err := syscall.UTF16PtrFromString(args[1])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "name:", err)
+		return 1
+	}
+	started := time.Now()
+	defer func() { fmt.Printf("elapsed: %s\n", time.Since(started).Round(time.Millisecond)) }()
+
+	switch args[0] {
+	case "isreg":
+		result, _, _ := wslapi.MustFindProc("WslIsDistributionRegistered").Call(uintptr(unsafe.Pointer(name)))
+		fmt.Printf("WslIsDistributionRegistered(%q) = %d\n", args[1], result)
+		return 0
+	case "getconf":
+		var version, defaultUID, flags, variableCount uint32
+		var variables uintptr
+		result, _, _ := wslapi.MustFindProc("WslGetDistributionConfiguration").Call(
+			uintptr(unsafe.Pointer(name)),
+			uintptr(unsafe.Pointer(&version)), uintptr(unsafe.Pointer(&defaultUID)),
+			uintptr(unsafe.Pointer(&flags)), uintptr(unsafe.Pointer(&variables)),
+			uintptr(unsafe.Pointer(&variableCount)))
+		fmt.Printf("WslGetDistributionConfiguration(%q) = 0x%08X: version %d, default uid %d, flags %d, %d environment variables\n",
+			args[1], uint32(result), version, defaultUID, flags, variableCount)
+		return exitFor(result)
+	case "register":
+		if len(args) != 3 {
+			fmt.Fprintln(os.Stderr, "usage: spike-import register NAME TARBALL")
+			return 1
+		}
+		tarball, err := syscall.UTF16PtrFromString(args[2])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "tarball:", err)
+			return 1
+		}
+		result, _, _ := wslapi.MustFindProc("WslRegisterDistribution").Call(
+			uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(tarball)))
+		fmt.Printf("WslRegisterDistribution(%q, %q) = 0x%08X\n", args[1], args[2], uint32(result))
+		return exitFor(result)
+	case "configure":
+		if len(args) != 4 {
+			fmt.Fprintln(os.Stderr, "usage: spike-import configure NAME UID FLAGS")
+			return 1
+		}
+		defaultUID, uidErr := strconv.ParseUint(args[2], 10, 32)
+		flags, flagsErr := strconv.ParseUint(args[3], 10, 32)
+		if uidErr != nil || flagsErr != nil {
+			fmt.Fprintln(os.Stderr, "UID and FLAGS are decimal numbers")
+			return 1
+		}
+		result, _, _ := wslapi.MustFindProc("WslConfigureDistribution").Call(
+			uintptr(unsafe.Pointer(name)), uintptr(defaultUID), uintptr(flags))
+		fmt.Printf("WslConfigureDistribution(%q, %d, %d) = 0x%08X\n", args[1], defaultUID, flags, uint32(result))
+		return exitFor(result)
+	case "launch":
+		if len(args) != 3 {
+			fmt.Fprintln(os.Stderr, "usage: spike-import launch NAME COMMAND")
+			return 1
+		}
+		return launch(wslapi, name, args[1], args[2])
+	case "unregister":
+		result, _, _ := wslapi.MustFindProc("WslUnregisterDistribution").Call(uintptr(unsafe.Pointer(name)))
+		fmt.Printf("WslUnregisterDistribution(%q) = 0x%08X\n", args[1], uint32(result))
+		return exitFor(result)
+	}
+	fmt.Fprintf(os.Stderr, "unknown command %q\n", args[0])
+	return 1
+}
+
+// setUpCOM does what mode asks before wslapi.dll is first called, and
+// prints what each call returned.
+func setUpCOM(mode string) int {
+	if mode == "" {
+		mode = "security"
+	}
+	fmt.Printf("COM set-up: %s\n", mode)
+	if mode == "none" {
+		return 0
+	}
+	ole32, err := syscall.LoadDLL("ole32.dll")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "loading ole32.dll:", err)
+		return 2
+	}
+	result, _, _ := ole32.MustFindProc("CoInitializeEx").Call(0, coinitMultithreaded)
+	fmt.Printf("CoInitializeEx = 0x%08X\n", uint32(result))
+	if mode == "init" {
+		return 0
+	}
+	// -1 authentication services: let COM choose.
+	result, _, _ = ole32.MustFindProc("CoInitializeSecurity").Call(
+		0, ^uintptr(0), 0, 0,
+		rpcCAuthnLevelDefault, rpcCImpLevelImpersonate,
+		0, eoacStaticCloaking, 0)
+	fmt.Printf("CoInitializeSecurity = 0x%08X\n", uint32(result))
+	return 0
+}
+
+// launch runs command in the distribution with its standard output and
+// error in a pipe, waits for it, and prints what it wrote and how it exited.
+func launch(wslapi *syscall.DLL, name *uint16, distribution, command string) int {
+	commandLine, err := syscall.UTF16PtrFromString(command)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "command:", err)
+		return 1
+	}
+	var readEnd, writeEnd syscall.Handle
+	inheritable := syscall.SecurityAttributes{InheritHandle: 1}
+	inheritable.Length = uint32(unsafe.Sizeof(inheritable))
+	if err := syscall.CreatePipe(&readEnd, &writeEnd, &inheritable, 0); err != nil {
+		fmt.Fprintln(os.Stderr, "CreatePipe:", err)
+		return 2
+	}
+	standardInput, _ := syscall.GetStdHandle(syscall.STD_INPUT_HANDLE)
+	var process syscall.Handle
+	result, _, _ := wslapi.MustFindProc("WslLaunch").Call(
+		uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(commandLine)), 0,
+		uintptr(standardInput), uintptr(writeEnd), uintptr(writeEnd),
+		uintptr(unsafe.Pointer(&process)))
+	fmt.Printf("WslLaunch(%q, %q) = 0x%08X\n", distribution, command, uint32(result))
+	// This program's copy of the write end must close, or the read never ends.
+	_ = syscall.CloseHandle(writeEnd)
+	if int32(result) < 0 {
+		_ = syscall.CloseHandle(readEnd)
+		return 2
+	}
+	output := make(chan []byte, 1)
+	go func() {
+		content, _ := io.ReadAll(io.LimitReader(os.NewFile(uintptr(readEnd), "pipe"), 1<<20))
+		output <- content
+	}()
+	event, _ := syscall.WaitForSingleObject(process, launchTimeoutMillisecond)
+	if event == waitTimeout {
+		fmt.Println("the command did not exit within the timeout")
+		return 2
+	}
+	var exitCode uint32
+	_ = syscall.GetExitCodeProcess(process, &exitCode)
+	_ = syscall.CloseHandle(process)
+	fmt.Printf("exit code %d, output:\n%s", exitCode, <-output)
+	return 0
+}
+
+func systemDirectory() (string, error) {
+	kernel32, err := syscall.LoadDLL("kernel32.dll")
+	if err != nil {
+		return "", err
+	}
+	buffer := make([]uint16, syscall.MAX_PATH)
+	length, _, callErr := kernel32.MustFindProc("GetSystemDirectoryW").Call(
+		uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)))
+	if length == 0 {
+		return "", callErr
+	}
+	return syscall.UTF16ToString(buffer[:length]), nil
+}
+
+// exitFor turns an HRESULT into this program's exit code.
+func exitFor(result uintptr) int {
+	if int32(result) < 0 {
+		return 2
+	}
+	return 0
+}
