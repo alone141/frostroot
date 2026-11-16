@@ -1125,7 +1125,7 @@ import command in that plan?", "Yes, import only".
    document proposes the warning.
 3. **May the three spike distributions be removed** (`frostroot-spike`,
    `frostroot-spike-2`, `frostroot-spike-3`, and the 2.8 GB under
-   `%USERPROFILE%rostroot-spike`), or should one stay for the
+   `%USERPROFILE%\frostroot-spike`), or should one stay for the
    implementation to be tried against?
 4. **One Windows binary with `import`, or a separate small launcher?**
    This document proposes the first, shared with pull request #173.
