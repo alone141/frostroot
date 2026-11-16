@@ -1,14 +1,16 @@
 # frostroot on WSL 1
 
 Date: 2026-11-16
-Status: **draft for the owner; nothing is implemented and the spike is NOT
-yet run.** The owner asked for frostroot to work on old Windows machines
-that only have WSL 1. This document is desk research and read-only probes
-of one such machine, a proposed design, and the list of experiments that
-have to run on that machine before any code is written. The experiments
-unpack archives and install packages inside WSL, which endpoint security
-software on that machine has punished before, so each needs the owner's
-go-ahead. The version this ships in is the owner's to number.
+Status: **draft for the owner; nothing is implemented. The owner approved
+the spike on 2026-11-16 ("Yes, run it") and part of it ran the same day:
+see "Spike results". Its main finding is against the build half as
+proposed: Ubuntu 24.04's systemd does not configure on this WSL 1
+kernel, so a 24.04 image cannot be built there.** This document is desk
+research and read-only probes of one such machine, a proposed design,
+the experiments, and what the ones that ran found. The design sections
+are as written before the spike; "What the spike changes" says which of
+them no longer stand. The version this ships in is the owner's to
+number.
 Extends: [`2026-09-14-frostroot-design.md`](2026-09-14-frostroot-design.md).
 A sibling document, planned separately, covers a Windows builder that
 needs no WSL at all; "What the two could share" below is the seam.
@@ -497,9 +499,10 @@ remains.
   anyway, so WSL 1 stays verified by hand, on one build of Windows, by
   one person, per release.
 
-## The spike: experiments NOT yet run
+## The spike: the experiments
 
-None of these has been run. Each unpacks, installs or registers
+This is the list as written before any ran; "Spike results" below says
+which ran and what they found. Each unpacks, installs or registers
 something on the machine at hand and needs the owner's go-ahead; the
 first two can be given separately from the rest, since they touch
 Windows and not the existing distribution. Run in order: each decides
@@ -682,11 +685,197 @@ install directories and the scratch toolchain, and write what happened
 into this document as "Spike results", with the versions and the date,
 before the plan is revised.
 
+## Spike results (2026-11-16, Windows 10 build 17763, WSL 1, the Ubuntu 20.04.6 distribution, as root)
+
+The owner approved the spike with these limits: use the `Ubuntu`
+distribution that starts, unregister and change nothing, install nothing
+on the Windows side, run no Go inside WSL, and keep the work under the
+WSL file system. Everything below ran as root through `wsl -d Ubuntu -u
+root`, with umask 022 set by hand, in `/var/tmp/frostroot-spike`, which
+is left in place: logs, status files and the tarballs, 158 MB.
+
+That is not the host the design asks for. The build host here is 20.04
+with **mmdebstrap 0.4.1**, the only one its archive offers, where
+frostroot is verified against 1.4.3 and 1.5.7. So each result says
+whether it is the kernel's or could be the old mmdebstrap's.
+
+**Experiment 0, say so first.** Not done as written: the owner chose to
+run without telling whoever runs the endpoint software.
+
+**The security software did nothing that was seen.** Over about
+twenty-five minutes apt downloaded and dpkg unpacked several hundred
+packages across four chroots, and tar packed three images. `/bin/tar` was checked
+after every step and is still there, no process was killed, and no
+notice appeared. That is one afternoon, not a clearance.
+
+**Before experiment 4: `tar` restored.** dpkg unpacks with `tar`, so
+with `/bin/tar` gone apt could not reinstall it. `apt-get download tar`,
+then Python's `tarfile` reading `dpkg-deb --fsys-tarfile` wrote
+`/bin/tar` back, and `apt-get install --reinstall tar` after it put the
+package right; `dpkg --verify tar` is clean.
+
+**Experiment 4, the build tools: passed.** `apt-get install -y
+mmdebstrap ubuntu-keyring` installed mmdebstrap 0.4.1-6 with uidmap,
+fakechroot and arch-test. The keyring holds the 2018 archive key,
+`F6EC B376 2474 EDA9 D21B 7022 8719 20D1 991B C93C`, which signs every
+release frostroot builds.
+
+**Experiment 5, mmdebstrap by hand in root mode, the essential set of
+24.04: passed, in 70 s.**
+
+```
+mmdebstrap --verbose --mode=root --variant=essential \
+  --customize-hook='cat "$1/proc/mounts" > noble-mounts.txt' \
+  --customize-hook='ls -l "$1/dev" > noble-dev.txt' \
+  --customize-hook='chroot "$1" sh -c "uname -r; sleep 1; echo chroot-sleep-ok"' \
+  noble noble-root.tar.gz http://archive.ubuntu.com/ubuntu
+```
+
+- No `W:` and no `E:` line. Exit 0, a 25 MB tarball.
+- **`mknod` works on `lxfs`**: `/dev` in the chroot held real character
+  devices (`null` 1,3, `zero` 1,5, `full`, `random`, `urandom`, `tty`,
+  `console`, `ptmx`), made by mmdebstrap, not bind mounts.
+- **proc and sysfs were mounted inside the chroot**, with devpts and a
+  tmpfs on `/dev/shm`, by `/proc/mounts` read from inside it.
+- **Nothing stayed mounted**: `grep -c spike /proc/mounts` printed 0
+  after this run and after every later one, the failed ones included.
+- **Ubuntu 24.04's userland runs on this kernel**: its dpkg 1.22.6
+  configured the essential set, and in the chroot `uname -r` printed
+  `4.4.0-17763-Microsoft` and glibc 2.39's `sleep 1` returned.
+- The tarball, listed and not unpacked: 3,645 entries, owners real
+  numbers (0/0, 0/42 for shadow's setgid helpers), `su` and `newgrp`
+  setuid, both hardlinks (`perl5.38.2`, `uncompress`) as hardlinks, the
+  eight device entries.
+
+All of that is the kernel's and would hold under mmdebstrap 1.4.3,
+whose root mode asks the same things of it.
+
+**Experiment 5, unshare mode as root: not answered.** mmdebstrap 0.4.1
+refuses it outright ("cannot use unshare mode when executing as root",
+then it looks for `/proc/sys/kernel/unprivileged_userns_clone`). 1.4.3
+allows it; that needs a newer build host.
+
+**Experiment 5 with what frostroot installs, 24.04: FAILED, and this is
+the finding that matters.** The same command with `--variant=important`,
+the three pockets, and
+`--include=systemd,systemd-sysv,dbus,sudo,locales,tzdata,passwd,ca-certificates,git,jq`
+exited 1 after 155 s:
+
+```
+/usr/lib/tmpfiles.d/systemd-network.conf:10: Failed to resolve user 'systemd-network': No such process
+/usr/lib/tmpfiles.d/systemd.conf:22: Failed to resolve group 'systemd-journal': No such process
+Failed to take /etc/passwd lock: Invalid argument
+dpkg: error processing package systemd (--configure):
+ installed systemd package post-installation script subprocess returned error exit status 1
+```
+
+systemd 255's post-installation script creates its users with
+`systemd-sysusers`, which locks `/etc/passwd` in a way this kernel
+answers with EINVAL. Which call that is was not traced. It runs inside
+the chroot, as the image's own binary on the host's kernel, so no
+mmdebstrap version and no build mode changes it: fakechroot and unshare
+mode would run the same binary on the same kernel. **A 24.04 image with
+systemd, which every frostroot image has, cannot be built on this
+WSL 1.** 26.04 ships systemd 259 and was not tried; nothing suggests it
+would differ.
+
+**The same for 22.04: failed, for a reason that may not be the
+kernel's.** Exit 1 after 289 s:
+
+```
+FATAL ERROR:
+Can't rename /lib: Permission denied at /usr/lib/usrmerge/convert-usrmerge line 255.
+dpkg: error processing package usrmerge (--configure):
+```
+
+mmdebstrap 0.4.1 does not lay out a merged `/usr` before unpacking, so
+jammy's `usrmerge` package tried to convert a live root, and `lxfs`
+refused to rename a directory in use. mmdebstrap 1.4.3 makes the
+symlinks first, and `usrmerge` then has nothing to convert. So 22.04 is
+**undecided**: systemd 249 was configured without complaint before the
+failure, which is the hopeful half.
+
+**The same for 20.04: passed, in 301 s.** Exit 0, 243 packages
+configured, a 126 MB tarball, no `W:`, no `E:`, no "Failed". In the
+chroot: `/var/lib/private` at 0700, `/var/log/journal` setgid and owned
+by gid 102, and systemd's catalog database written (140,108 bytes), so
+the maintainer scripts that need `/proc` and `/sys` ran. Not compared
+with a Linux build of the same thing, so "complete" is not claimed.
+`getcap -r /usr` in the chroot printed nothing and `ping` in the
+tarball is 0755 with neither a capability nor a setuid bit; whether
+that is 20.04's own choice in a chroot or a capability lost on `lxfs`
+was not found out.
+
+**Experiment 10, the tripwire's baseline: not silent.** `dpkg --verify`
+in the 20.04 chroot, from a customize hook, printed one line and exited
+0:
+
+```
+??5??????   /sbin/start-stop-daemon
+```
+
+mmdebstrap puts its own `start-stop-daemon` in place while it installs
+and restores the real one afterwards, so a hook sees the stand-in. A
+tripwire would have to know that line, or run on the finished tarball.
+
+**Experiment 6, the released frostroot under root: NOT run.** The
+v0.15.1 binary was downloaded and matches its `SHA256SUMS`
+(`6ff2622b…dd76d`), and is in the work directory. The session's
+permission system refused to run it as root, and that was not worked
+around. It would not have settled much: 0.4.1 predates the hooks
+frostroot's command line relies on, and the 24.04 result above is
+independent of frostroot.
+
+**Experiments 1, 2 and 12, the import half: NOT run.** They need a
+launcher program, and there is no compiler the owner approved on the
+Windows side.
+
+**Experiments 3, 7, 8, 9, 11 and 13: NOT run.** 3, 8, 9 and 11 need
+frostroot running on a 24.04 host. 7 and 13 were not reached.
+
+**Found along the way**
+
+- **umask 000.** A process started by `wsl -e` on this build has umask
+  000 (the default became 022 in build 18945), and frostroot never sets
+  one: it is written to survive a strict umask, not an absent one.
+  Whatever a maintainer script creates without naming a mode would be
+  world-writable in the image. A build on WSL 1 must set 022 itself, or
+  refuse to start without it.
+- **The default distribution does not start**, so `scripts/wsl.sh`
+  needs `FROSTROOT_WSL_DISTRO=Ubuntu` on this machine, as AGENTS.md
+  says such a machine would.
+
+### What the spike changes
+
+- **The build half as proposed does not stand.** "An Ubuntu 24.04 build
+  host building 24.04 images as root" fails at systemd, on the kernel.
+  What can be said for a WSL 1 build today: the mechanism works (root
+  mode, chroot, `mknod`, mounts, clean unmount, real ownership), 20.04
+  builds by hand, 22.04 is undecided, 24.04 does not build and 26.04
+  almost certainly does not.
+- **20.04 and perhaps 22.04 are what is left to offer**, and 20.04 is
+  the release whose README note says "prefer 22.04, 24.04 or 26.04".
+  Whether a WSL 1 build that makes only the oldest images is worth its
+  code and its hand-run verification is the owner's question, and this
+  document's recommendation is that it is not: the sibling's Windows
+  builder, or a build on any Linux machine or VM with the result
+  carried over, serves these machines better.
+- **The import half is untouched by any of this and is now the larger
+  part of the value**: an image built elsewhere still cannot be
+  registered on build 17763 without it. Whether a 24.04 image *runs*
+  there after import is still open, and experiment 5 is encouraging:
+  its userland ran in a chroot on the same kernel. What will not work
+  inside such a distribution is whatever upgrades systemd: `apt
+  upgrade` of the systemd package would hit the same failure.
+- **Before the 22.04 question can be closed** it needs mmdebstrap 1.4.3
+  on WSL 1, which needs a 22.04 or 24.04 distribution registered, which
+  needs the import half. The order of the plan follows from that.
+
 ## Open questions for the owner
 
-1. **May the spike run on this machine**, given what the security
-   software did to `tar`, and is there someone to ask for an exclusion?
-   If not, is there another WSL 1 machine?
+1. *Answered 2026-11-16: yes, run it.* Still open: **is the build half
+   wanted at all** now that it can offer 20.04 and perhaps 22.04 only,
+   or does WSL 1 support become the import half alone?
 2. **Is `sudo frostroot build` acceptable** as the only way to build on
    WSL 1?
 3. **One Windows binary with `import`, or a separate small launcher?**

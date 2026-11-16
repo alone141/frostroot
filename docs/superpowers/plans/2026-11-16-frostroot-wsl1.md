@@ -6,11 +6,20 @@ The spec, with the probes this plan rests on and the spike it still
 waits for, is
 [`2026-11-16-frostroot-wsl1.md`](../specs/2026-11-16-frostroot-wsl1.md).
 
-**This plan is written before the spike, and the spike is NOT yet run.**
-Pull requests 2 and 6 do not depend on it and can go first. Pull request
-3 is whatever the spike finds and may turn out empty; pull requests 4, 5
-and 7 are firm in shape and loose in detail until experiments 1, 2 and
-12 have run. Revise this file when the spike's results go into the spec.
+**This plan was written before the spike, and part of the spike has now
+run** (the spec's "Spike results", 2026-11-16). It found that Ubuntu
+24.04's systemd does not configure on the WSL 1 kernel, so the build
+half below, pull requests 3 and 6 and the build parts of 7, has no
+24.04 or 26.04 to offer and waits for the owner's decision on whether a
+build of 20.04, and perhaps 22.04, is wanted at all. Pull request 2
+still stands, with one change: its refusal must not promise that
+`sudo frostroot build` works on WSL 1 until that decision. Pull
+requests 4 and 5, the import half, are untouched by the finding and are
+the part to do first: they are also what makes a newer build host on
+WSL 1 possible, without which the 22.04 question cannot be closed. If
+the build half goes ahead, it gains a task: set umask 022 for
+mmdebstrap on WSL 1, where `wsl -e` starts processes with 000. The
+tasks below are otherwise as first written.
 
 The work goes in pull requests into `master`, one after the other. Every
 task ends with `scripts/check.sh` clean and its own commit as `alone141`
