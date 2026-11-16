@@ -45,37 +45,34 @@ by a byte.
 - Building inside WSL 1, in any mode, for any release.
 - systemd in a distribution imported into WSL 1.
 - Signing the Windows binary.
-- A Windows builder that needs no WSL: the sibling plan's. Pull requests
-  3 and 4 here are the part the two share.
+- A Windows builder that needs no WSL: pull request #173's. Pull
+  requests 3 and 4 here are the part the two share, and whichever plan
+  lands first carries them.
 
 ## Still to find out, before pull request 3 is written
 
-The spec's experiments 1, 2 and 12 did not run: they need a launcher
-program, and no compiler on the Windows side has been approved. They
-decide the shape of `import`, so they come first, with the owner's
-go-ahead for a toolchain in a scratch directory and for one test
-distribution named `frostroot-spike`, removed only when the owner says.
+The spec's experiments A to E have not run. They decide the shape of
+`import` and what the README may say, so they come first, with the
+owner's go-ahead for a throwaway program cross-compiled in the VM and
+for one test distribution named `frostroot-spike`, removed only when the
+owner says.
 
-1. **Experiment 1.** A throwaway program calls
-   `WslRegisterDistribution`. Decides: whether it works without an
-   administrator and unsigned; what COM set-up the call needs (the same
-   call from PowerShell is refused with access denied); whether the file
-   system lands beside the executable.
-2. **Experiment 2.** `WslLaunch` with a pipe, `WslConfigureDistribution`,
-   `WslUnregisterDistribution`. Decides how `import` sets the default
-   user and undoes a failed import.
-3. **Experiment 12.** Import a 24.04 tarball built in the test VM and
-   log in. Decides whether a frostroot image runs on WSL 1 at all:
-   owners and capabilities after Windows' unpacking, `sudo`, DNS,
-   locale, the timezone. The spike saw 24.04's userland run in a chroot
-   on this kernel, which is encouraging and is not this.
+- **A** registers a tarball: whether an ordinary user's unsigned program
+  may, what COM set-up the call needs, where the file system lands.
+- **B** configures and undoes: how `import` sets the default user and
+  takes back a failed import.
+- **C** logs in and compares with the tarball: whether a 24.04 image
+  runs on WSL 1, and what Windows' unpacking kept.
+- **D** looks at what breaks inside: installing a package, reinstalling
+  systemd.
+- **E** repeats them for 26.04.
 
-   Their results go into the spec's "Spike results".
-   `docs: record the import experiments`.
+Their results go into the spec's "Spike results".
+`docs: record the import experiments`.
 
-   What stops the plan: the call refused for an ordinary user, or a
-   24.04 image that does not start. Then the answer for these machines
-   is the README saying so.
+What stops the plan: the call refused for an ordinary user whatever the
+set-up, or no release whose image starts. Then the answer for these
+machines is a paragraph in the README.
 
 ## Pull request 1: the spec and this plan
 
@@ -111,7 +108,7 @@ distribution named `frostroot-spike`, removed only when the owner says.
 
 6. **`internal/wslapi`.** `wslapi_windows.go`: the DLL loaded by its full
    path under the system directory with the standard library's
-   `syscall`; COM set up as experiment 1 found; `Register`,
+   `syscall`; COM set up as experiment A found; `Register`,
    `Unregister`, `IsRegistered`, `Configure` and `Launch` (a command,
    its stdout through a pipe, a timeout from the context).
    `wslapi_other.go`: each returns `ErrNotWindows`. It imports no
@@ -125,7 +122,7 @@ distribution named `frostroot-spike`, removed only when the owner says.
    from `internal/recipe` as a function, not copied), the tarball
    (exists, regular, `.tar.gz`), the install directory (absent or
    empty), the name not registered; place the executable as experiment
-   1 requires; register; read the default user from the distribution's
+   A requires; register; read the default user from the distribution's
    `/etc/wsl.conf`, hold it to the recipe's user-name pattern, ask for
    its uid, configure; on any failure after registering, unregister.
    Never prompts; exit 0, 1 or 2; on anything but Windows, exit 1 naming
@@ -137,9 +134,13 @@ distribution named `frostroot-spike`, removed only when the owner says.
    hands over.
 8. **`GOOS=windows` in the checks.** `scripts/check.sh` gains
    `GOOS=windows go vet ./...` beside the Windows build. The Windows
-   tests of `internal/wslapi` and of `import` run by hand on the Windows
-   host; only those packages, since some forty tests elsewhere fail on
-   Windows at `master` for reasons of the platform.
+   machine has no Go and gets none: the tests of `internal/wslapi` and
+   of `import` are cross-compiled in the VM (`GOOS=windows go test -c`),
+   carried over and run by hand, and the pull request records their
+   output. Only those packages, since some forty tests elsewhere fail
+   on Windows at `master` for reasons of the platform. Pull request
+   #173 tests its Windows code the same way; the commands go into
+   AGENTS.md once, in pull request 6.
 9. **The hint after a build.** The lines after "Import it on Windows"
    name both commands: `wsl --import`, and `frostroot import` for a
    Windows without it. Tests: the hint tests in `internal/cli` gain the
@@ -172,25 +173,30 @@ distribution named `frostroot-spike`, removed only when the owner says.
     tarball built elsewhere, `E2E_TARBALL`, and the Windows binary,
     `E2E_FROSTROOT_WINDOWS`; imports with `frostroot import`; runs
     `wsl-boot`'s checks except systemd, and says in its verdict that it
-    skipped it; unregisters with `wslconfig.exe /u`. shellcheck clean;
-    `scripts/e2e/README.md` says so.
-15. **Proof.** The scenario on the Windows 10 1809 host, for a 24.04 and
+    skipped it; unregisters with `wslconfig.exe /u`. It sets `umask 022`
+    first: `wsl -e` on build 17763 starts processes with 000. shellcheck
+    clean; `scripts/e2e/README.md` says so.
+15. **The wrappers' umask.** `scripts/wsl-exec.sh` sets `umask 022`
+    when it finds 000, so that nothing run through `scripts/wsl.sh` on
+    such a Windows writes world-writable files into a checkout or a
+    work directory. A commit of its own; shellcheck clean.
+16. **Proof.** The scenario on the Windows 10 1809 host, for a 24.04 and
     a 26.04 tarball built in the VM.
 
 ## Pull request 6: the documentation, after the runs
 
-16. **README.** Install and Quick start as above; Notes, a paragraph
+17. **README.** Install and Quick start as above; Notes, a paragraph
     "On a Windows without `wsl --import`" (build elsewhere, import with
-    the Windows binary, no systemd under WSL 1, do not upgrade systemd
-    there); "Deliberately not yet", where "a native Windows binary"
+    the Windows binary, no systemd under WSL 1, what experiments C and D
+    found: the umask a login gets, and upgrading systemd); "Deliberately not yet", where "a native Windows binary"
     becomes what is still missing, agreed with the sibling plan; the
     Documentation table.
-17. **AGENTS.md.** The module's Windows binary and what it does; the
+18. **AGENTS.md.** The module's Windows binary and what it does; the
     tarball rule's new sentence (`import` hands the tarball to Windows
     and never reads inside it); the package boundary of
     `internal/wslapi`; the scenario list.
-18. **`docs/VERIFICATION.md`.** One paragraph, written after the runs.
-19. **The version**, if the owner decides this is a release.
+19. **`docs/VERIFICATION.md`.** One paragraph, written after the runs.
+20. **The version**, if the owner decides this is a release.
 
 ## What each pull request needs run, in one place
 

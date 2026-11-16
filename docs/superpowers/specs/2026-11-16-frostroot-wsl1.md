@@ -1,73 +1,67 @@
-# frostroot on WSL 1
+# frostroot on a Windows without `wsl --import`
 
 Date: 2026-11-16
-Status: **the owner decided on 2026-11-16: the import half only.** The
-spike, approved the same day ("Yes, run it"), found that Ubuntu 24.04's
-systemd does not configure on the WSL 1 kernel, so building inside WSL 1
-could offer 20.04 and perhaps 22.04 only, and the owner dropped it.
-Nothing is implemented. This document is desk research and read-only
-probes of one such machine, the design as first proposed, the spike and
-its results, and the decision. Everything it says about building on
-WSL 1 (in "Goal", "What is promised", "The build mode" and the rules) is
-kept as the record of what was considered and is **not** what will be
-built; "The import path" is. The version this ships in is the owner's to
-number.
+Status: **the owner decided on 2026-11-16: import only** ("Import half
+only"; and, asked again, "Yes, import only"). This began as "frostroot on
+WSL 1", with two halves: building inside WSL 1, and importing on a
+Windows whose `wsl.exe` has no `--import`. The spike, approved and partly
+run the same day, found that Ubuntu 24.04's systemd does not configure on
+the WSL 1 kernel, and the owner dropped the build half. Nothing is
+implemented. The experiments that decide the shape of `import` have not
+run and need the owner's go-ahead.
 Extends: [`2026-09-14-frostroot-design.md`](2026-09-14-frostroot-design.md).
-A sibling document, planned separately, covers a Windows builder that
-needs no WSL at all; "What the two could share" below is the seam.
+Beside it: the Windows builder that needs no WSL, pull request #173;
+"What `import` shares with the Windows builder" is the seam.
 
 ## Why
 
-frostroot builds only where the kernel makes user namespaces, or as root,
-and its README sends every WSL user to WSL 2. WSL 2 needs Windows 10
-version 1903 or newer and a hypervisor. A lab PC on Windows 10 Enterprise
-LTSC 2019 (version 1809, build 17763) has neither and never will: LTSC
-2019 is supported until January 2029, it has no Store, and machines like
-it are exactly where a frozen, offline-rebuildable image is wanted. Such a
-machine fails twice today:
+A lab PC on Windows 10 Enterprise LTSC 2019 (version 1809, build 17763)
+has WSL 1 and nothing newer: WSL 2 needs version 1903 and a hypervisor,
+LTSC 2019 has no Store, and it is supported until January 2029. Machines
+like it are where a frozen image is wanted, and a frostroot image cannot
+get onto one. The `wsl.exe` of 1809 has `-d`, `-e` and `-u` and nothing
+else; `wsl --import`, which is the only way in the README teaches,
+arrived in build 18305 (version 1903).
 
-- `frostroot build` refuses it: "this is WSL 1, which has none; convert
-  the distribution to WSL 2".
-- The image it would have built cannot be imported: the `wsl.exe` of 1809
-  has `-d`, `-e` and `-u` and nothing else. `wsl --import` arrived in
-  build 18305 (version 1903).
-
-So there are two halves, and each is useful without the other: building
-inside WSL 1, and turning a tarball into a distribution on a Windows whose
-`wsl.exe` cannot.
+So the tarball exists, built on a Linux machine, in a VM or, later, by
+the Windows builder, and the last step is missing. Windows has had the
+call that does it since version 1709, `WslRegisterDistribution`, which
+is what the Store's launchers use. frostroot ships no caller.
 
 ## Goal
 
-- On WSL 1, `sudo frostroot build` builds an Ubuntu WSL tarball, online
-  and offline, with everything such a recipe can hold: packages,
-  third-party sources, `[python]`, `[certificates]`, `--ca-bundle` and
-  `--insecure`.
-- `init`, `edit`, `validate`, `capture` and `vendor` work on WSL 1 as
-  yourself, as they do anywhere.
-- A Windows program shipped with each release registers a frostroot
-  tarball as a distribution on Windows 10 from version 1709 on, without
-  administrator rights, and leaves the user of the recipe as its default
-  user.
-- Where frostroot does not work on WSL 1 it says so before anything
-  starts, with exit 1 and the way out.
+- An image built elsewhere, on a Linux host or VM, or by the Windows
+  builder of pull request #173, is registered and started on a Windows
+  whose `wsl.exe` has no `--import`: `frostroot import NAME INSTALL-DIR
+  TARBALL`, a command of a Windows `frostroot.exe` published with each
+  release.
+- It needs no administrator, leaves the recipe's user as the default
+  user, and a failed import leaves nothing registered.
+- `build` inside WSL 1 keeps being refused, before anything starts and
+  as root too, and says where to build instead.
 - Nothing changes for a build on Linux or WSL 2: the same command lines,
   the same bytes, every lock still loading and rebuilding.
 
-## Non-goals, for the first WSL 1 version
+## Non-goals
 
-- **Fedora on WSL 1, and disk images on WSL 1.** Both are refused, as root
-  too; "What is promised" says why.
-- **Building without root.** WSL 1 has no user namespaces, and the modes
-  that do without them make a worse image ("The build mode").
-- **systemd in the imported distribution.** WSL 1 starts its own init and
-  never systemd, whatever `/etc/wsl.conf` says.
-- **A build host older than Ubuntu 24.04.** The one distribution that
-  starts on the machine at hand is 20.04, and it cannot be the build
-  host ("The build host").
-- **A promise that an image built on WSL 1 is the bytes a Linux host
-  builds from the same lock.** The spike measures it; the promise stays
-  what it is, two offline builds of one lock on one host.
-- **A Windows builder that needs no WSL.** The sibling document's.
+- **Building inside WSL 1**, in any mode, for any family, release or
+  target. It was the other half of this document and the spike is the
+  reason it is gone: with the packages every frostroot image holds, a
+  24.04 build fails in systemd 255's post-installation script (`Failed
+  to take /etc/passwd lock: Invalid argument`), which is the image's own
+  binary on the WSL 1 kernel and so beyond any build mode; 22.04 failed
+  too, perhaps for the old mmdebstrap's sake; only 20.04 built. A build
+  that makes the oldest images, verified by hand on one machine every
+  release, is not worth its code. "Spike results" has the record, and
+  "Building on WSL 1: considered and dropped" what was proposed.
+- **systemd in the imported distribution.** WSL 1 starts its own init
+  and never systemd, whatever `/etc/wsl.conf` says.
+- **A promise about what runs inside a new release on an old kernel.**
+  Whether a 24.04 or 26.04 image starts on WSL 1, and what breaks in it,
+  is measured in the experiments that remain and written into the
+  README; it is not something frostroot can fix.
+- **Signing the Windows binary.**
+- **Replacing `wsl --import`** where there is one.
 
 ## What was looked at, and how far each statement goes
 
@@ -205,89 +199,19 @@ every Linux process is a Windows process it can kill. A build is the
 same thing ten thousand times over: dpkg unpacks every package's
 executables into the work directory, and tar packs them.
 
-## What is promised on WSL 1, and what is not
+## What is promised, and what is not
 
-| | On WSL 1 | Why |
+| | | Why |
 |---|---|---|
-| `init`, `edit`, `validate`, `capture`, `vendor` | work, as yourself | None of them needs a namespace or root. The `tui` scenario already passes on this machine (recorded 2026-11-11); the rest is assumed. |
-| `build` of an Ubuntu WSL tarball | works **as root**, if the spike's experiments 3 to 6 pass | mmdebstrap's root mode needs chroot, mount and the mount namespace test, which root has here. |
-| The Ubuntu releases | each one the spike builds and boots, and no other | Whether a release's maintainer scripts run on this kernel is measured per release, not argued. |
-| `build` without root | refused, exit 1, naming `sudo frostroot build` | No user namespace. |
-| `build` of a Fedora image | refused, exit 1, as root too | mkosi 20.2 runs every step in bubblewrap, and frostroot gives it a tools tree made the same way. Not probed beyond that; the cost of finding out is a Fedora tools tree unpacked under the security software, for a family the owner did not ask for here. |
-| `build` of a disk image | refused, exit 1, as root too | Every disk tool runs under `bwrap --unshare-all`, which unshares the network namespace, and root cannot make one here (verified). |
-| Two offline builds of one lock, on one WSL 1 host, are the same bytes | promised only if experiment 8 shows it | It is what `build --offline` means. If it fails, WSL 1 support does not ship with offline builds claimed. |
-| The same bytes as a Linux host builds | not promised; measured in experiment 9 | The README already says the promise does not cross mmdebstrap versions. |
-| systemd, and services that need it, after import | no | WSL 1. |
-| The image imported on a newer Windows with `wsl --import` | as for any image | It is the same tarball. |
-
-## The build mode: root, and why not the others
-
-**Root mode under `sudo`.** It is the mode frostroot already drives for
-uid 0, tested on every release, and it is the only one in which the
-image's ownership, hardlinks, capabilities and device entries come from
-the same code path as on Linux: real root owns real files, and
-mmdebstrap's tar reads them. Root on WSL 1 is not a Windows
-administrator; it is the Windows user with another number, so `sudo`
-here crosses no boundary that matters on Windows.
-
-`Mmdebstrap.Preflight` already passes for root on WSL 1; the test case
-"WSL 1 as root" says so. So **the released v0.15.1 may already build on
-WSL 1 under `sudo`**, and nobody has tried (assumed; experiment 6). What
-the code must gain is then small: the refusal for an unprivileged user
-names `sudo frostroot build` beside WSL 2, Fedora and disk recipes are
-refused on WSL 1 before they start, and whatever the spike finds.
-
-**Unshare mode as root** is the fallback. mmdebstrap then works in mount
-and pid namespaces of its own, which root on WSL 1 can make, so an
-interrupted build cannot leave proc mounted in the host's namespace. It
-is not the first choice because frostroot has never driven it as root
-and because build 14915's notes record a wrong working directory after
-`unshare(CLONE_NEWNS)`. Experiment 5 runs both.
-
-**fakechroot is rejected.** It mounts nothing, so systemd's maintainer
-scripts come out as they did in the builds the mount watch was written
-to stop: no tmpfiles entries, a stub `hwdb.bin`. It needs the build
-host's libc to be the image's, so one host builds one release. And
-ownership is a database fakeroot keeps, not the file system's.
-
-**proot is rejected.** mmdebstrap has no such mode, and proot rests on
-ptrace, which WSL 1 emulates in part.
-
-**Unpacking with Go, or bootstrapping by hand, is rejected** by the rule
-that only mmdebstrap writes the tarball.
-
-### The build host
-
-mmdebstrap 1.4.3 needs apt 2.3.14. Ubuntu 20.04 has apt 2.0.11 and
-offers mmdebstrap 0.4.1 (verified with `apt-cache policy`), which
-frostroot was never run against. So the build host is **an Ubuntu 24.04
-distribution on WSL 1**, and this machine has none that starts. Making
-one is the import problem again: Ubuntu publishes its WSL root file
-system as a `.tar.gz`, and the launcher below registers it. The spike
-therefore starts with the import half, and its first imported
-distribution is its build host.
-
-### What the build does differently on WSL 1
-
-Nothing in the image. On the host:
-
-- **The work directory stays on `lxfs`**, under `/var/tmp/frostroot-0`.
-  frostroot already refuses `/mnt`.
-- **The recipe directory goes on a Windows drive**, `/mnt/c/...`, so
-  that `dist/` is somewhere Windows can name. frostroot already supports
-  that: outputs are renamed into place and never chmodded. On `lxfs` the
-  tarball would be unreachable from Windows. `build` says so on WSL 1
-  when the recipe directory is not under `/mnt`: a warning on stderr,
-  not a refusal, since the tarball can still be copied.
-- **The import hint names the launcher**, not `wsl --import`, when the
-  host is WSL 1.
-- **A tripwire, if experiment 10 shows it clean on a normal build**: the
-  last customize hook runs `dpkg --verify` in the image and fails the
-  build on a missing file or a changed checksum outside the
-  configuration files. It only reads. It is there because a file the
-  security software removed from the work directory would otherwise
-  leave an image that looks whole. Whether it runs on every host or on
-  WSL 1 alone is decided by what it costs and finds on Linux.
+| `frostroot import` on Windows 10 from version 1709 on | registers the tarball, sets the default user, needs no administrator | `WslRegisterDistribution` and `WslConfigureDistribution` are in `wslapi.dll` on build 17763 (verified). That the call works for an ordinary user from an unsigned program is assumed until experiment A. |
+| A failed import | leaves nothing registered and no install directory | `import` unregisters what it registered. |
+| `frostroot import` on a Windows that has `wsl --import` | works too, not the documented way | Assumed; the function is still exported there. |
+| The imported image is the bytes of the tarball | yes, as far as Windows keeps them | Windows unpacks it. Whether owners, hardlinks and file capabilities survive that is experiment C. |
+| A 24.04 or 26.04 image starts on WSL 1 | not promised until experiment C | The spike saw 24.04's dpkg, bash and `sleep` run in a chroot on this kernel, which is encouraging and is not a login. |
+| systemd, and services that need it, on WSL 1 | no | WSL 1. |
+| Upgrading packages inside the distribution on WSL 1 | not promised; `apt upgrade` of systemd is expected to fail | It runs the same post-installation script that failed in the spike. Experiment D. |
+| `init`, `edit`, `validate`, `capture`, `vendor` inside WSL 1 | work, as yourself | None needs a namespace or root. The `tui` scenario passes there (recorded 2026-11-11); the rest is assumed. |
+| `build` inside WSL 1 | refused, exit 1, for everyone | The decision. |
 
 ## The import path
 
@@ -308,10 +232,10 @@ teaches one shape. It:
    the install directory absent or empty, the name not registered
    (`WslIsDistributionRegistered`). Exit 1 for each, saying which.
 2. If the file system lands beside the calling executable (experiment
-   1): creates the install directory, copies itself into it, and runs
+   A): creates the install directory, copies itself into it, and runs
    the copy, which does the rest. The parent removes the copy
    afterwards. If the base path follows something else, this step is
-   whatever experiment 1 says.
+   whatever experiment A says.
 3. Calls `WslRegisterDistribution(NAME, TARBALL)`. Windows unpacks the
    tarball; frostroot's code never opens it. That keeps the rule that Go
    never tars or walks a root file system.
@@ -335,7 +259,7 @@ to compile for Windows, and `scripts/check.sh` proves it on every push;
 the Windows binary is that build, published. One binary means one
 version, one `SHA256SUMS`, one attestation, and `frostroot version` on
 both sides of an import. Its `build` on Windows keeps saying that builds
-need Linux until the sibling's work changes that. The cost is size: the
+need Linux until pull request #173 changes that. The cost is size: the
 Charm libraries ride along for a command that draws nothing.
 
 **The DLL** is loaded by its full path under the system directory, never
@@ -349,17 +273,18 @@ fake.
 
 **COM security** is assumed to be the launcher's to set up before the
 first call (impersonation, as the PowerShell failure suggests).
-Experiment 1 settles it with the real thing.
+Experiment A settles it with the real thing.
 
 **Shipping and attesting.** `release.yml` gains a second build step,
 `GOOS=windows GOARCH=amd64`, with the same flags. `SHA256SUMS` lists both
 files, the attestation's `subject-path` names both, and `gh release
 create` uploads both. The Linux runner cannot run the `.exe`, so "Check
 the binary" stays the Linux file's; the Windows binary's proof is
-`scripts/check.sh`'s Windows build, a `GOOS=windows go vet`, and the
-`wsl-boot` scenario on a WSL 1 host before the tag, by the owner. The
+`scripts/check.sh`'s Windows build, a `GOOS=windows go vet`, the test
+binaries cross-compiled and run on Windows, and the import scenario on
+such a Windows before the tag, by the owner. The
 binary is unsigned. Whether a locked-down Windows runs an unsigned
-executable from a download is not frostroot's to decide; experiment 13
+executable from a download is not frostroot's to decide; experiment A
 finds out for this machine.
 
 **On a Windows that has `wsl --import`**, the README keeps teaching
@@ -367,149 +292,204 @@ finds out for this machine.
 is still in `wslapi.dll`), and registers with whatever version is that
 machine's default.
 
+## Building on WSL 1: considered and dropped
+
+Kept short, as the record of what the spike tested.
+
+The proposal was mmdebstrap's root mode under `sudo`, for Ubuntu WSL
+tarballs only, on an Ubuntu 24.04 build host. Root on WSL 1 has every
+capability and can make a mount namespace, which is all root mode asks
+before it mounts, and it is the one mode in which ownership, hardlinks
+and device entries come from the same code path as on Linux. fakechroot
+was rejected because it mounts nothing and needs the host's libc to be
+the image's; proot because mmdebstrap has no such mode; Fedora and disks
+because bubblewrap needs namespaces root cannot make there.
+
+The spike bore the mechanism out (`mknod`, proc and sysfs in the chroot,
+a clean unmount, real owners) and then failed where no mechanism helps,
+in a maintainer script of the image. See "Spike results".
+
+### What `build` does on WSL 1 now
+
+It refuses, and the refusal changes in two ways.
+
+- **It refuses root too.** Today `Mmdebstrap.Preflight` passes for uid 0
+  on WSL 1 (the test case "WSL 1 as root" says so), and so do mkosi's
+  and the disk tools'. The build then runs for minutes and fails in
+  systemd's script, or in bubblewrap. A new sentinel error, checked
+  before anything else in all three Preflights, stops it at once with
+  exit 1.
+- **It says what works.** The message for a kernel without user
+  namespaces stays for every other such host. On WSL 1 it stops
+  advising only `wsl --set-version DISTRIBUTION 2`, which these machines
+  cannot do, and says: build on Linux or in WSL 2, or with the Windows
+  builder once there is one, and bring the tarball here with `frostroot
+  import`. It names `import` only from the release that has it.
+
+### The umask on this Windows
+
+A process started by `wsl -e` on build 17763 has umask 000; the default
+became 022 in build 18945. It was found because a build would have
+inherited it. With no build on WSL 1 it matters in three smaller places:
+
+- **`import` does not depend on it.** What it runs inside the new
+  distribution, through `WslLaunch`, only reads: `cat /etc/wsl.conf` and
+  `id -u`. It creates no file there.
+- **The people who use the imported distribution do.** A login shell on
+  such a Windows starts with umask 000 unless the image sets one, and
+  files a student creates are then world-writable. Ubuntu's images set
+  none in `/etc/profile`; they leave it to PAM, which WSL does not run.
+  Experiment C records what a login shell in a frostroot image reports.
+  If it is 000 the README says so. Making the image set it is a change
+  to what every image holds, on every Windows, and is not proposed here.
+- **`scripts/wsl.sh` runs everything through `wsl -e`**, so a scenario
+  or a `vendor` run on such a machine writes its files with whatever
+  modes it asked for and no mask. The scenario this plan adds sets
+  `umask 022` first. `scripts/wsl-exec.sh` doing so for every command is
+  a small change of its own, noted in the plan.
+
 ## The rules in AGENTS.md this touches
 
 **What reaches the image**
 
-- *Build-only apt settings go in through a setup hook.* Unchanged; the
-  hooks are the same text. `apt-trust` runs on WSL 1 in the plan.
 - *Only mmdebstrap or mkosi writes the tarball; Go never tars, walks or
-  deletes a root filesystem.* Kept on both halves: mmdebstrap packs as
-  root, and Windows unpacks. The rule gains a sentence: `import` hands
-  the tarball to Windows and never reads inside it.
-- *Two offline builds of one lock are byte-identical.* Kept only if
-  measured (experiment 8). What could break it is what root mode reads
-  from the host that unshare mode does not, and a file system that
-  stores Linux metadata in NTFS attributes.
-- *Nothing the build only used stays in the image.* The risk particular
-  to root mode is mmdebstrap's own scaffolding, the device nodes or
-  bind mounts and `test-dev-null`. `no-build-leaks` runs on WSL 1 in
-  the plan.
-- *The host's environment must not change the result.* `sudo` resets the
-  environment; `wsl -u root` does not, and WSL appends the Windows PATH
-  to every process's. That is so on WSL 2 as well and has not reached an
-  image there. Experiment 9 compares a WSL 1 build with a Linux one and
-  would show it.
-- *Every value that reaches a shell is validated and quoted.* The
-  tripwire hook, if it ships, is new hook text: run through a real `sh`
-  with hostile paths, and covered by
-  `TestHooksAndScriptNeverSwallowFailures`. `import` passes the name,
-  the paths and the user name to Windows calls as arguments, never
-  through a command line it assembles, and the user name read back out
-  of `wsl.conf` is hostile input: it is held to the recipe's user-name
-  pattern before it goes anywhere.
+  deletes a root filesystem.* Kept, and the reason `import` hands the
+  tarball to Windows whole. The rule gains a sentence: `import` never
+  reads inside the tarball. Writing the registry keys and unpacking by
+  hand was rejected for this.
+- *Every value that reaches a shell is validated and quoted.* `import`
+  passes the name and the paths to Windows calls as arguments, never
+  through a command line it assembles. The two commands it runs inside
+  the distribution are fixed text plus one value, the user name read
+  out of the image's `wsl.conf`; that name is hostile input, and is
+  held to the recipe's user-name pattern before it goes anywhere.
+- Nothing else under this heading is touched: no build changes.
 
 **The lock**
 
-- *A failed or interrupted build writes nothing and leaves the previous
-  image.* Unchanged in code, and newly at risk in one way: root mode
-  mounts in the host's namespace, so a build the security software
-  kills leaves proc and sysfs mounted in the kept work directory.
-  Experiment 7 looks at what is left after an interrupt and after a
-  kill. If mounts are left, the next build must refuse a work root with
-  mounts under it, and say how to clear them, rather than meet them.
-- *The lock stays `version = 1`.* No new field. Where an image was
-  built is not a fact about the image.
+- Untouched. No field is added, and `import` reads no lock.
 
 **Trust**
 
-- Nothing changes in what is fetched or verified. `import` verifies
-  nothing about the tarball, as `wsl --import` does not; the release's
-  checksum and attestation cover the Windows binary as they cover the
-  Linux one.
+- `import` verifies nothing about the tarball, as `wsl --import` does
+  not. The release's checksum and attestation cover the Windows binary
+  as they cover the Linux one.
+- *Everything read out of a lock is hostile input* has a cousin here:
+  everything read out of a distribution is. `import` reads two things
+  back, a `wsl.conf` and a uid, with a size bound and a timeout on each.
 
 **Files and the network**
 
-- *Outputs are renamed into place and never chmodded.* This is what lets
-  `dist/` sit on `/mnt/c`. As root on a Windows drive, files come out
-  owned by the drive's mount uid, not root, so the README's "Building as
-  root" note reads differently there (assumed; experiment 6).
-- *`capture` only reads, and needs no root.* Unchanged; capturing a
-  WSL 1 distribution should just work, and is in the plan's checks.
+- `import` makes no network request.
+- It writes one thing itself, the install directory, and, if experiment
+  A says the file system lands beside the calling executable, a copy of
+  itself there, removed afterwards. It refuses an install directory
+  that exists and is not empty, so it can remove what it made and
+  nothing else.
 
 **The command line**
 
+- *Only `internal/cli` prints or exits.* `import` is a command there.
+  Exit 0, 1 for what the user can fix (a name taken, a file that is not
+  a tarball, a directory in use, not Windows) and 2 for a registration
+  Windows refused.
 - *A new error the user can fix goes into the `errors.Is` list in
-  `reportBuildFailure`.* Three do: WSL 1 without root, a Fedora recipe on
-  WSL 1, a disk recipe on WSL 1. Exit 1 each.
-- *`build` never prompts*, and neither does `import`.
-- *mmdebstrap's process group gets SIGINT, never SIGKILL.* More
-  important here, since root mode must unmount.
+  `reportBuildFailure`.* The WSL 1 refusal does.
+- *`build` never prompts*, and neither does `import`. Results on stdout,
+  progress on stderr.
 - *The plain interface asks the same questions in the same order.* No
   recipe field is added, so no question is.
 
 **Package boundaries**
 
-- `internal/wslapi` joins the packages that import no other frostroot
-  package. `builder` learns whether the host is WSL 1 from the file it
-  already reads, `/proc/sys/kernel/osrelease`, through the `ReadFile` it
-  already takes.
+- A new package, `internal/wslapi`, joins those that import no other
+  frostroot package and hold no policy. It is the only place
+  `wslapi.dll` is named.
+- `builder` learns whether the host is WSL 1 from the file it already
+  reads, `/proc/sys/kernel/osrelease`, through the `ReadFile` it already
+  takes.
 
 **Tests**
 
-- Unit tests stay without root and without mmdebstrap: the host kind is
-  a table of kernel release strings, and `import` runs against a fake.
-- No integration test can cover WSL 1: CI has no such runner, and CI is
-  off. The proof is the scenarios, run on a WSL 1 host by hand before a
-  release, as `wsl-boot` is run on Windows today. `wsl-boot` learns
-  WSL 1: it imports with the Windows binary, skips the systemd check,
-  and unregisters with `wslconfig.exe /u`.
+- Unit tests stay without root, without mmdebstrap and without Windows:
+  the host kind is a table of kernel release strings, and `import` runs
+  against a fake of the interface `cli` declares.
+- What only Windows can show, the real calls, is run by hand on a
+  Windows host and recorded, as `wsl-boot` is today. "What `import`
+  shares with the Windows builder" says how, with no Go on that machine.
 
-## What the two could share
+## What `import` shares with the Windows builder
 
-With the Windows builder the sibling document plans:
+With pull request #173, the builder that needs no WSL:
 
-- **The published Windows binary** and everything in `release.yml` that
-  builds, sums and attests it.
-- **`frostroot import`** and `internal/wslapi`: a builder on Windows
-  ends at the same tarball and needs the same registration on a Windows
-  without `wsl --import`.
-- **The host-kind check**: one place that says Linux, WSL 2, WSL 1 or
-  Windows, read by Preflight and by the import hint.
-- **The README's "Deliberately not yet" line.** "A native Windows
-  binary" stops being true the day the Windows binary ships with
-  `import` alone; the line should then say what is still missing, a
-  build without WSL, until the sibling's work lands.
+- **One Windows binary.** The module already has to compile for
+  Windows, and `scripts/check.sh` proves it on every push;
+  `frostroot-windows-amd64.exe` is that build, published. `import` is a
+  command of it, and so is whatever the builder adds. One version, one
+  `frostroot version` on both sides of an import. Whichever plan lands
+  first publishes the binary; the other adds to it.
+- **The release changes.** One more build step in `release.yml`
+  (`GOOS=windows GOARCH=amd64`, the Linux step's flags), both files in
+  `SHA256SUMS`, both in the attestation's `subject-path`, both uploaded.
+  Written once, in whichever pull request comes first.
+- **Signing.** Neither plan signs. An unsigned executable from a
+  download meets SmartScreen on a home machine and possibly a refusal on
+  a managed one, and the answer is the same for both: say so in the
+  README, give `Get-FileHash` and `gh attestation verify`, and leave a
+  certificate as the owner's later decision. It should be one decision,
+  not two.
+- **Testing Windows code with no Go on the Windows machine.** Both
+  plans have code only Windows can run, and the one Windows machine at
+  hand has no toolchain and is not to get one. Go cross-compiles test
+  binaries: in the Linux VM, `GOOS=windows go test -c -o wslapi.test.exe
+  ./internal/wslapi/` makes an executable that runs the package's tests
+  on Windows with nothing installed. `scripts/check.sh` vets and builds
+  for Windows; the test binaries are carried over and run by hand, and
+  the pull request records the output. Some forty tests elsewhere fail
+  on Windows at `master` for reasons of the platform, so each plan
+  names the packages whose tests it runs there.
+- **The end of the builder's road.** A tarball built on Windows by #173
+  on such a machine still has to be registered, and `import` is how.
+  The builder's success message and `build`'s hint should name the same
+  command in the same words.
+- **The host-kind check**, and the README's "Deliberately not yet" line,
+  where "a native Windows binary" stops being true the day either plan
+  ships and should say what is still missing.
 
-Neither design depends on the other. If the Windows builder ships first,
-this document's import half is already there and only the build half
-remains.
+Neither design depends on the other.
 
 ## Risks
 
-- **The security software.** It has already removed a system binary from
-  a distribution on this machine. A build may be killed midway, may lose
-  files without failing, or may get the machine reported. The tripwire
-  and the byte-identity check catch a damaged image; nothing in frostroot
-  can make the build welcome. The owner may need an exclusion from
-  whoever runs the software, for the distribution's directory under
-  `%LOCALAPPDATA%` and for the install directories. Without one, WSL 1
-  support may be something frostroot has and this machine cannot use.
-- **The kernel is an emulation frozen in 2018**, with fixes until 2021
-  by its build date. A maintainer script in a release newer than it may
-  make a system call it does not have. That is per release and per
-  package, and a recipe's own packages can hit it where the base image
-  did not. The failed build then explains itself as any failed
-  maintainer script does.
-- **`lxfs` is slow**, and a build is mostly small files. Minutes on
-  Linux may be an hour here; experiment 6 times it.
-- **Root-mode leftovers** in the host's mount namespace after a killed
-  build, above.
+- **The call may not be ours to make.** The same functions called from
+  PowerShell returned access denied for every name. If that is COM
+  set-up, a program of our own fixes it; if it is the endpoint software
+  or a policy, nothing does, and experiment A is where that shows.
+- **Where the file system lands** is inferred from two registry entries
+  and a third-party README. If it is not beside the executable, step 2
+  of `import` is different.
+- **The image may not start, or may start and misbehave.** A 2018
+  emulation of Linux 4.4 is running a 2024 or 2026 userland. The spike
+  found one program that fails outright there (`systemd-sysusers`); a
+  login does not run it, an upgrade does. What else fails is not known
+  and cannot all be found: experiment D looks at the obvious.
+- **Windows' unpacking may lose what mmdebstrap kept**: file
+  capabilities, hardlinks, owners. Experiment C compares.
+- **The security software.** It removed `/bin/tar` from a distribution
+  on this machine once. During the spike it did nothing that was seen.
+  An import has Windows itself writing some tens of thousands of Linux
+  executables into the install directory, which is the same thing from
+  its side.
 - **An unsigned executable** on a managed Windows.
 - **Nobody else has this machine.** CI is off and could not run it
-  anyway, so WSL 1 stays verified by hand, on one build of Windows, by
-  one person, per release.
+  anyway; this stays verified by hand, on one build of Windows, per
+  release.
 
-## The spike: the experiments
+## The spike as first listed (the record)
 
-This is the list as written before any ran; "Spike results" below says
-which ran and what they found. Each unpacks, installs or registers
-something on the machine at hand and needs the owner's go-ahead; the
-first two can be given separately from the rest, since they touch
-Windows and not the existing distribution. Run in order: each decides
-whether the next is worth running. Record after each whether `/bin/tar`
-and the files just written are still there, and anything the security
-software says.
+This is the list as written before any experiment ran and before the
+decision, kept because "Spike results" refers to it by number. Most of
+it tested the build half and will not run now; what remains is in "The
+experiments that remain", lettered.
 
 Throughout: `SPIKE` is a new distribution name such as
 `frostroot-spike`; commands marked `PS>` run in PowerShell, `$` inside
@@ -872,47 +852,123 @@ frostroot running on a 24.04 host. 7 and 13 were not reached.
   on WSL 1, which needs a 22.04 or 24.04 distribution registered, which
   needs the import half. The order of the plan follows from that.
 
+## The experiments that remain: NOT yet run
+
+Lettered, so as not to be confused with the numbered list above. None
+has run. Each needs the owner's go-ahead, and A needs two things not yet
+approved: a Go toolchain unpacked in a scratch directory on the Windows
+side, or a throwaway program cross-compiled in the Linux VM and carried
+over, which installs nothing; and one new distribution, named
+`frostroot-spike`, created by the experiment and removed only when the
+owner says. Nothing existing is unregistered or changed.
+
+`PS>` runs in PowerShell; `vm$` in the project's Linux test VM.
+
+**A. Register a tarball.** In the VM, cross-compile a program of some
+sixty lines that sets up COM security and calls
+`WslRegisterDistribution`, and build a 24.04 image with the released
+frostroot from a recipe asking for `git` and `jq`:
+
+```
+vm$ GOOS=windows go build -o spike-import.exe ./spike-import
+vm$ frostroot build --plain
+```
+
+Carry both to Windows. Put the program in an empty directory `D`, start
+it from another directory:
+
+```
+PS> cd $env:TEMP; & D\spike-import.exe frostroot-spike C:\path\spike-ubuntu-24.04-amd64.tar.gz
+PS> wslconfig /l
+PS> reg query HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss /s
+```
+
+*Decides:* whether an ordinary user's unsigned program may register a
+distribution; what COM set-up the call needs; whether `BasePath` is the
+executable's directory, the current one or something else; how long
+Windows takes to unpack an image. A refusal that no set-up cures ends
+the plan: these machines then get a paragraph in the README.
+
+**B. Configure, and undo.** With the same program: `WslLaunch` running
+`cat /etc/wsl.conf` and `id -u student` with a pipe for stdout;
+`WslConfigureDistribution(frostroot-spike, 1000, 7)`; and, on a second
+throwaway name registered from the same tarball,
+`WslUnregisterDistribution`, then a look at what is left of its
+directory and its registry key. *Decides:* steps 4 and 5 of `import`,
+and whether a failed import can be undone completely.
+
+**C. Log in, and compare with the tarball.**
+
+```
+PS> wsl -d frostroot-spike -e sh -c "whoami; umask; sudo -n id -u; getent hosts archive.ubuntu.com; locale; date; cat /etc/os-release"
+PS> wsl -d frostroot-spike -u root -e sh -c "getcap -r /usr 2>/dev/null; find / -xdev -links +1 -type f | wc -l; find / -xdev ! -user root | wc -l"
+vm$ tar --xattrs --xattrs-include='*' --numeric-owner -tvf spike-ubuntu-24.04-amd64.tar.gz > tarball.txt
+```
+
+*Decides:* that a frostroot image is usable on WSL 1: the default user,
+passwordless sudo and what it says with no `/etc/hostname`, DNS, the
+locale, whether the recipe's timezone holds on a WSL that never heard of
+`useWindowsTimezone`; the umask a login gets; and whether capabilities,
+hardlinks and owners are what `tarball.txt` says they should be. An
+image that does not start for 24.04 is tried for 22.04 before the plan
+stops.
+
+**D. What breaks inside.** In the imported distribution:
+
+```
+PS> wsl -d frostroot-spike -u root -e sh -c "apt-get update && apt-get install -y hello && hello"
+PS> wsl -d frostroot-spike -u root -e sh -c "apt-get install -y --reinstall systemd; echo exit $?"
+PS> wsl -d frostroot-spike -e sh -c "git --version; jq --version; python3 -c 'import ssl, sqlite3; print(1)'; systemctl is-system-running"
+```
+
+*Decides:* what the README has to warn of. Installing an ordinary
+package is expected to work; reinstalling systemd is expected to fail
+as it did in the spike, and if it does, what state apt is left in and
+how to hold the package (`apt-mark hold systemd`) is part of the
+finding.
+
+**E. The same for 26.04**, A to D with a 26.04 tarball, as a second
+name, if 24.04 passed. *Decides:* which releases the README names as
+importable on WSL 1.
+
+**F. Clean up, when the owner says.** `wslconfig /u` the spike's own
+distributions, remove their directories, and write the results into
+"Spike results", dated, before the plan is revised.
+
 ## The decision (the owner, 2026-11-16)
 
 Asked whether to drop the WSL 1 build half and keep only the import
-half, the owner answered: "Import half only".
+half, the owner answered "Import half only"; asked again by the session
+that coordinates this work, "Drop building on WSL 1 and keep only the
+import command in that plan?", "Yes, import only".
 
-- frostroot does not build inside WSL 1. `build` there is refused before
-  it starts, for every family and target and as root too, and says to
-  build on Linux or WSL 2 and bring the tarball over. Today root on
-  WSL 1 passes Preflight and fails minutes later in systemd's script.
+- frostroot does not build inside WSL 1.
 - `frostroot import`, in a published Windows binary, is what these
-  machines get. It is also what the Windows builder needs.
-- Of the questions below, 2, 4, 5 and 6 were about the build half and
-  fall away. 3 (one binary or a separate launcher), 7 (the distribution
-  that does not start) and 8 (the version, and which of the two plans
-  goes first) stay open.
-- Experiments 1, 2 and 12 are still to run, and decide the shape of
-  `import`; the plan puts them first.
+  machines get.
+- This document was revised to that on the same day. "Spike results" is
+  the record and was left as written.
 
 ## Open questions for the owner
 
-1. *Answered 2026-11-16: yes, run it.* Still open: **is the build half
-   wanted at all** now that it can offer 20.04 and perhaps 22.04 only,
-   or does WSL 1 support become the import half alone?
-2. **Is `sudo frostroot build` acceptable** as the only way to build on
-   WSL 1?
-3. **One Windows binary with `import`, or a separate small launcher?**
-   This document proposes the first.
-4. **Which Ubuntu releases must work** on WSL 1: all four, or the ones
-   the spike finds working?
-5. **Fedora and disks refused on WSL 1**: agreed, or is either wanted
-   enough to spike?
-6. **If two offline builds on WSL 1 are not the same bytes**, does WSL 1
-   support ship without that promise, or not at all?
-7. **Is the Ubuntu 24.04 that does not start on this machine** safe to
-   unregister, or is it someone's?
-8. **The version number**, and whether this or the Windows builder goes
-   first.
+1. **May experiments A to E run**, with a throwaway program
+   cross-compiled in the VM (or a toolchain in a scratch directory on
+   Windows) and a new distribution named `frostroot-spike`?
+2. **One Windows binary with `import`, or a separate small launcher?**
+   This document proposes the first, shared with pull request #173.
+3. **Which goes first**, this or the Windows builder? Whichever does
+   carries the release changes.
+4. **Signing**: unsigned for now, for both plans?
+5. **If a 24.04 image starts on WSL 1 but cannot upgrade systemd**, is
+   a README warning enough, or should `import` hold the package for the
+   user on such a Windows? This document proposes the warning only.
+6. **Is the Ubuntu 24.04 registration that does not start** on this
+   machine safe to unregister, or is it someone's? Nothing here needs
+   it gone.
+7. **The version number.**
 
-## What follows approval
+## What follows
 
-The spike, experiment by experiment, with its results written into this
-document; then the plan in
+Experiments A to F, with their results written into this document; then
+the plan in
 [`../plans/2026-11-16-frostroot-wsl1.md`](../plans/2026-11-16-frostroot-wsl1.md),
-revised by what the spike found.
+revised by what they found.
