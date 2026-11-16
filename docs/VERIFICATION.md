@@ -483,3 +483,21 @@ check, on a host with KVM or a real machine: `disk-boot`, the first login
 of an imported 24.04, 26.04 and Fedora 44 image (`wsl-boot`, on Windows),
 `certificates` and Fedora's `no-build-leaks` and `failed-build` on a
 network that does not re-sign TLS, and the time bounds above.
+
+v0.15.1 was published on 16 November 2026, from master at 1e1558b, not
+from the go1.27.2 build described above, whose tag was never pushed. So
+it holds more than that paragraph says: the disk images the plan and the
+spec name v0.16, which went into master while `builder.Version` still said
+0.15.1, the fixes of the 2026-11-10 audit and the reviews after it, go1.27.4,
+and the three tests that waited on a clock now waiting on the form or
+comparing two sizes. The paragraph above records what was run on 41c8cdd;
+go1.27.4 and the test change were run in the same VM on their own pull
+requests: on #169 govulncheck found nothing and only the three clock-bound
+tests failed under `-race`; on #170 `scripts/check.sh` passed every step,
+`go test -race` with `-timeout 60m`. Actions was switched on for the tag:
+`release.yml` checked the tag against `builder.Version`, ran the tests and
+govulncheck, built `frostroot-linux-amd64` (sha256
+6ff2622b3a75ef9ba15a43f12f2f3af1b6f9d91a985d2d4d1c5cff37ef0dd76d),
+attested both files and published them, in 2 minutes. It is the first
+release published since v0.13.2: the v0.15.0 run failed at govulncheck.
+`disk-boot` and the first logins listed above are still to check.

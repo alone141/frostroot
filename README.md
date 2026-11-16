@@ -1249,8 +1249,8 @@ packages that come from them (v0.12), `--insecure` for a network whose
 certificate authority nobody has, with the lock recording what it could not
 verify (v0.13), Ubuntu 26.04, which new recipes now start on (v0.14), and
 Fedora 44, built with mkosi, rebuilt offline byte for byte, and offered by
-the form beside Ubuntu (v0.15), and, not released yet, a raw disk image of
-Ubuntu 24.04 or 26.04 that boots a PC or a VM.
+the form beside Ubuntu (v0.15), and a raw disk image of Ubuntu 24.04 or
+26.04 that boots a PC or a VM (v0.15.1).
 
 **Deliberately not yet:** families other than Ubuntu and Fedora · flat or
 unsigned apt repositories · npm and cargo lockfiles · Python source
