@@ -859,8 +859,8 @@ frostroot running on a 24.04 host. 7 and 13 were not reached.
 ## The experiments that remained (run; results below)
 
 Lettered, so as not to be confused with the numbered list above. This
-is the list as written before they ran; A to E have run, and F, the
-clean-up, has not. Each needed the owner's go-ahead, and A needs two things not yet
+is the list as written before they ran; A to E ran on 2026-11-16, and
+F, the clean-up, on 2026-11-17. Each needed the owner's go-ahead, and A needs two things not yet
 approved: a Go toolchain unpacked in a scratch directory on the Windows
 side, or a throwaway program cross-compiled in the Linux VM and carried
 over, which installs nothing; and one new distribution, named
@@ -950,8 +950,17 @@ distributions named `frostroot-spike` only. Everything is under
 (one per distribution). **Three distributions are left registered, all
 made by these experiments: `frostroot-spike`, `frostroot-spike-2` and
 `frostroot-spike-3`**, 2.8 GB together. None is the default; `Ubuntu`
-and `Ubuntu-24.04` were not touched. Removing them waits for the
+and `Ubuntu-24.04` were not touched. Removing them waited for the
 owner's word.
+
+**Removed on 2026-11-17, on the owner's word** (experiment F):
+`wslconfig.exe /u` returned 0 for each of the three, the registry lists
+only `Ubuntu-24.04` and `Ubuntu` again with the default unchanged, and
+each install directory was left holding its empty `temp\` and the copied
+program, as the API's unregister had left it. The whole
+`%USERPROFILE%\frostroot-spike` was then deleted. What ran is in this
+section and in the program's source beside this file; the images can be
+built again in the test VM.
 
 **The program** is
 [`2026-11-16-frostroot-wsl1-spike-import.go.txt`](2026-11-16-frostroot-wsl1-spike-import.go.txt),
@@ -1123,10 +1132,9 @@ import command in that plan?", "Yes, import only".
 2. **Should `import` hold the systemd package** in what it registers on
    a Windows with WSL 1 only, or is a README warning enough? This
    document proposes the warning.
-3. **May the three spike distributions be removed** (`frostroot-spike`,
-   `frostroot-spike-2`, `frostroot-spike-3`, and the 2.8 GB under
-   `%USERPROFILE%\frostroot-spike`), or should one stay for the
-   implementation to be tried against?
+3. ~~May the three spike distributions be removed?~~ Answered on
+   2026-11-17: the owner said to remove them if nothing needed them,
+   and they are gone, with `%USERPROFILE%\frostroot-spike`.
 4. **One Windows binary with `import`, or a separate small launcher?**
    This document proposes the first, shared with pull request #173.
 5. **Which goes first**, this or the Windows builder? Whichever does
