@@ -6,13 +6,12 @@ brings the lock and the image back. The spec, with the comparison of the
 ways, the rules it touches and the decisions it asks of the owner, is
 [`2026-11-16-frostroot-windows-builder.md`](../specs/2026-11-16-frostroot-windows-builder.md).
 
-**The owner answered decisions 1, 2, 3, 4, 6 and 7 on 2026-11-17, and
-the spike ran the same day** (the spec's "Spike: run on 2026-11-17");
-this plan is revised to what it found, and "(As built: …)" notes come as
-the code does, as the earlier plans have them. Decisions 5 (the promise
-about bytes across Windows and Linux) and 8 (the version, and whether
-Fedora and disk recipes must work first) are open; nothing below waits on
-them until pull request 5. Decision 3 leaves one question open that
+**The owner answered decisions 1 to 7 on 2026-11-17, and the spike ran
+the same day** (the spec's "Spike: run on 2026-11-17"); this plan is
+revised to what it found, and "(As built: …)" notes come as the code
+does, as the earlier plans have them. Decision 8 (the version, and
+whether Fedora and disk recipes must work first) is open; nothing below
+waits on it until pull request 5. Decision 3 leaves one question open that
 blocks publishing, not building: whether Canonical's policy allows the
 project to publish an Ubuntu-derived guest image.
 
@@ -26,8 +25,9 @@ once that CI could not run.
 
 **Goal:** an Ubuntu WSL recipe builds online and offline with
 `frostroot.exe` on Windows 10 1809 without admin rights; two offline
-builds of one lock are the same bytes; and no Linux recipe, lock or image
-changes by a byte.
+builds of one lock are the same bytes whether built in the Windows guest
+or on a Linux host, as the owner promised (decision 5); and no Linux
+recipe, lock or image changes by a byte.
 
 ## What the owner answered
 
@@ -62,7 +62,8 @@ No code. This pull request, #173.
    the design; spike 4 found Windows and Linux write the same bytes.
 2. **The results in the spec**, and the programs that ran beside it as
    `.txt` files.
-3. **The owner's answers** to six of the eight decisions.
+3. **The owner's answers** to seven of the eight decisions, decision 5
+   after the spike.
 4. **This plan, revised.** What changed: the guest's memory and the
    free-space check (task 29), the credentials' form (task 16), the
    process group and job object as measured (task 17), the host key
@@ -277,13 +278,32 @@ Nothing calls it yet.
     results, as every scenario does, and `scripts/e2e/README.md` and
     AGENTS.md's list say when to run it: anything of the launcher, the
     guest image or `internal/transfer`.
-34. **Windows against Linux.** `offline-identical` learns
-    `E2E_COMPARE_SHA256`, a checksum another machine's offline build of
-    the same lock and pool gave; `windows-build` prints the one to pass.
-    Run both ways.
+34. **The promise of decision 5, kept tested: a scenario,
+    `cross-host-identical`.** It takes one lock and its pool, made online
+    once, and builds them offline twice: once in the Windows guest
+    through `frostroot.exe`, once on a Linux host with the Linux binary
+    of the same release; it passes only if the two outputs have one
+    SHA-256, and it prints both. Since one machine cannot be both, it
+    runs in two halves that meet in a file: the Linux half
+    (`scripts/e2e/run.sh cross-host-identical`) writes the lock, the pool
+    and its checksum to a directory under `/var/tmp`, and the Windows
+    half (the same scenario from Git Bash with `E2E_FROSTROOT` naming
+    `frostroot.exe` and `E2E_CROSS_HOST_FROM` naming that directory,
+    carried over) builds and compares. It checks its own results, as
+    every scenario does, for `E2E_DISTRO=ubuntu` and `fedora` and
+    `E2E_TARGET=disk`; a target that fails it is not named for Windows.
+    **Where it runs, while CI is off:** by hand, the Linux half in the
+    project's test VM and the Windows half on the Windows machine, for
+    every pull request that touches the launcher, the guest image, the
+    guest's lock or `internal/builder`, and for every release; the pull
+    request says it ran and both checksums. When Actions is on, the Linux
+    half can run in CI; the Windows half stays by hand until a runner can
+    boot the guest. `scripts/e2e/README.md` and AGENTS.md's scenario list
+    say all of this.
 35. **Fedora and disks**, which spike 5 cleared: `windows-build` with
     `E2E_DISTRO=fedora` and with `E2E_TARGET=disk`.
-36. **Proof.** `windows-build` on the Windows machine; `offline-identical`,
+36. **Proof.** `windows-build` and `cross-host-identical` for each
+    target, both halves; `offline-identical`,
     `no-build-leaks` and `failed-build` in the test VM, unchanged, since
     the builder was touched by task 27; `wsl-boot` on a machine that has
     WSL, with a tarball built on one that has not, which is the owner's
@@ -314,9 +334,13 @@ Nothing calls it yet.
     now run without the wrappers. The rules gain: the launcher never
     reads inside an image; only the listed variables cross to the guest;
     `build` never downloads the guest; QEMU is ended only after the
-    guest's build has exited. The scenario list gains `windows-build`.
+    guest's build has exited; an offline build in the guest is the bytes
+    an offline build on Linux writes, and `cross-host-identical` says so.
+    The scenario list gains `windows-build` and `cross-host-identical`,
+    with when to run each.
 41. **The record and the version.** `docs/VERIFICATION.md` gets what ran,
-    after it ran. `builder.Version` becomes what the owner named. Pushing
+    after it ran, with `cross-host-identical`'s two checksums for each
+    target. `builder.Version` becomes what the owner named. Pushing
     the tag stays the owner's, after their own build on a Windows machine
     that has never had WSL.
 

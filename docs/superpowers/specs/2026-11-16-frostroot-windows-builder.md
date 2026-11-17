@@ -1,9 +1,9 @@
 # frostroot: building on Windows without WSL
 
 Date: 2026-11-16
-Status: **decisions 1, 2, 3, 4, 6 and 7 answered by the owner on
-2026-11-17, and the spike run the same day** (see "Spike: run on
-2026-11-17"); decisions 5 and 8 are open, and no code is written. The
+Status: **decisions 1 to 7 answered by the owner on 2026-11-17, and the
+spike run the same day** (see "Spike: run on 2026-11-17"); decision 8 is
+open, and no code is written. The
 owner asked for a `frostroot.exe` that works on a Windows machine with no
 WSL at all, by bringing a small Linux of its own to build in. This
 document compares the ways to do that, recommends one, and records the
@@ -322,10 +322,16 @@ is the one that brings the logs back.
   reached 20 GB). All three were built so in the spike (**verified**,
   spikes 4, 5 and 11). Whether the first version names Fedora and disk
   recipes, or must have them working before it ships, is decision 8.
-- Two offline builds of one lock on Windows are byte-identical with each
-  other (**verified** for all three, spikes 4 and 5). That they are the
-  bytes a Linux host writes was measured for Ubuntu (spike 4) and is
-  promised only if the owner chooses to (decision 5).
+- **Two offline builds of one lock are the same bytes whether built in
+  the Windows guest or on a Linux host** (decision 5). Spike 4 measured
+  it so for an Ubuntu WSL lock: two offline builds as root in the guest
+  and one unprivileged on Linux wrote one tarball. Within Windows, two
+  offline builds of one lock were byte-identical for all three targets
+  (spikes 4 and 5); a Fedora or disk lock has not yet been compared
+  across the two hosts, and the scenario of the plan's task 34 compares
+  each before a version names that target for Windows. Online builds
+  are not promised to match, on either host or across them, as frostroot
+  promises nothing of them today.
 - Without acceleration, on a machine like this one, with the guest at 4
   processors and 2 GiB: a boot of about 45 seconds to the guest's
   answer, then, measured in the guest, an online Ubuntu build of a
@@ -346,7 +352,9 @@ From AGENTS.md's "Rules that are easy to break":
   the Windows side tars, and `frostroot guest` moves named files, not a
   tree.
 - **The host's environment must not change the result.** Windows'
-  environment does not reach the guest: only the listed variables cross.
+  environment does not reach the guest: only the listed variables cross,
+  and an offline build in the guest is the bytes an offline build on
+  Linux writes (decision 5).
   The VM's memory, processor count and accelerator are host facts too,
   and spike 8 checks that they change no byte.
 - **Every value that reaches a shell is validated and quoted.** The
@@ -454,7 +462,7 @@ VM, if the two did not fit. They fitted.
 | 1. The key | **Passed.** All three credentials (`ssh.authorized_keys.root`, `tmpfiles.extra`, `passwd.hashed-password.builder`) arrived through `-smbios type=11,path=FILE`, each file holding `io.systemd.credential.binary:NAME=BASE64`; `systemd-creds` listed them; root logged in with the per-boot key while its password stayed locked (`passwd -S root`: `L`); the user's password was set from the credential (`P`), so the first-boot prompt did not wait. | The guest is a plain frostroot disk recipe; nothing of frostroot is in the image. Credentials stay off the command line. |
 | 2. The host key | **Passed.** `tmpfiles.extra` with two `f~` lines (base64) wrote the ed25519 host key at 18.2 s of the boot; sshd started at 24.4 s; the client, with `StrictHostKeyChecking=yes` and only that key known, connected on its first try. No other host key existed, so the image's own first-boot `ssh-keygen` made none. | The client pins the host key; no first-key-wins. |
 | 3. Boot time | See "Spike 3" below. | Whether a direct kernel boot is needed. |
-| 4. Bytes | **All three equal.** One Ubuntu 24.04 lock (`git`, `curl`, 260 packages, a 95 MB pool), made online in the test VM: rebuilt offline there unprivileged in 691 s, and twice offline as root in the guest in 452 s and 544 s. All three tarballs: `8fc4a571…dd06acbb`, 137 MB; the lock `122b645c…24ef763e` unchanged. | Decision 5 can promise Windows the bytes Linux writes. It is still the owner's. |
+| 4. Bytes | **All three equal.** One Ubuntu 24.04 lock (`git`, `curl`, 260 packages, a 95 MB pool), made online in the test VM: rebuilt offline there unprivileged in 691 s, and twice offline as root in the guest in 452 s and 544 s. All three tarballs: `8fc4a571…dd06acbb`, 137 MB; the lock `122b645c…24ef763e` unchanged. | Decision 5: the owner promised it, for offline builds (below). |
 | 5. Fedora and a disk | Fedora: **passed**. The 24.04 disk: see "Spike 5" below. | Which targets the first version names, and the guest's memory. |
 | 6. The copy | **Passed**, well above the 5 MB/s line: host to guest 17.4 MiB/s for 300 MiB and 23.9 MiB/s for 3 GiB (to the guest's disk, 18.5 and 21.6); guest to host 14.8 and 14.6 MiB/s (to NTFS, 12.6 and 15.1). Incompressible bytes, `cat` at both ends of Git for Windows' OpenSSH; both round trips intact. Copying the 1,208 MB compressed guest out of the test VM the same way: 92 s. | Files go through the SSH session; no second disk. A 3 GiB disk image comes back in about 3.5 minutes. |
 | 7. Ctrl-C and the job object | **Settled, and it needs both.** With QEMU in frostroot's process group, a console Ctrl-C ended QEMU 66 ms after the event, exit status 0, before frostroot could do anything. With `CREATE_NEW_PROCESS_GROUP`, QEMU ignored it and only frostroot received it. A kill-on-close job object ended QEMU whenever frostroot ended, by exiting or by `Stop-Process -Force`; without the job object, QEMU outlived a killed frostroot. | The launcher starts QEMU in a process group of its own and a kill-on-close job object, as designed. |
@@ -582,8 +590,8 @@ touched.
 ## Decisions
 
 The owner answered on 2026-11-17, "go with the recommended ones and run
-the spike", which takes the recommended answer to 1, 2, 3, 4, 6 and 7.
-Decisions 5 and 8 stay open.
+the spike", which takes the recommended answer to 1, 2, 3, 4, 6 and 7,
+and after the spike answered decision 5. Decision 8 stays open.
 
 1. **The way: QEMU, WHPX first and TCG behind it**, behind an interface
    a WSL 2 backend could implement later. Rejected for now: WSL 2 first,
@@ -604,8 +612,15 @@ Decisions 5 and 8 stay open.
    at first use.
 4. **`build` never downloads the guest.** An explicit `guest fetch`, as
    `sudo apt install mmdebstrap` is explicit on Linux.
-5. **Open: what is promised about bytes across Windows and Linux.**
-   Spike 4 says what is true; the promise is the owner's.
+5. **Two offline builds of one lock are the same bytes whether built in
+   the Windows guest or on a Linux host**: answered on 2026-11-17, asked
+   "May the guest builds promise the same bytes on Windows as on Linux
+   (decision 5)?", "Yes, promise it". The scope is what spike 4
+   measured: offline builds, compared for an Ubuntu WSL lock; Fedora and
+   disk locks are compared by the scenario of the plan's task 34 before
+   a version names them for Windows. Online builds are not promised to
+   match. The promise is kept tested, by hand while CI is off, by that
+   scenario.
 6. **`frostroot.exe` is unsigned for the first version**, unless spike 10
    says otherwise.
 7. **The launcher's logic is testable on Linux**, the Windows-only files
