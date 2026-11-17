@@ -154,8 +154,11 @@ step_fuzz() {
 
 step_windows() {
 	# The module must still compile off Linux: the CLI explains on Windows
-	# that the build needs WSL, which it cannot do if it does not compile.
-	GOOS=windows go build ./...
+	# that the build needs WSL, which it cannot do if it does not compile,
+	# and import runs there, calling wslapi.dll from code only a Windows
+	# build compiles. vet reads that code too, and the Windows-only tests
+	# with it, which no step here can run.
+	GOOS=windows go build ./... && GOOS=windows go vet ./...
 }
 
 step_shellcheck() {

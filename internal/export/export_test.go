@@ -91,13 +91,6 @@ func assertStagedBeside(t *testing.T, stagedPath, destinationPath string) {
 	}
 }
 
-// setUmask sets the process umask for the rest of the test.
-func setUmask(t *testing.T, mask int) {
-	t.Helper()
-	previous := syscall.Umask(mask)
-	t.Cleanup(func() { syscall.Umask(previous) })
-}
-
 // renameAcrossFilesystems fails the way os.Rename does when the work directory
 // and dist/ are on different filesystems, the normal case under WSL.
 func renameAcrossFilesystems(oldPath, newPath string) error {

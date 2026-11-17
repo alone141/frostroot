@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -812,8 +811,7 @@ func TestBuildPreflightSeesTheWorkRoot(t *testing.T) {
 func TestBuildWorkDirsReachableWhateverTheUmask(t *testing.T) {
 	// In unshare mode mmdebstrap's root is a subordinate uid, "other" to the
 	// user's files, and it reads the provision script from the stage directory.
-	previousUmask := syscall.Umask(0o077)
-	t.Cleanup(func() { syscall.Umask(previousUmask) })
+	setUmask(t, 0o077)
 
 	options, workRoot := newTestOptions(t)
 	options.KeepWork = true
