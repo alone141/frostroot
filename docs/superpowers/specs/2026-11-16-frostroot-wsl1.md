@@ -210,7 +210,7 @@ executables into the work directory, and tar packs them.
 | `frostroot import` on Windows 10 from version 1709 on | registers the tarball, sets the default user, needs no administrator | `WslRegisterDistribution` and `WslConfigureDistribution` are in `wslapi.dll` on build 17763 (verified). That the call works for an ordinary user from an unsigned program is assumed until experiment A. |
 | A failed import | leaves nothing registered and no install directory | `import` unregisters what it registered. |
 | `frostroot import` on a Windows that has `wsl --import` | works too, not the documented way | Assumed; the function is still exported there. |
-| The imported image is the bytes of the tarball | yes, as far as Windows keeps them | Windows unpacks it. Whether owners, hardlinks and file capabilities survive that is experiment C. |
+| The imported image is the bytes of the tarball | yes, but for two ACL attributes on `/var/log/journal`, and as far as Windows keeps them | `import` registers a copy without the pax records `SCHILY.xattr.system.posix_acl_*`, which WSL 1 refuses (the owner, 2026-11-17); Windows unpacks it. Owners, modes, hardlinks and the file capability survived in experiment C. |
 | A 24.04 or 26.04 image starts on WSL 1 | not promised until experiment C | The spike saw 24.04's dpkg, bash and `sleep` run in a chroot on this kernel, which is encouraging and is not a login. |
 | systemd, and services that need it, on WSL 1 | no | WSL 1. |
 | Upgrading packages inside the distribution on WSL 1 | not promised; `apt upgrade` of systemd is expected to fail | It runs the same post-installation script that failed in the spike. Experiment D. |
@@ -240,9 +240,16 @@ teaches one shape. It:
    the copy, which does the rest. The parent removes the copy
    afterwards. If the base path follows something else, this step is
    whatever experiment A says.
-3. Calls `WslRegisterDistribution(NAME, TARBALL)`. Windows unpacks the
-   tarball; frostroot's code never opens it. That keeps the rule that Go
-   never tars or walks a root file system.
+3. Writes a copy of the tarball into a temporary `.tar.gz` beside the
+   install directory, entry by entry, without the pax records named
+   `SCHILY.xattr.system.posix_acl_*`, which WSL 1's unpacking refuses
+   (experiment A; the owner's decision of 2026-11-17, below). Every
+   other header, every other pax record and every byte of content
+   passes through as mmdebstrap or mkosi wrote it; nothing is unpacked.
+   Then calls `WslRegisterDistribution(NAME, COPY)` and removes the
+   copy, however the call ends. Windows unpacks; frostroot's code makes
+   no tree from an archive and no archive from a tree, which is what
+   the rule that Go never tars or walks a root file system protects.
 4. Reads `[user] default` out of the new distribution's own
    `/etc/wsl.conf`, the file a newer WSL would read, by running `cat`
    there through `WslLaunch`; asks the distribution for that user's uid
@@ -357,10 +364,15 @@ inherited it. With no build on WSL 1 it matters in three smaller places:
 **What reaches the image**
 
 - *Only mmdebstrap or mkosi writes the tarball; Go never tars, walks or
-  deletes a root filesystem.* Kept, and the reason `import` hands the
-  tarball to Windows whole. The rule gains a sentence: `import` never
-  reads inside the tarball. Writing the registry keys and unpacking by
-  hand was rejected for this.
+  deletes a root filesystem.* Kept in what it protects, and the reason
+  Windows does the unpacking. Its wording changes with the
+  implementation, not before (the owner, 2026-11-17): Go never makes an
+  archive from a tree or a tree from an archive. `import` copies the
+  tarball entry by entry and drops only the pax records named
+  `SCHILY.xattr.system.posix_acl_*`; it decides no owner, mode, link or
+  capability, and a test holds every other header and record to the
+  bytes it had. Writing the registry keys and unpacking by hand was
+  rejected for this.
 - *Every value that reaches a shell is validated and quoted.* `import`
   passes the name and the paths to Windows calls as arguments, never
   through a command line it assembles. The two commands it runs inside
@@ -1091,9 +1103,10 @@ reconfigure the same way.
      named `SCHILY.xattr.system.posix_acl_*`, and registers that. No
      file is unpacked and no owner, mode, link or capability is
      decided by Go: every header passes through as mmdebstrap wrote
-     it. This is what this document proposes, with the rule reworded
-     to say what it protects: Go never *makes* an archive from a tree
-     or a tree from an archive.
+     it. **This is what the owner chose on 2026-11-17** ("Yes, copy
+     and strip"), with the rule reworded, when `import` is written, to
+     say what it protects: Go never *makes* an archive from a tree or
+     a tree from an archive.
   2. `build` gains a way to leave the ACLs out. It changes the bytes
      of images, or adds a recipe field, for the sake of one old
      Windows.
@@ -1124,11 +1137,15 @@ import command in that plan?", "Yes, import only".
 
 ## Open questions for the owner
 
-1. **How `import` gets rid of the two ACL attributes** that WSL 1
-   refuses: an entry-by-entry copy of the tarball that drops only those
-   pax records, with the rule in AGENTS.md reworded to allow it (this
-   document's proposal), or one of the other two ways under "What these
-   results change".
+1. ~~How `import` gets rid of the two ACL attributes that WSL 1
+   refuses.~~ Answered on 2026-11-17: asked "Should import strip the
+   two ACL attributes by copying the tarball entry by entry?", the
+   owner answered "Yes, copy and strip". So it is the first way under
+   "What these results change": a copy written entry by entry into a
+   temporary `.tar.gz` beside the install directory, without the pax
+   records named `SCHILY.xattr.system.posix_acl_*`, and that copy
+   registered. The rule in AGENTS.md is reworded when `import` is
+   written, not before.
 2. **Should `import` hold the systemd package** in what it registers on
    a Windows with WSL 1 only, or is a README warning enough? This
    document proposes the warning.

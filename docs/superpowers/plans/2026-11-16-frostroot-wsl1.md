@@ -34,7 +34,11 @@ by a byte.
 - **One binary for Windows, with `import`**, built from the same module
   and published, summed and attested beside the Linux one. Proposed in
   the spec; the owner's to confirm.
-- **Windows unpacks the tarball**; frostroot's code never opens it.
+- **Windows unpacks the tarball.** `import` hands it a copy made entry
+  by entry without the pax records named
+  `SCHILY.xattr.system.posix_acl_*`, which WSL 1 refuses (the owner,
+  2026-11-17: "Yes, copy and strip"). Nothing is unpacked by frostroot,
+  and every other header and record passes through byte for byte.
 - **No recipe field and no lock field.** The form, the plain interface
   and every lock are untouched.
 - **`wsl --import` stays what the README teaches** for a Windows that
@@ -61,8 +65,9 @@ results" has them. For this plan:
   binary into it, run the copy, remove it afterwards.
 - A tarball as frostroot builds it is refused, for two POSIX ACL
   attributes on `/var/log/journal`; without them 24.04 and 26.04 both
-  register in about 15 s and log in. Task 7 gains a step, pending the
-  owner's answer to the spec's first question.
+  register in about 15 s and log in. Task 7 gains a step, the copy
+  without them, which the owner chose on 2026-11-17; task 10 rewords
+  the rule in AGENTS.md that it meets.
 - Reinstalling systemd inside such a distribution fails and leaves apt
   exiting with an error from then on; the umask is 0000. Both go into
   the README in pull request 6.
@@ -117,20 +122,33 @@ results" has them. For this plan:
    empty), the name not registered; copy the binary into the install
    directory and continue from the copy, since Windows puts the file
    system beside the calling executable; write a copy of the tarball
-   there without the pax records `SCHILY.xattr.system.posix_acl_*`,
-   entry by entry, every other header and every byte of content as it
-   was, nothing unpacked (if the owner agrees to this way); register
-   that copy and remove it; read the default user from the distribution's
+   into a temporary `.tar.gz` beside the install directory without the
+   pax records named `SCHILY.xattr.system.posix_acl_*` (the owner,
+   2026-11-17). The copy goes block by block, not through a tar writer
+   that would encode headers its own way: every 512-byte block passes
+   through as read, except a pax extended header that holds such a
+   record, which is written again with the same records in the same
+   order less those, its size and checksum recomputed, and left out
+   whole if nothing remains in it. Nothing is unpacked, and a tarball
+   with no such record comes out equal to the original once
+   decompressed. Register that copy and remove it, however the call
+   ends; read the default user from the distribution's
    `/etc/wsl.conf`, hold it to the recipe's user-name pattern, ask for
    its uid, configure; on any failure after registering, unregister.
    Never prompts; exit 0, 1 or 2; on anything but Windows, exit 1 naming
    the Windows binary. Tests: every refusal; the order of calls;
-   unregistering after a failed configure; the filtered copy of a
-   fixture tarball equal to the original in every entry's name, type,
-   owner, mode, time, link target, device numbers, content and
-   remaining pax records, with hardlinks still hardlinks and
-   `security.capability` kept, and a fuzz target for the filter, which
-   reads a file a user hands over; a hostile `wsl.conf` (a user
+   unregistering after a failed configure; the copy removed after a
+   failed register; for the copy, a fixture tarball with a device
+   entry, a hardlink, a long name, `security.capability` and both ACL
+   records: decompressed, the copy equals the original byte for byte
+   in every header block, every other pax record and every content
+   block, the only difference being the two records gone and the size
+   and checksum of the header that held them, with a pax header that
+   held nothing else gone whole; a fixture with no ACL record comes out
+   identical; a truncated or malformed tarball is refused, exit 1, with
+   no copy left; and a fuzz target for the copy, which reads a file a
+   user hands over. `scripts/mutate.sh --sed` on the record's name
+   pattern, the result in the commit body. A hostile `wsl.conf` (a user
    name with a quote or a newline, a section that is not `[user]`, no
    file, which leaves root the default and says so); the usage text. A
    fuzz target for the `wsl.conf` reader, since it parses what an image
@@ -148,8 +166,14 @@ results" has them. For this plan:
    name both commands: `wsl --import`, and `frostroot import` for a
    Windows without it. Tests: the hint tests in `internal/cli` gain the
    line; nothing else in them moves.
-10. **The README and the usage text, together.** Commands table, Quick
-    start's import lines, Install.
+10. **The README and the usage text, together; and the rule in
+    AGENTS.md.** Commands table, Quick start's import lines, Install.
+    The tarball rule under "What reaches the image" is reworded in this
+    pull request, with the code that meets it and not before: Go never
+    makes an archive from a tree or a tree from an archive; `import`
+    copies a tarball block by block and drops only the pax records
+    named `SCHILY.xattr.system.posix_acl_*`, and the test of task 7
+    is named there as what holds it to that.
 11. **Proof.** `scripts/check.sh` in the VM. On the Windows host: the
     binary imports a tarball built in the VM, `wsl -d NAME` logs in as
     the recipe's user, `wslconfig /u NAME` removes it; an import of a
@@ -194,9 +218,8 @@ results" has them. For this plan:
     found: the umask a login gets, and upgrading systemd); "Deliberately not yet", where "a native Windows binary"
     becomes what is still missing, agreed with the sibling plan; the
     Documentation table.
-18. **AGENTS.md.** The module's Windows binary and what it does; the
-    tarball rule's new sentence (`import` hands the tarball to Windows
-    and never reads inside it); the package boundary of
+18. **AGENTS.md.** The module's Windows binary and what it does (the
+    tarball rule was reworded in task 10); the package boundary of
     `internal/wslapi`; the scenario list.
 19. **`docs/VERIFICATION.md`.** One paragraph, written after the runs.
 20. **The version**, if the owner decides this is a release.
