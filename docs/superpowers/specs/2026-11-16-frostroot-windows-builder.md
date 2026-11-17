@@ -543,6 +543,19 @@ The `frostroot.exe` of spike 10 was cross-compiled with `-trimpath` from
 the test VM's checkout at `f13f09a`, a master commit before the release
 that reports 0.15.1, SHA-256 `39f1e6d3…0d65b687`.
 
+**Removed on 2026-11-17, on the owner's word** ("remove the spike folder
+when it's done"): no guest of the spike was running, every overlay had
+been deleted as its run was read, and the whole
+`%USERPROFILE%\frostroot-winbuild-spike` was then deleted, 3.0 GB with
+the raw guest image, which gave C: 29,331 MiB free before and 32,346 MiB
+after. What ran is in this section and in the sources beside this file;
+the guest and every lock can be built again in the test VM from the draft
+recipe. The spike's working copy inside the test VM,
+`/var/tmp/frostroot-winbuild-spike` (3.3 GB: the guest image, its
+compressed copy and the Ubuntu lock's pool), was left there, since the
+owner's word named the Windows folder; nothing else of the test VM was
+touched.
+
 
 ## Risks
 
