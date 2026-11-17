@@ -479,6 +479,9 @@ func TestImportUnregistersAfterAFailure(t *testing.T) {
 		{"wsl.conf unreadable", func(f *fakeWSL) {
 			f.launches[wslConfCommand] = fakeLaunch{err: &wslapi.HRESULTError{Function: "WslLaunch", Code: 0x80004005}}
 		}, "reading /etc/wsl.conf"},
+		{"no command running in the distribution", func(f *fakeWSL) {
+			f.launches[wslConfCommand] = fakeLaunch{exitCode: 1<<32 - 1}
+		}, "ran no command (cat /etc/wsl.conf exited 4294967295)"},
 		{"id -u failing", func(f *fakeWSL) {
 			f.launches["id -u student"] = fakeLaunch{output: "id: 'student': no such user\n", exitCode: 1}
 		}, "has no user student"},

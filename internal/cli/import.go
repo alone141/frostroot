@@ -25,8 +25,10 @@ Register TARBALL, a .tar.gz that frostroot build wrote, as the WSL
 distribution NAME, with its file system in INSTALL-DIR: what
 wsl --import NAME INSTALL-DIR TARBALL does, for a Windows without
 wsl --import (Windows 10 before version 1903, or a machine with only WSL 1).
-Run it there as the Windows binary, frostroot-windows-amd64.exe; it needs no
-administrator. Never prompts.
+Run it there as the Windows binary, frostroot-windows-amd64.exe, from
+PowerShell or cmd and not from a shell inside a WSL distribution, which such
+a Windows starts no other distribution from; it needs no administrator.
+Never prompts.
 
 INSTALL-DIR must not exist yet, or be empty, and the directory it goes in
 must exist. import writes a copy of TARBALL beside INSTALL-DIR without the
@@ -70,6 +72,10 @@ const launchTimeout = 2 * time.Minute
 
 // wslConfCommand is how import reads the image's own wsl.conf.
 const wslConfCommand = "cat /etc/wsl.conf"
+
+// catFailedStatus is how cat exits when it cannot read its file, a missing
+// one included. Any other failure is not cat's.
+const catFailedStatus = 1
 
 // rootUserName is the user a distribution starts as until it is configured.
 const rootUserName = "root"
@@ -477,9 +483,18 @@ func (a *App) configureDefaultUser(ctx context.Context, name string) (string, er
 	if err != nil {
 		return "", fmt.Errorf("reading /etc/wsl.conf: %w", err)
 	}
-	if status != 0 {
+	switch status {
+	case 0:
+	case catFailedStatus:
 		a.stderrf("warning: /etc/wsl.conf could not be read (cat exited %d), so the distribution starts as root\n", status)
 		return rootUserName, nil
+	default:
+		// Not cat's own failure: the command did not run. On Windows 10
+		// 1809, import started from a shell inside one distribution
+		// registered the new one, and every command in it then exited
+		// 4294967295; that must not pass for a success that left root the
+		// default.
+		return "", fmt.Errorf("the new distribution ran no command (cat /etc/wsl.conf exited %d); Windows 10 before version 1903 starts no distribution from inside another, so if import was started from a WSL shell, start it from PowerShell or cmd instead", status)
 	}
 	defaultUser, found := wslConfDefaultUser(output)
 	if !found {

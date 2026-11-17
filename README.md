@@ -336,7 +336,10 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 `apt install` working against the same three pockets the image was built from.
 
 On a Windows without `wsl --import`, copy the tarball over and register it
-with the Windows binary instead, as an ordinary user:
+with the Windows binary instead, as an ordinary user, from PowerShell or
+`cmd` (not from a shell inside a WSL distribution: such a Windows starts no
+distribution from inside another, and `import` runs two commands in the
+new one):
 
 ```powershell
 .\frostroot-windows-amd64.exe import cpp-lab C:\wsl\cpp-lab cpp-lab-ubuntu-22.04-amd64.tar.gz
