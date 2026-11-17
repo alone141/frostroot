@@ -1146,25 +1146,40 @@ import command in that plan?", "Yes, import only".
    records named `SCHILY.xattr.system.posix_acl_*`, and that copy
    registered. The rule in AGENTS.md is reworded when `import` is
    written, not before.
-2. **Should `import` hold the systemd package** in what it registers on
-   a Windows with WSL 1 only, or is a README warning enough? This
-   document proposes the warning.
+2. ~~Should `import` hold the systemd package, or is a README warning
+   enough?~~ Answered on 2026-11-17 by the owner, for this and the
+   questions below that this document had a proposal for: "go with the
+   recommended ones for #172, and do not ask me until they are done".
+   So the README warns, and `import` holds nothing.
 3. ~~May the three spike distributions be removed?~~ Answered on
    2026-11-17: the owner said to remove them if nothing needed them,
    and they are gone, with `%USERPROFILE%\frostroot-spike`.
-4. **One Windows binary with `import`, or a separate small launcher?**
-   This document proposes the first, shared with pull request #173.
-5. **Which goes first**, this or the Windows builder? Whichever does
-   carries the release changes.
-6. **Signing**: unsigned for now, for both plans? The unsigned test
-   program ran here without objection.
-7. **Is the Ubuntu 24.04 registration that does not start** on this
-   machine safe to unregister, or is it someone's? Nothing here needs
-   it gone.
-8. **The version number.**
+4. ~~One Windows binary with `import`, or a separate small launcher?~~
+   Answered on 2026-11-17 by the owner, with the same words: one
+   binary, as this document proposed, shared with pull request #173.
+5. ~~Which goes first, this or the Windows builder?~~ This document
+   had no proposal, and the owner did not choose. **The session that
+   coordinates this work chose a default on 2026-11-17, not the
+   owner:** this goes first and carries the release changes. The owner
+   may still turn it round.
+6. ~~Signing: unsigned for now, for both plans?~~ Answered on
+   2026-11-17 by the owner, with the same words: unsigned, for both.
+7. ~~Is the Ubuntu 24.04 registration that does not start safe to
+   unregister?~~ No proposal here and no answer from the owner. **The
+   coordinating session's default, not the owner's:** it stays
+   registered; nothing needs it gone.
+8. ~~The version number.~~ No proposal here and no answer from the
+   owner. **The coordinating session's default, not the owner's:** the
+   version this would be released as is 0.16.0, and none of the plan's
+   pull requests changes `builder.Version` or pushes a tag. Releasing
+   stays the owner's decision.
+
+Nothing is open. Three of the eight were settled by a default the owner
+has not confirmed: 5, 7 and 8.
 
 ## What follows
 
-The owner's answers above; then the plan in
+The plan in
 [`../plans/2026-11-16-frostroot-wsl1.md`](../plans/2026-11-16-frostroot-wsl1.md),
-which the experiments' results have already revised.
+which the experiments' results and these answers have revised. The
+owner asked for it to be carried through.

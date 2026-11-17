@@ -18,7 +18,8 @@ task ends with `scripts/check.sh` clean and its own commit as `alone141`
 following `CONTRIBUTING.md`; a fix inside a task comes with a test that
 fails without it, proven with `scripts/mutate.sh`. CI is off at the
 owner's choice, so each pull request lists what ran by hand and says once
-that CI could not run. The version is the owner's to number.
+that CI could not run. No pull request here changes `builder.Version`
+or pushes a tag: releasing is the owner's decision.
 
 **Goal:** `frostroot import NAME INSTALL-DIR TARBALL`, from a Windows
 binary published with each release, registers a tarball on Windows 10
@@ -32,8 +33,19 @@ by a byte.
 - **No build on WSL 1** (the owner, 2026-11-16). `build` there is
   refused as today, for every family and target, as root too.
 - **One binary for Windows, with `import`**, built from the same module
-  and published, summed and attested beside the Linux one. Proposed in
-  the spec; the owner's to confirm.
+  and published, summed and attested beside the Linux one, unsigned
+  (the owner, 2026-11-17: "go with the recommended ones for #172, and
+  do not ask me until they are done").
+- **A README warning, not a hold.** `import` does not hold the systemd
+  package in what it registers; the README says what upgrading it does
+  under WSL 1 (the owner, the same words).
+- **Three defaults the owner has not confirmed**, chosen on 2026-11-17
+  by the session that coordinates this work where the spec had no
+  proposal: this work goes before the Windows builder of pull request
+  #173 and carries the release changes; the `Ubuntu-24.04`
+  registration that does not start on the test machine stays; and the
+  version this would be released as is 0.16.0, with no version change
+  and no tag in these pull requests.
 - **Windows unpacks the tarball.** `import` hands it a copy made entry
   by entry without the pax records named
   `SCHILY.xattr.system.posix_acl_*`, which WSL 1 refuses (the owner,
@@ -222,7 +234,9 @@ results" has them. For this plan:
     tarball rule was reworded in task 10); the package boundary of
     `internal/wslapi`; the scenario list.
 19. **`docs/VERIFICATION.md`.** One paragraph, written after the runs.
-20. **The version**, if the owner decides this is a release.
+20. **Not the version.** It would be 0.16.0, a default the owner has
+    not confirmed; `builder.Version` and the tag change when the owner
+    decides to release, in a pull request of its own.
 
 ## What each pull request needs run, in one place
 
