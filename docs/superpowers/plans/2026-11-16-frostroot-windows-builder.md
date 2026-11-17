@@ -6,10 +6,15 @@ brings the lock and the image back. The spec, with the comparison of the
 ways, the rules it touches and the decisions it asks of the owner, is
 [`2026-11-16-frostroot-windows-builder.md`](../specs/2026-11-16-frostroot-windows-builder.md).
 
-**This plan is a draft. The spec's spike has NOT been run and the owner
-has answered none of its decisions.** Pull request 0 is the spike; what it
-finds may reorder or remove what follows, and the plan is rewritten then,
-with "(As built: …)" notes later, as the earlier plans have them.
+**The owner answered decisions 1, 2, 3, 4, 6 and 7 on 2026-11-17, and
+the spike ran the same day** (the spec's "Spike: run on 2026-11-17");
+this plan is revised to what it found, and "(As built: …)" notes come as
+the code does, as the earlier plans have them. Decisions 5 (the promise
+about bytes across Windows and Linux) and 8 (the version, and whether
+Fedora and disk recipes must work first) are open; nothing below waits on
+them until pull request 5. Decision 3 leaves one question open that
+blocks publishing, not building: whether Canonical's policy allows the
+project to publish an Ubuntu-derived guest image.
 
 The work goes in eight pull requests, one after the other, each opened
 once the one before has merged. Every task ends with `scripts/check.sh`
@@ -24,38 +29,44 @@ once that CI could not run.
 builds of one lock are the same bytes; and no Linux recipe, lock or image
 changes by a byte.
 
-## What this assumes the owner will answer
+## What the owner answered
 
-The recommended answer to each of the spec's decisions: QEMU with WHPX
-first and TCG behind it; a QEMU the user already has; frostroot's own
-disk image as the guest; an explicit `guest fetch`; an unsigned
-`frostroot.exe`; Windows-only code kept thin and checked by hand. A
-different answer to decision 3 (Canonical's cloud image) replaces pull
-request 4 and leaves the rest; a different answer to decision 1 (WSL 2
-first) replaces pull request 3.
+The recommended answer to each of decisions 1, 2, 3, 4, 6 and 7, "go
+with the recommended ones and run the spike": QEMU with WHPX first and
+TCG behind it, behind an interface a WSL 2 backend could implement
+later; a QEMU the user already has, nothing redistributed; frostroot's
+own disk image as the guest; an explicit `guest fetch`; an unsigned
+`frostroot.exe` for the first version; launcher logic tested on Linux,
+Windows-only files small and checked by hand. If the Canonical question
+of decision 3 is answered against publishing the image, Canonical's
+cloud image replaces pull request 4 and leaves the rest.
 
 ## What is not done
 
 - `capture` on Windows, the full-screen build screen on Windows, a QEMU
   that frostroot ships or fetches, a WSL 2 or container backend, the
   import into WSL, Windows on arm64.
-- Fedora and disk recipes on Windows, unless spike 5 says they hold; then
-  they join pull request 6's scenarios, and otherwise `build` refuses
-  them on Windows with exit 1.
+- Nothing of a target: spike 5 built Fedora for WSL and an Ubuntu disk in
+  the guest, online and offline, so all three targets go through the
+  launcher, unless the owner's answer to decision 8 holds some back for a
+  later version; `build` then refuses those on Windows with exit 1.
 
-## Pull request 0: the spike, and the decisions
+## Pull request 0: the spike, and the decisions (done)
 
-No code.
+No code. This pull request, #173.
 
-1. **Run the spec's twelve experiments**, in its order, on the Windows
-   machine with its QEMU 11.1.0 and a guest built in the test VM from a
-   draft recipe. Spikes 1 and 4 first: either can end the design.
-2. **Write the results into the spec**, under "Spike results" with the
-   date, the machine and what was not measured, as the Fedora and
-   bare-metal specs do; turn each **assumed** it settles into
-   **verified**, or strike what it disproved.
-3. **The owner's answers** to the eight decisions, recorded in the spec.
-4. **This plan, rewritten** to what the spike and the answers leave.
+1. **The spec's experiments**, run on 2026-11-17 on the Windows machine
+   with its QEMU 11.1.0 and a guest built in the test VM from a draft
+   recipe: all but 8 (a second machine, with WHPX, the owner's to find)
+   and 12 (the oldest QEMU to support, the owner's to name). None ended
+   the design; spike 4 found Windows and Linux write the same bytes.
+2. **The results in the spec**, and the programs that ran beside it as
+   `.txt` files.
+3. **The owner's answers** to six of the eight decisions.
+4. **This plan, revised.** What changed: the guest's memory and the
+   free-space check (task 29), the credentials' form (task 16), the
+   process group and job object as measured (task 17), the host key
+   pinned from the first connection (task 18), and Fedora and disk recipes, which spike 5 built online and offline in the guest, from refused to built (tasks 29 and 35), unless the owner answers decision 8 otherwise.
 
 ## Pull request 1: Windows, for the commands that need no Linux
 
@@ -132,19 +143,29 @@ Nothing calls it yet.
     non-ASCII letters; nothing of a credential's value among them.
 16. **The overlay and the credentials.** `qemu-img create` with the
     pinned image as backing file; an ed25519 key pair for the client and
-    one for the host, made per build with `crypto/ed25519`; the SMBIOS
-    file with `ssh.authorized_keys.root`, the host key through
-    `tmpfiles.extra` and the password credential. All of it in one
-    directory that is removed on every path. Tests: the file's content
-    for a known key; removal after a failure at each step.
-17. **Starting and ending QEMU.** A process group of its own on every
-    system; on Windows a job object that ends it with frostroot.exe
-    (`vm_windows.go`, as small as it can be); a forwarded port chosen
-    free, and chosen again when QEMU says it could not bind. Ending is
-    asked through the SSH session first and then by ending the process.
+    one for the host, made per build with `crypto/ed25519`; one file per
+    credential, each `io.systemd.credential.binary:NAME=BASE64`, named by
+    its own `-smbios type=11,path=`: `ssh.authorized_keys.root`,
+    `tmpfiles.extra` with two `f~` lines writing the host key and its
+    public half, and `passwd.hashed-password.<user>` with a hash of
+    random bytes nobody keeps, as the spike passed them. A copy of
+    QEMU's `edk2-i386-vars.fd` per boot. All of it in one directory that
+    is removed on every path. Tests: the files' content for a known key,
+    and the `tmpfiles.extra` lines decoded back to the key; removal after
+    a failure at each step.
+17. **Starting and ending QEMU.** On Windows, `CREATE_NEW_PROCESS_GROUP`
+    and a job object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, both:
+    spike 7 found QEMU in frostroot's group dies of the console's Ctrl-C
+    at once, and without the job object outlives a killed frostroot
+    (`vm_windows.go`, as small as it can be); elsewhere a process group of
+    its own. A forwarded port chosen free, and chosen again when QEMU says
+    it could not bind. Ending is asked through the SSH session first and
+    then by ending the process. The Windows half is checked by hand with
+    the spike's four cases, which a person at a console can repeat.
 18. **`internal/remote`: the session.** `golang.org/x/crypto/ssh`,
     imported here and nowhere else: connect to the loopback port until
-    the boot timeout, accept the pinned host key only, run one command
+    the boot timeout, accept the pinned host key only (spike 2 found it
+    in place before sshd starts, so there is no first-key-wins), run one command
     with its output streamed and its exit status returned, send SIGINT.
     Tests against the library's own server on loopback: a wrong host key
     is refused; an exit status of 2 and of 130 come back as they are; a
@@ -206,13 +227,25 @@ Nothing calls it yet.
     parsed values and the listed environment; relay the lines; bring the
     outputs back and check them; parse the lock as hostile input; place
     them with task 27; on failure bring the logs back; end the guest and
-    remove the overlay and the keys on every path.
+    remove the overlay and the keys on every path. Before QEMU starts,
+    the host check refuses (exit 1) less free disk than the build needs,
+    which spike 5 measured (the spike did not isolate one build's peak, since its guest ran nine
+    builds into one overlay that reached 20 GB; the floor is the
+    largest overlay of a single online build of each target, measured
+    when this task is built, plus the outputs, and the scenario of task
+    33 checks it), since an overlay on NTFS grows and
+    never shrinks; and it gives the guest 2 GiB, as the spike did with room to spare (its builds used 516 MiB at most), unless
+    `FROSTROOT_VM_MEMORY` says otherwise. A proxy variable naming
+    `127.0.0.1` or `localhost` is rewritten to `10.0.2.2`, which spike 11
+    found is how the guest reaches the host's loopback, and the rewrite is
+    printed without the variable's credentials.
 29. **`internal/cli`.** On Windows `build` calls the launcher where it
     calls the builder on Linux, prints through the same plain progress,
     and returns the guest's exit code. The new sentinel errors join
     `reportBuildFailure`'s `errors.Is` list. `--keep-work` keeps the
-    overlay and says where. A Fedora or disk recipe is refused with exit
-    1 unless the spike cleared it. The WSL import hint prints the Windows
+    overlay and says where. Fedora and disk recipes go through as Ubuntu
+    WSL ones do, as spike 5 found they can, unless decision 8 holds one
+    back. The WSL import hint prints the Windows
     path it already has.
 30. **Tests, with a fake guest in the test file.** The exit code of each
     of 0, 1, 2 and 130 passed through; each launcher failure of the
@@ -248,9 +281,8 @@ Nothing calls it yet.
     `E2E_COMPARE_SHA256`, a checksum another machine's offline build of
     the same lock and pool gave; `windows-build` prints the one to pass.
     Run both ways.
-35. **Fedora and disks**, if the spike cleared them: `windows-build`
-    with `E2E_DISTRO=fedora` and with `E2E_TARGET=disk`, and task 29's
-    refusal lifted for what passed.
+35. **Fedora and disks**, which spike 5 cleared: `windows-build` with
+    `E2E_DISTRO=fedora` and with `E2E_TARGET=disk`.
 36. **Proof.** `windows-build` on the Windows machine; `offline-identical`,
     `no-build-leaks` and `failed-build` in the test VM, unchanged, since
     the builder was touched by task 27; `wsl-boot` on a machine that has

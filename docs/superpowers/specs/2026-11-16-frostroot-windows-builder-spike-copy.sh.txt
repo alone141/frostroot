@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+#
+# Spike 6: bytes through an SSH session, both ways.
+# It is the record of what ran in
+# 2026-11-16-frostroot-windows-builder.md, not code frostroot ships: it is
+# kept as .sh.txt so that nothing runs it.
+#
+# Spike 6: bytes through an SSH session into and out of a TCG guest.
+#   spike6.sh RUN
+set -u
+w=$(cd "$(dirname "$0")/.." && pwd)
+cd "$w/run/$1" || exit 2
+g() {
+	ssh -i client -p "${GUEST_PORT:-2223}" -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=yes \
+		-o BatchMode=yes -o LogLevel=ERROR root@127.0.0.1 "$@"
+}
+export -f g
+mib() { echo $(( $1 * 1024 * 1024 )); }
+rate() { # LABEL BYTES SECONDS
+	awk -v l="$1" -v b="$2" -v s="$3" 'BEGIN { printf "%-44s %6d MiB in %5.1f s = %6.1f MiB/s\n", l, b/1048576, s, b/1048576/s }'
+}
+timed() { # LABEL BYTES COMMAND...
+	local label=$1 bytes=$2 start end
+	shift 2
+	start=$(date +%s.%N)
+	"$@"
+	end=$(date +%s.%N)
+	rate "$label" "$bytes" "$(awk -v a="$start" -v b="$end" 'BEGIN { print b - a }')"
+}
+src="$w/images/spike6.bin"
+# Incompressible bytes on the host, made once; ssh compresses nothing by default.
+[ -f "$src" ] || head -c "$(mib 3072)" /dev/urandom > "$src"
+cut_head() { head -c "$1" "$src"; }
+
+timed "host disk read (baseline)" "$(mib 3072)" bash -c "cat '$src' > /dev/null"
+for size in 300 3072; do
+	bytes=$(mib "$size")
+	timed "host -> guest /dev/null, $size MiB" "$bytes" bash -c "head -c $bytes '$src' | g 'cat > /dev/null'"
+	timed "host -> guest disk, $size MiB" "$bytes" bash -c "head -c $bytes '$src' | g 'cat > /var/tmp/in.bin && sync'"
+	g "cp /var/tmp/in.bin /var/tmp/out.bin && sync"
+	timed "guest disk -> host /dev/null, $size MiB" "$bytes" bash -c "g 'cat /var/tmp/out.bin' > /dev/null"
+	timed "guest disk -> host disk, $size MiB" "$bytes" bash -c "g 'cat /var/tmp/out.bin' > '$w/images/spike6.back' && sync"
+	cmp <(head -c "$bytes" "$src") "$w/images/spike6.back" && echo "  round trip of $size MiB intact"
+	g "rm -f /var/tmp/in.bin /var/tmp/out.bin"
+	rm -f "$w/images/spike6.back"
+done
+g 'nproc; uptime'
+rm -f "$src"

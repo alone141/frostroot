@@ -1,0 +1,22 @@
+# The draft guest recipe the spike built with a frostroot 0.15.1 in the
+# test VM: 558 packages, frostroot.lock SHA-256 c5cf66e4…cfc7209f, the raw
+# image c67cdd9a…8acbe2f9. It is the record of what ran in
+# 2026-11-16-frostroot-windows-builder.md, kept as .toml.txt; the plan
+# puts the real one at guest/frostroot.toml.
+
+[image]
+name = "frostroot-guest"
+release = "24.04"
+arch = "amd64"
+target = "disk"
+
+[user]
+name = "builder"
+sudo = true
+
+[locale]
+lang = "C.UTF-8"
+timezone = "UTC"
+
+[packages]
+include = ["mmdebstrap", "uidmap", "ubuntu-keyring", "mkosi", "dnf", "rpm", "createrepo-c", "bubblewrap", "openssh-server"]

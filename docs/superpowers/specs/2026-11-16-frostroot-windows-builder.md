@@ -1,19 +1,19 @@
 # frostroot: building on Windows without WSL
 
 Date: 2026-11-16
-Status: **a draft for the owner. Nothing is decided, no code is written,
-and the spike below has NOT been run.** The owner asked for a
-`frostroot.exe` that works on a Windows machine with no WSL at all, by
-bringing a small Linux of its own to build in. This document compares the
-ways to do that, recommends one, and lists the experiments that must run
-before the plan is trusted. Every statement about a tool says how it is
+Status: **decisions 1, 2, 3, 4, 6 and 7 answered by the owner on
+2026-11-17, and the spike run the same day** (see "Spike: run on
+2026-11-17"); decisions 5 and 8 are open, and no code is written. The
+owner asked for a `frostroot.exe` that works on a Windows machine with no
+WSL at all, by bringing a small Linux of its own to build in. This
+document compares the ways to do that, recommends one, and records the
+experiments that tested it. Every statement about a tool says how it is
 known: **verified** (run for this spec, on the Windows 10 Enterprise LTSC
 2019 machine, build 17763, without admin rights, or recorded as run in
 [`docs/VERIFICATION.md`](../../VERIFICATION.md) or an earlier spec's
 spike), **read** (in the tool's documentation on 2026-11-16, or in this
-repository's code), or **assumed** (neither, and a spike item says how to
-find out). The version this ships in is the owner's to name. The tasks
-are in
+repository's code), or **assumed** (neither). The version this ships in
+is the owner's to name. The tasks are in
 [`2026-11-16-frostroot-windows-builder.md`](../plans/2026-11-16-frostroot-windows-builder.md).
 Extends: [`2026-09-14-frostroot-design.md`](2026-09-14-frostroot-design.md),
 [`2026-09-17-frostroot-vendor.md`](2026-09-17-frostroot-vendor.md) (the
@@ -85,15 +85,15 @@ are not marked verified are estimates.
 |---|---|---|---|---|
 | Admin rights | none: unpacked into the user's profile and run (**verified**: QEMU 11.1.0 here, unpacked with 7-Zip, runs the project's test VM daily) | an administrator must enable the "Windows Hypervisor Platform" feature once (**assumed**: enabling a Windows feature needs elevation; the API exists from Windows 10 1803, **read**) | an administrator must enable WSL 2's features; Windows 10 1903 or newer (**read**, README) | Docker Desktop and Podman run their Linux in WSL 2 or Hyper-V, so the same and more (**assumed**) |
 | Works on the machine at hand | yes (**verified**) | no: `-accel whpx` fails to initialise here and QEMU says "falling back to tcg" (**verified**) | no: WSL 1 only (**verified**) | no (**verified**: none installed) |
-| Speed | a first Ubuntu build takes 10 to 20 minutes in the project's TCG test VM, 8 virtual CPUs and 6 GiB (**verified**, project record); boot to a login prompt 64 s for a frostroot 26.04 disk (**verified**, bare-metal spike, on a Linux host) | near native (**assumed**; cannot be measured here) | native: it is how frostroot is used today (**verified**) | native where it runs (**assumed**) |
+| Speed | the guest answers SSH 43 s after QEMU starts (median of five); in it, an online Ubuntu build of a small recipe took 14 minutes, Fedora 21, an Ubuntu disk 29, and offline rebuilds 7 to 22 (**verified**, spikes 3 to 5, at 4 processors and 2 GiB) | near native (**assumed**; cannot be measured here) | native: it is how frostroot is used today (**verified**) | native where it runs (**assumed**) |
 | What is shipped | `frostroot.exe`, the Linux binary beside it, and a guest image fetched once | the same | `frostroot.exe` and the Linux binary; the distribution is the user's, or a frostroot-built tarball imported as a private one | an image on a registry, or nothing |
 | The guest | a frostroot disk image, built from a recipe and a lock in this repository (below) | the same image | a frostroot WSL tarball of the same recipe, or whatever the user has | a Dockerfile, which pins nothing unless made to |
-| Files across | over the guest's forwarded SSH port (**verified** as a way of working: the test VM is used so); QEMU's own folder sharing (9p) does not work with a Windows host (**assumed**, from memory; the first design does not use it) | the same | `/mnt/c`, but frostroot refuses to build under `/mnt`, so the recipe directory is copied in and the outputs out (**read**, AGENTS.md) | bind mounts through the runtime's VM |
+| Files across | over the guest's forwarded SSH port, 13 to 24 MiB/s each way (**verified**, spike 6); QEMU's own folder sharing (9p) does not work with a Windows host (**assumed**, from memory; the design does not use it) | the same | `/mnt/c`, but frostroot refuses to build under `/mnt`, so the recipe directory is copied in and the outputs out (**read**, AGENTS.md) | bind mounts through the runtime's VM |
 | The corporate CA | `--ca-bundle`'s bytes go over the channel to the build's own `--ca-bundle`; apt, pip and dnf then fetch through QEMU's user-mode network (**verified** in the test VM on this network, `docs/VERIFICATION.md`) | the same | as inside WSL today | the same file, mounted |
 | Ctrl-C and exit codes | frostroot.exe owns both ends: it sends SIGINT over the SSH session and returns the remote exit status (**read**: `Session.Signal`, `ExitError.ExitStatus` in `golang.org/x/crypto/ssh`) | the same | `wsl.exe` passes the exit code; an interrupt reaching the right process group is what `scripts/wsl.sh` exists to get right | the runtime's `stop` signals and exit codes |
 | Licences of what is redistributed | QEMU is not redistributed (decision 2). The guest image is Ubuntu packages: see decision 3 | the same | none, or the same tarball question | the base image's |
 | Trust rules | the guest image and the Linux binary are checksummed by the release binary; QEMU is the machine's own tool, version-checked, as mmdebstrap is on a Linux host | the same | the user's distribution is unpinned, as a Linux host is | a registry tag is a server deciding what is trusted, unless pinned by digest |
-| Byte-identical offline rebuilds | expected, since the same binary reads the same lock and pool with pinned tools; **assumed** until spike 4 compares | **assumed** the same bytes as TCG; spike 8 compares | as today (**verified**) | as on a Linux host, if privileged |
+| Byte-identical offline rebuilds | yes, and for Ubuntu the very bytes an unprivileged Linux build writes (**verified**, spikes 4 and 5) | **assumed** the same bytes as TCG; spike 8 compares | as today (**verified**) | as on a Linux host, if privileged |
 
 **WSL 2 lost** as the first way because the owner asked for no WSL at
 all, and because the machines that have WSL 2 are served already. It is
@@ -162,29 +162,24 @@ a file or a unit, and the design does not add one:
 - **The way in is a credential.** systemd writes the credential
   `ssh.authorized_keys.root` to `/root/.ssh/authorized_keys` (since
   systemd 252, **read**; 24.04 has 255), and QEMU passes credentials as
-  SMBIOS type 11 strings, which `disk-boot` already does for the
-  password (**verified** there). frostroot.exe makes an ed25519 key pair
-  for each build and passes the public half. Root's password stays
-  locked; sshd lets a key in for a locked account when PAM is on
-  (**read**, bare-metal spec). The user's password prompt of a disk image
-  is answered the same way, with the credential the README documents and
-  a hash of random bytes nobody keeps.
+  SMBIOS type 11 strings. frostroot.exe makes an ed25519 key pair for
+  each build and passes the public half. Root's password stays locked,
+  and sshd lets the key in. The user's password prompt of a disk image is
+  answered the same way, with the credential the README documents and a
+  hash of random bytes nobody keeps. (**Verified**, spike 1.)
 - **The Linux binary goes in over that session** and is checked there
   against the SHA-256 the release compiled into `frostroot.exe`. So the
   guest image changes only when its packages do, not with every frostroot
   release, and the two ends of the conversation are always one version.
 - **The build runs as root.** The guest is a single-purpose VM, root needs
   no user namespace, and Ubuntu's AppArmor restriction on mkosi does not
-  apply to root. Whether root and an unprivileged user write the same
-  Ubuntu bytes is spike 4; the Fedora spike found they do once the umask
-  is fixed, which it is.
+  apply to root. Root in the guest and an unprivileged user on Linux
+  wrote the same Ubuntu tarball, byte for byte (**verified**, spike 4).
 
 The image is published as a release asset, gzip-compressed (`gzip -n`, so
 the file is reproducible too; `compress/gzip` reads it on Windows without
-a new dependency). A 26.04 disk with only the base was 1.4 GB on disk in
-the bare-metal spike (**verified**); the guest adds mkosi, dnf and their
-Python, and its size is **assumed** to stay under GitHub's 2 GiB per
-asset (**read**) once compressed. Spike 9 measures it.
+a new dependency): 1.13 GiB, from 2,898 MiB raw (**verified**, spike 9),
+under GitHub's 2 GiB per asset (**read**).
 
 ### QEMU
 
@@ -206,15 +201,17 @@ driver and no rights, with one forward from a loopback port to the guest's
 port 22. No display. The serial console goes to a log file, kept when a
 build fails.
 
-`-accel whpx -accel tcg`, `-cpu max`. Memory and processors default to 4
-GiB and to the host's processors up to 8; `FROSTROOT_VM_MEMORY` and
-`FROSTROOT_VM_CPUS` change them, and must never change the image
-(spike 8).
+`-accel whpx -accel tcg`, `-cpu max`. Memory defaults to 2 GiB, which every build of the spike had with room (spike 5), and
+processors to the host's, up to 4; `FROSTROOT_VM_MEMORY` and
+`FROSTROOT_VM_CPUS` change them, and must never change the image (spike
+4 found 2 GiB and 4 processors in the guest write what 6 GiB and 8 write
+on Linux; spike 8, with WHPX, is open).
 
 QEMU runs in a Windows job object that ends it when frostroot.exe ends,
 however that happens, and in a process group of its own, so that the
-console's Ctrl-C reaches frostroot.exe and not QEMU (**assumed**; spike
-7).
+console's Ctrl-C reaches frostroot.exe and not QEMU. Both are needed: in
+frostroot's group QEMU died of the console's Ctrl-C at once, and without
+the job object it outlived a killed frostroot (**verified**, spike 7).
 
 ### The conversation with the guest
 
@@ -228,15 +225,12 @@ image and what the project already trusts its test VM with. Windows'
 
 - **Who the guest is.** frostroot.exe also makes the guest's host key and
   passes it as the credential `tmpfiles.extra` (systemd 252, **read**),
-  a line that writes `/etc/ssh/ssh_host_ed25519_key`. The client then
-  accepts that key and no other. Whether tmpfiles writes it before sshd
-  starts on this image is spike 2; if it does not, the client accepts the
-  first key the forwarded port shows, which is weaker only against
-  another program on the same machine that takes the port first.
-- **Credentials stay off the command line.** They go in a file in the
-  work directory that `-smbios type=11,path=` names (**assumed**: that
-  this QEMU has the option and that systemd reads it so is spike 1; the
-  fallback is `value=` on the command line, as `disk-boot` passes it).
+  two `f~` lines that write `/etc/ssh/ssh_host_ed25519_key` and its
+  public half. tmpfiles writes them before sshd starts, and the client
+  accepts that key and no other (**verified**, spike 2).
+- **Credentials stay off the command line.** They go in files in the
+  work directory that `-smbios type=11,path=` names, each holding
+  `io.systemd.credential.binary:NAME=BASE64` (**verified**, spike 1).
 - **Files go through frostroot's own framing, not a shell.** The Linux
   binary gains a hidden command, `frostroot guest`, that receives a set
   of files on standard input and sends a set on standard output: a name,
@@ -253,9 +247,11 @@ image and what the project already trusts its test VM with. Windows'
   error and output are relayed line by line.
 - **The environment** is a list: `SOURCE_DATE_EPOCH`, and the proxy
   variables, sent inside the conversation and never printed. A proxy on
-  the host's loopback is reachable from the guest as `10.0.2.2`
-  (**assumed**, QEMU's user-mode network default); frostroot.exe rewrites
-  that one case and says so.
+  the host's loopback is reachable from the guest as `10.0.2.2` and not
+  as `127.0.0.1`, and a whole build ran through one so (**verified**,
+  spike 11); frostroot.exe rewrites that one case and says so.
+- **Files** cross at 13 to 24 MiB/s under TCG, so a 3 GiB disk image
+  comes back in about three and a half minutes (**verified**, spike 6).
 - **What comes back:** on success the lock (online) and the image, each
   with the SHA-256 the guest computed, which frostroot.exe checks as it
   writes. The lock is parsed as hostile input before it is placed, as
@@ -318,26 +314,26 @@ is the one that brings the logs back.
 
 ### What is promised
 
-- An Ubuntu recipe for WSL builds online and offline on Windows 10 1809
-  or newer, amd64, with a QEMU in the measured range, 4 GiB of memory to
-  give the guest and 20 GiB of free disk (both **assumed** until spikes 4
-  and 5 measure them).
+- An Ubuntu or Fedora recipe for WSL, and an Ubuntu disk recipe, build
+  online and offline on Windows 10 1809 or newer, amd64, with a QEMU in
+  the measured range (11.1.0 so far), 2 GiB of memory to give the guest,
+  and the free disk a build needs (task 29 of the plan measures it per
+  target; the spike's one guest ran nine builds into one overlay, which
+  reached 20 GB). All three were built so in the spike (**verified**,
+  spikes 4, 5 and 11). Whether the first version names Fedora and disk
+  recipes, or must have them working before it ships, is decision 8.
 - Two offline builds of one lock on Windows are byte-identical with each
-  other. That they are the bytes a Linux host writes is measured (spike
-  4) and written down, and promised only if the owner chooses to
-  (decision 5).
-- Without acceleration, expect a first Ubuntu build to take 15 to 25
-  minutes: a boot of one to two minutes, the 10 to 20 minutes the test VM
-  takes, and the copy. This is an estimate from the project's own VM,
-  not a measurement of this design.
-
-Not promised until measured: Fedora recipes and disk recipes on Windows.
-Nothing in the design excludes them, since the guest is a whole Linux and
-the build is root's, but a 24.04 disk took 28 minutes to build in the
-TCG test VM (**verified**, `docs/VERIFICATION.md`) and nobody has run
-mkosi under this guest. Spike 5 decides which
-of them the first version names as working, and `build` refuses the rest
-on Windows with exit 1.
+  other (**verified** for all three, spikes 4 and 5). That they are the
+  bytes a Linux host writes was measured for Ubuntu (spike 4) and is
+  promised only if the owner chooses to (decision 5).
+- Without acceleration, on a machine like this one, with the guest at 4
+  processors and 2 GiB: a boot of about 45 seconds to the guest's
+  answer, then, measured in the guest, an online Ubuntu build of a
+  small recipe in about 14 minutes, a Fedora one in 21 and an Ubuntu disk
+  in 29; offline rebuilds in 7 to 9 minutes for either tarball and 19 to
+  22 for the disk; and the outputs back at 13 to 15 MiB/s (**verified**,
+  spikes 3, 4, 5, 6 and 11). WHPX would be faster; by how much is spike 8,
+  not run.
 
 ## The rules this touches
 
@@ -423,72 +419,139 @@ A sibling design covers building inside WSL 1 and importing through
 - **An import step after the build**, which this design leaves to the
   user and that one automates.
 
-## Spike: NOT yet run
+## Spike: run on 2026-11-17
 
-Each experiment, and what its result decides. They need the Windows
-machine, its existing QEMU 11.1.0, and a guest image built in the test VM
-from a draft of `guest/frostroot.toml`; no frostroot code changes. Canonical's
-24.04 cloud image, which the test VM already boots here, stands in where a
-step fails for a reason that is the image's.
+The owner asked for it on 2026-11-17 ("go with the recommended ones and
+run the spike"), and for spikes 8 and 12 to wait (below). It ran on the
+Windows 10 Enterprise LTSC 2019 machine (build 17763, an Intel i7-10700
+with 16 logical processors and 16 GB, no admin rights, no hypervisor
+enabled, endpoint security running) with the QEMU 11.1.0 for Windows
+already unpacked there, beside the project's test VM, which kept running
+throughout (6 GiB, 8 processors, TCG). Nothing was installed on Windows
+and no setting changed. Images and Windows programs were built in the
+test VM; no frostroot code changed. The frostroot that ran, in the VM
+and in every guest, is a 0.15.1 Linux binary the test VM held from
+earlier work, which reports master at `41c8cdd` with uncommitted changes
+(`+dirty`), SHA-256 `096ec72d…7446964a`; it is not the published
+v0.15.1 (`6ff2622b…ef0dd76d`), which was built later from `1e1558b`. The
+spike measured the design, not that build, but a run of the plan's
+scenarios uses a binary built from a commit. The programs and scripts of the spike are
+beside this file as `.txt` files (see "The record").
 
-1. **The stock disk image takes a key.** Boot the draft guest with QEMU
-   for Windows, its bundled edk2 and TCG, passing `ssh.authorized_keys.root`
-   and the password credential in a file through `-smbios
-   type=11,path=`; log in as root with the key. *Decides:* whether the
-   guest can be a plain recipe. If the key does not arrive, the choice is
-   between a recipe field that adds a file (a feature of its own) and
-   Canonical's cloud image with cloud-init (decision 3's other answer).
-2. **The host key from a credential.** Pass `tmpfiles.extra` writing the
-   host key; check sshd presents it. *Decides:* pinned host key, or
-   first-key-wins on loopback.
-3. **Boot time from a fresh overlay**, five times: QEMU start to an SSH
-   answer, with the root grown into 40 GiB. *Decides:* if the median is
-   over three minutes, the plan adds a direct kernel boot (`-kernel`,
-   `-initrd`, two more release assets) before anything else.
-4. **Bytes.** One Ubuntu WSL lock with a pool: two offline builds as root
-   in the guest, and one unprivileged on a Linux host with the same
-   mmdebstrap. *Decides:* the promise. All three equal: Windows and Linux
-   are promised the same bytes (decision 5). The two guest builds equal
-   and the Linux one not: promised within Windows only, and the difference
-   is found before any code. The two guest builds unequal: the design
-   stops here.
-5. **Fedora and a disk in the guest.** One Fedora WSL build and one 24.04
-   disk build, online then offline twice, with time and peak memory.
-   *Decides:* which targets the first version names, and the default
-   memory.
-6. **The copy.** Send 300 MB and 3 GB through an SSH session under TCG,
-   both directions, with `cat` standing in for `frostroot guest`.
-   *Decides:* below 5 MB/s, big files move through a second virtio disk
-   instead, which is a larger plan.
-7. **Ctrl-C and the job object.** A small Go program on Windows starts
-   QEMU in a job object and a process group of its own; press Ctrl-C;
-   kill the program from Task Manager. *Decides:* how the launcher keeps
-   QEMU from outliving it and from dying first.
-8. **The host must not show.** Spike 4's offline build again with 2
-   processors and 3 GiB, and on a machine with the Hypervisor Platform
-   enabled, with WHPX. *Decides:* whether the VM's shape is free or
-   fixed, and what WHPX saves. Needs a second machine, which is the
-   owner's to find.
-9. **The guest's size.** Raw, on disk, and after `gzip -n -9`. *Decides:*
-   one asset or a split; and whether a smaller kernel flavour for a disk
-   recipe is worth a feature.
-10. **A locked-down machine.** Does an unsigned `frostroot.exe`, built by
-    cross-compiling and copied here, run from the user's profile, and
-    does endpoint security leave the overlay and the SSH port alone?
-    *Decides:* whether decision 6 can wait.
-11. **The network.** An online Ubuntu build in the guest through this
-    network with `--ca-bundle`, with and without a proxy variable.
-    *Decides:* the proxy rewriting rule. The test VM has shown the CA
-    half already.
-12. **QEMU versions.** Spikes 1 and 3 again with the oldest QEMU for
-    Windows the owner wants supported. *Decides:* the range.
+The guest was the draft recipe of "The guest is a frostroot disk image",
+built by that binary in the test VM: 558 packages, mmdebstrap 1.4.3, mkosi
+20.2, kernel 6.8.0-149, frozen at 2026-11-17 11:13:01 UTC, in 2,285 s.
+Each boot used a fresh qcow2 overlay of 40 GiB over the raw image, a copy
+of QEMU's own `edk2-i386-vars.fd`, `edk2-x86_64-code.fd`, `q35`, `-cpu
+max`, user-mode networking with one forward from 127.0.0.1:2223, and
+`-accel whpx -accel tcg`, which here always said "falling back to tcg".
+The guests ran with 4 processors and 2 GiB: the host had 1.3 to 2.6 GB
+free beside the test VM, and the brief said to stop the guest, not the
+VM, if the two did not fit. They fitted.
+
+| Spike | Result | Decides |
+|---|---|---|
+| 1. The key | **Passed.** All three credentials (`ssh.authorized_keys.root`, `tmpfiles.extra`, `passwd.hashed-password.builder`) arrived through `-smbios type=11,path=FILE`, each file holding `io.systemd.credential.binary:NAME=BASE64`; `systemd-creds` listed them; root logged in with the per-boot key while its password stayed locked (`passwd -S root`: `L`); the user's password was set from the credential (`P`), so the first-boot prompt did not wait. | The guest is a plain frostroot disk recipe; nothing of frostroot is in the image. Credentials stay off the command line. |
+| 2. The host key | **Passed.** `tmpfiles.extra` with two `f~` lines (base64) wrote the ed25519 host key at 18.2 s of the boot; sshd started at 24.4 s; the client, with `StrictHostKeyChecking=yes` and only that key known, connected on its first try. No other host key existed, so the image's own first-boot `ssh-keygen` made none. | The client pins the host key; no first-key-wins. |
+| 3. Boot time | See "Spike 3" below. | Whether a direct kernel boot is needed. |
+| 4. Bytes | **All three equal.** One Ubuntu 24.04 lock (`git`, `curl`, 260 packages, a 95 MB pool), made online in the test VM: rebuilt offline there unprivileged in 691 s, and twice offline as root in the guest in 452 s and 544 s. All three tarballs: `8fc4a571…dd06acbb`, 137 MB; the lock `122b645c…24ef763e` unchanged. | Decision 5 can promise Windows the bytes Linux writes. It is still the owner's. |
+| 5. Fedora and a disk | Fedora: **passed**. The 24.04 disk: see "Spike 5" below. | Which targets the first version names, and the guest's memory. |
+| 6. The copy | **Passed**, well above the 5 MB/s line: host to guest 17.4 MiB/s for 300 MiB and 23.9 MiB/s for 3 GiB (to the guest's disk, 18.5 and 21.6); guest to host 14.8 and 14.6 MiB/s (to NTFS, 12.6 and 15.1). Incompressible bytes, `cat` at both ends of Git for Windows' OpenSSH; both round trips intact. Copying the 1,208 MB compressed guest out of the test VM the same way: 92 s. | Files go through the SSH session; no second disk. A 3 GiB disk image comes back in about 3.5 minutes. |
+| 7. Ctrl-C and the job object | **Settled, and it needs both.** With QEMU in frostroot's process group, a console Ctrl-C ended QEMU 66 ms after the event, exit status 0, before frostroot could do anything. With `CREATE_NEW_PROCESS_GROUP`, QEMU ignored it and only frostroot received it. A kill-on-close job object ended QEMU whenever frostroot ended, by exiting or by `Stop-Process -Force`; without the job object, QEMU outlived a killed frostroot. | The launcher starts QEMU in a process group of its own and a kill-on-close job object, as designed. |
+| 8. The host must not show | **Not run.** It needs a second machine with the Hypervisor Platform enabled, which is the owner's to find. Spike 4 does show that a guest of 2 GiB and 4 processors writes the bytes 6 GiB and 8 processors write on Linux. | Still open: what WHPX saves. |
+| 9. The guest's size | 3,038,773,248 bytes raw (2,898 MiB), 1,890,627,584 on disk (sparse), **1,208,380,371 with `gzip -n -9`** (1.13 GiB), in 666 s; Git for Windows' `gzip -d` unpacked it in 27 s. | One release asset, under GitHub's 2 GiB. A smaller kernel is not needed for that. |
+| 10. A locked-down machine | **Passed, as far as it was seen.** A `frostroot.exe` cross-compiled in the VM (unsigned, 19 MB) ran from the user's profile: `version`, `init --plain` and `validate` worked and `build` refused as today. During the whole spike the endpoint security did nothing that was seen: no program blocked or removed, no file quarantined, the overlay and the forwarded port left alone. | Decision 6 can wait, on this machine. |
+| 11. The network | **Passed.** Fedora's online build fetched over HTTPS through the re-signing network with `--ca-bundle` (spike 5). A proxy bound to the host's 127.0.0.1:3128 answered the guest as `http://10.0.2.2:3128` and refused it as `127.0.0.1`; a whole online Ubuntu build with `http_proxy=http://10.0.2.2:3128` passed in 813 s, all 254 of its requests answered 200 by that proxy. | The launcher rewrites a loopback proxy to 10.0.2.2, as designed. |
+| 12. QEMU versions | **Not run.** It needs the owner to name the oldest QEMU to support. | The range is open; 11.1.0 is the one measured. |
+
+### Spike 3: boot time
+
+Five boots, each from a fresh overlay with fresh keys, 4 processors and
+2 GiB, from QEMU's start to the first SSH login with the pinned host key:
+**42, 43, 43, 46 and 47 s, median 43 s.** Every one reached `running`
+with nothing failed; `systemd-analyze` said 36.8 s for the first and
+39.3 to 39.6 s for the other four (10.7 to 11.2 s in
+the kernel, the rest in user space, systemd-repart's growth of the root
+into the 40 GiB overlay among it). Far under three minutes, so no direct
+kernel boot: the guest boots through its own firmware, shim and GRUB, as
+any frostroot disk does.
+
+### Spike 5: Fedora and a disk in the guest
+
+**Fedora 44** (a WSL recipe of `git`, 268 packages): online with
+`--ca-bundle` in 1,250 s, `vendor` in 76 s (116 MB), then two offline
+rebuilds in 466 s and 506 s. All three tarballs were `35072c9a…07564754`,
+157 MB: the offline rebuilds equal each other and the online build. The
+lock was `b4610281…4469e877`.
+
+**Ubuntu 24.04 as a disk** (a disk recipe of `git`, 331 packages): online
+with `--ca-bundle` in 1,765 s, a raw image of 2,434 MB, sparse
+(`d0bba2b3…d91089ff`); `vendor` in 129 s (950 MB, the disk tools tree's
+packages among them); then two offline rebuilds in 1,320 s and 1,166 s,
+both `43afccad…f7139368`, the lock `ce3eb7df…562399e2` unchanged. The
+offline image is not the online one, which frostroot does not promise
+for any target. The disk tools tree ran under bubblewrap as root in the
+guest without anything changed.
+
+Over Fedora and the disk, sampled every two seconds, the guest never had
+more than **516 MiB** in use of its 2 GiB, and swapped nothing; no
+process was killed for memory. So 2 GiB is the default, with room.
+
+### Found on the way
+
+- **A suspended host stops the test VM's clock.** The VM's system clock
+  was 14 hours behind its own hardware clock after the host slept, and
+  apt refused the archive's Release files as "not valid yet". The guest
+  boots fresh for each build and reads the clock as it boots, so it
+  cannot drift that way within a build; a guest kept running across a
+  suspend would. The launcher keeps none.
+- **The overlay does not shrink on NTFS.** The first guest's overlay
+  reached 20 GB holding builds the guest had since deleted, while C: fell
+  to 6.8 GB free. `fstrim` in the guest released 34.5 GiB, and the file
+  then stopped growing while the guest wrote, since QEMU reuses the freed
+  clusters, but it never became smaller. A throwaway overlay per build,
+  as designed, is what gives the space back; the launcher checks free
+  space before it starts (exit 1), and the README says how much a build
+  takes.
+- **The disk image's own first boot costs little.** systemd-repart grew
+  the root to 38.8 GB of the 40 GiB overlay and growfs grew ext4 in the
+  same boot; `systemd-analyze` said 9.7 s in the kernel and 27.2 s in
+  user space, and nothing failed.
+
+### The record
+
+The programs and scripts that ran, kept as text so that nothing builds
+or runs them:
+
+- [`…-spike-ctrlc.go.txt`](2026-11-16-frostroot-windows-builder-spike-ctrlc.go.txt),
+  spike 7's program, built in the VM with Go 1.27.3 (`GOOS=windows
+  GOARCH=amd64 CGO_ENABLED=0 go build`), SHA-256 `7386f2df…e33860fc`,
+  unsigned, and driven by a PowerShell script that started it hidden four
+  ways and asked afterwards whether its QEMU was alive;
+- [`…-spike-boot-guest.sh.txt`](2026-11-16-frostroot-windows-builder-spike-boot-guest.sh.txt),
+  one boot from a fresh overlay with its credentials (spikes 1 to 3);
+- [`…-spike-in-guest.sh.txt`](2026-11-16-frostroot-windows-builder-spike-in-guest.sh.txt),
+  the build steps run as root in the guest (spikes 4, 5 and 11);
+- [`…-spike-copy.sh.txt`](2026-11-16-frostroot-windows-builder-spike-copy.sh.txt),
+  spike 6;
+- [`…-spike-tinyproxy.py.txt`](2026-11-16-frostroot-windows-builder-spike-tinyproxy.py.txt),
+  spike 11's proxy;
+- [`…-spike-guest.toml.txt`](2026-11-16-frostroot-windows-builder-spike-guest.toml.txt),
+  the draft guest recipe.
+
+The `frostroot.exe` of spike 10 was cross-compiled with `-trimpath` from
+the test VM's checkout at `f13f09a`, a master commit before the release
+that reports 0.15.1, SHA-256 `39f1e6d3…0d65b687`.
+
 
 ## Risks
 
-- **The whole design rests on spike 1 and spike 4.** Both are cheap, and
-  both come before the first pull request.
-- **Time.** Twenty minutes for a build is what the project's own VM does,
-  and a student will find it long. WHPX is the answer where an
+- **One machine measured it.** Every spike ran on one Windows 10 LTSC
+  2019 machine with one QEMU, beside a test VM that took most of its
+  memory. WHPX (spike 8) and older QEMU builds (spike 12) are not
+  measured, and neither is a machine whose security software is stricter.
+- **Time.** Fourteen to thirty minutes for a first build under TCG, as
+  the spike measured, and a student will find it long. WHPX is the answer where an
   administrator will give it; nothing is the answer where they will not.
 - **The guest is large.** Kernel, firmware and two package managers, to
   be downloaded once per guest version by every user.
@@ -503,43 +566,36 @@ step fails for a reason that is the image's.
   It is the best-tested boot path the project has and still the slowest
   one to choose.
 
-## Decisions for the owner
+## Decisions
 
-1. **The way.** *Recommended:* QEMU, WHPX first and TCG behind it, behind
-   an interface a WSL 2 backend could implement later. The alternative is
-   WSL 2 first, which serves the machines that are served already.
-2. **Where QEMU comes from.** *Recommended:* the first version finds a
-   QEMU the user unpacked, and says how. It redistributes nothing and
-   every other step can be built and measured against it. The alternative
-   is a QEMU the project republishes, pinned by checksum, which is
-   friendlier and makes the project a distributor of GPL binaries built by
-   a third party, with the source to offer beside them. It can follow
-   without changing the design.
-3. **The guest: frostroot's own disk image, or Canonical's cloud image.**
-   *Recommended:* frostroot's own, for the lock. But Canonical's
-   intellectual property policy allows redistributing Ubuntu "only where
-   there has been no modification to it", and asks for approval or
-   rebranding otherwise (**read**). Whether an image assembled from
-   unmodified archive packages is a modification is not this document's
-   to say; the project hands such images to students today and has not
-   published one. The alternative fetches Canonical's own cloud image
-   from Canonical, pinned by SHA-256, and installs the build tools in it
-   with apt at first use: nothing is redistributed, the tools are as
-   unpinned as on any Linux host, and the guest keeps state between
-   builds.
-4. **`build` never downloads the guest.** *Recommended:* an explicit
-   `guest fetch`, as `sudo apt install mmdebstrap` is explicit on Linux.
-   The alternative is a first `build` that fetches several hundred
-   megabytes by itself.
-5. **What is promised about bytes across Windows and Linux**, once
-   spike 4 has said what is true.
-6. **Signing `frostroot.exe`.** Unsigned, Windows warns about it and some
-   machines refuse it. A certificate costs money and a name. *Recommended:*
-   unsigned for the first version, unless spike 10 says otherwise.
-7. **How Windows tests run.** There is no Go on the Windows machine by
-   the owner's choice, and CI is off. *Recommended:* keep the launcher's
-   logic free of Windows so that `scripts/check.sh` tests it on Linux,
-   keep the Windows-only files to a few dozen lines each, and say in each
-   pull request what ran on Windows by hand.
-8. **The version** this ships as, and whether Fedora and disk recipes
-   must work on Windows before it does.
+The owner answered on 2026-11-17, "go with the recommended ones and run
+the spike", which takes the recommended answer to 1, 2, 3, 4, 6 and 7.
+Decisions 5 and 8 stay open.
+
+1. **The way: QEMU, WHPX first and TCG behind it**, behind an interface
+   a WSL 2 backend could implement later. Rejected for now: WSL 2 first,
+   which serves the machines that are served already.
+2. **The first version finds a QEMU the user unpacked**, and says how.
+   Nothing is redistributed. A QEMU the project republishes, pinned by
+   checksum, would make the project a distributor of GPL binaries built
+   by a third party; it can follow without changing the design.
+3. **The guest is frostroot's own disk image**, for the lock. The owner
+   chose the design, not a legal reading: Canonical's intellectual
+   property policy allows redistributing Ubuntu "only where there has
+   been no modification to it", and asks for approval or rebranding
+   otherwise (**read**), and whether an image assembled from unmodified
+   archive packages is a modification **stays unresolved for publishing
+   it**. It has to be answered before a release carries the guest. The
+   other answer remains Canonical's own cloud image, fetched from
+   Canonical and pinned by SHA-256, with the build tools installed by apt
+   at first use.
+4. **`build` never downloads the guest.** An explicit `guest fetch`, as
+   `sudo apt install mmdebstrap` is explicit on Linux.
+5. **Open: what is promised about bytes across Windows and Linux.**
+   Spike 4 says what is true; the promise is the owner's.
+6. **`frostroot.exe` is unsigned for the first version**, unless spike 10
+   says otherwise.
+7. **The launcher's logic is testable on Linux**, the Windows-only files
+   are small, and each pull request says what ran on Windows by hand.
+8. **Open: the version** this ships as, and whether Fedora and disk
+   recipes must work on Windows before it does.
