@@ -1,0 +1,140 @@
+// spike-ctrlc is the throwaway program of spike 7 in
+// 2026-11-16-frostroot-windows-builder.md. It is the record of what ran,
+// not code frostroot ships: it is kept as .go.txt so that no Go tool builds it.
+//
+// Built in the test VM, with nothing installed on Windows:
+//
+//	mkdir spike-ctrlc && cp THIS-FILE spike-ctrlc/main.go && cd spike-ctrlc
+//	go mod init spike7
+//	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o spike7.exe .
+//
+// Run on Windows by a PowerShell driver that starts it hidden with
+// Start-Process, four ways: -selfctrlc with -newgroup=true and =false, and
+// without -selfctrlc, killed with Stop-Process -Force, with -job=true and
+// =false; the driver then asks whether the QEMU it started is still alive.
+
+// Spike 7: does QEMU, started in a process group of its own and a job
+// object, survive the console's Ctrl-C and end with its parent?
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"os/exec"
+	"os/signal"
+	"syscall"
+	"time"
+	"unsafe"
+)
+
+var (
+	k32                = syscall.NewLazyDLL("kernel32.dll")
+	procGenCtrl        = k32.NewProc("GenerateConsoleCtrlEvent")
+	procSetCtrlHandler = k32.NewProc("SetConsoleCtrlHandler")
+	procCreateJob      = k32.NewProc("CreateJobObjectW")
+	procSetJob         = k32.NewProc("SetInformationJobObject")
+	procAssign         = k32.NewProc("AssignProcessToJobObject")
+)
+
+type basicLimit struct {
+	PerProcessUserTimeLimit int64
+	PerJobUserTimeLimit     int64
+	LimitFlags              uint32
+	MinimumWorkingSetSize   uintptr
+	MaximumWorkingSetSize   uintptr
+	ActiveProcessLimit      uint32
+	Affinity                uintptr
+	PriorityClass           uint32
+	SchedulingClass         uint32
+}
+
+type extendedLimit struct {
+	Basic                 basicLimit
+	Io                    [6]uint64
+	ProcessMemoryLimit    uintptr
+	JobMemoryLimit        uintptr
+	PeakProcessMemoryUsed uintptr
+	PeakJobMemoryUsed     uintptr
+}
+
+func main() {
+	job := flag.Bool("job", true, "put QEMU in a kill-on-close job object")
+	newGroup := flag.Bool("newgroup", true, "start QEMU in a process group of its own")
+	selfCtrlC := flag.Bool("selfctrlc", false, "make a console of our own and send it Ctrl-C after 3 s")
+	qemu := flag.String("qemu", "", "qemu-system-x86_64.exe")
+	logPath := flag.String("log", "", "log file")
+	flag.Parse()
+	logFile, err := os.OpenFile(*logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		os.Exit(3)
+	}
+	say := func(format string, args ...any) {
+		fmt.Fprintf(logFile, time.Now().Format("15:04:05.000 ")+format+"\n", args...)
+	}
+	say("start job=%v newgroup=%v selfctrlc=%v parent pid=%d", *job, *newGroup, *selfCtrlC, os.Getpid())
+	if *selfCtrlC {
+		var r uintptr
+		var e error
+		// A process can inherit "ignore Ctrl-C" from whoever started it;
+		// a console program run by a person never has it, so clear it.
+		r, _, e = procSetCtrlHandler.Call(0, 0)
+		say("SetConsoleCtrlHandler(NULL, FALSE)=%d (%v)", r, e)
+	}
+	command := exec.Command(*qemu, "-machine", "q35", "-accel", "tcg", "-m", "64", "-display", "none", "-S", "-serial", "none", "-monitor", "none")
+	var creation uint32
+	if *newGroup {
+		creation |= syscall.CREATE_NEW_PROCESS_GROUP
+	}
+	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: creation}
+	if err := command.Start(); err != nil {
+		say("start qemu: %v", err)
+		os.Exit(2)
+	}
+	say("qemu pid=%d", command.Process.Pid)
+	if *job {
+		handle, _, e := procCreateJob.Call(0, 0)
+		say("CreateJobObject=%#x (%v)", handle, e)
+		var limit extendedLimit
+		limit.Basic.LimitFlags = 0x2000 // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+		r, _, e := procSetJob.Call(handle, 9, uintptr(unsafe.Pointer(&limit)), unsafe.Sizeof(limit))
+		say("SetInformationJobObject=%d (%v)", r, e)
+		process, err := syscall.OpenProcess(0x1F0FFF, false, uint32(command.Process.Pid))
+		say("OpenProcess err=%v", err)
+		r, _, e = procAssign.Call(handle, uintptr(process))
+		say("AssignProcessToJobObject=%d (%v)", r, e)
+	}
+	interrupts := make(chan os.Signal, 1)
+	signal.Notify(interrupts, os.Interrupt)
+	done := make(chan error, 1)
+	go func() {
+		err := command.Wait()
+		say("qemu exited: %v", err)
+		done <- err
+	}()
+	say("listening for the interrupt")
+	if *selfCtrlC {
+		go func() {
+			time.Sleep(3 * time.Second)
+			say("sending CTRL_C_EVENT to the console's processes")
+			r, _, e := procGenCtrl.Call(0, 0)
+			say("GenerateConsoleCtrlEvent(CTRL_C, 0)=%d (%v)", r, e)
+		}()
+	}
+	select {
+	case <-interrupts:
+		say("parent got the interrupt")
+		time.Sleep(time.Second)
+		select {
+		case err := <-done:
+			say("RESULT qemu exited within 5 s of the interrupt: %v", err)
+		case <-time.After(5 * time.Second):
+			say("RESULT qemu still running 5 s after the interrupt")
+		}
+	case err := <-done:
+		say("RESULT qemu exited before any interrupt reached the parent: %v", err)
+	case <-time.After(20 * time.Second):
+		say("RESULT nothing happened in 20 s")
+	}
+	say("parent exits without ending qemu itself")
+}

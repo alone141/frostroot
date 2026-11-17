@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+#
+# Spikes 1, 2 and 3: one boot of the guest from a fresh overlay.
+# It is the record of what ran in
+# 2026-11-16-frostroot-windows-builder.md, not code frostroot ships: it is
+# kept as .sh.txt so that nothing runs it.
+#
+# Spike 1-3: boot the guest image once from a fresh overlay and time it.
+#   boot-guest.sh RUN [CPUS] [MEMORY] [CREDMODE]
+# CREDMODE is "path" (credentials from files, -smbios type=11,path=) or
+# "value" (on the command line, as disk-boot passes them). Leaves QEMU
+# running; stop-guest.sh RUN ends it. Everything for the run is in run/RUN.
+set -u
+w=$(cd "$(dirname "$0")/.." && pwd)
+run=$1
+cpus=${2:-4}
+memory=${3:-2G}
+credmode=${4:-path}
+port=${GUEST_PORT:-2223}
+qemu="$USERPROFILE/frostroot-vm/tools/qemu"
+dir="$w/run/$run"
+rm -rf "$dir"
+mkdir -p "$dir"
+cd "$dir" || exit 2
+
+# Keys for this boot only: the client's, and the guest's host key.
+ssh-keygen -q -t ed25519 -N '' -C spike-client -f client
+ssh-keygen -q -t ed25519 -N '' -C spike-host -f hostkey
+printf '[127.0.0.1]:%s %s\n' "$port" "$(cut -d' ' -f1,2 hostkey.pub)" > known_hosts
+
+b64() { base64 -w0 "$1"; }
+{
+	printf 'f~ /etc/ssh/ssh_host_ed25519_key 0600 root root - %s\n' "$(b64 hostkey)"
+	printf 'f~ /etc/ssh/ssh_host_ed25519_key.pub 0644 root root - %s\n' "$(b64 hostkey.pub)"
+} > tmpfiles.extra
+# A password nobody keeps, so the first-boot prompt does not wait.
+hash=$(openssl passwd -6 "$(openssl rand -hex 24)")
+printf '%s' "$hash" > password.hash
+
+credential() { # NAME FILE
+	if [ "$credmode" = path ]; then
+		printf 'io.systemd.credential.binary:%s=%s' "$1" "$(b64 "$2")" > "cred-$1"
+		printf -- '-smbios\ntype=11,path=%s\n' "$(cygpath -w "$dir/cred-$1")"
+	else
+		printf -- '-smbios\ntype=11,value=io.systemd.credential.binary:%s=%s\n' "$1" "$(b64 "$2")"
+	fi
+}
+{
+	credential ssh.authorized_keys.root client.pub
+	credential tmpfiles.extra tmpfiles.extra
+	credential passwd.hashed-password.builder password.hash
+} > smbios.args
+
+"$qemu/qemu-img.exe" create -q -f qcow2 -F raw -b "$(cygpath -w "$w/images/guest.img")" overlay.qcow2 40G || exit 2
+cp "$qemu/share/edk2-i386-vars.fd" vars.fd
+
+mapfile -t smbios < smbios.args
+args=(
+	-name "spike-$run" -machine q35 -accel whpx -accel tcg -cpu max
+	-smp "$cpus" -m "$memory"
+	-drive "if=pflash,format=raw,readonly=on,file=$(cygpath -w "$qemu/share/edk2-x86_64-code.fd")"
+	-drive "if=pflash,format=raw,file=$(cygpath -w "$dir/vars.fd")"
+	-drive "file=$(cygpath -w "$dir/overlay.qcow2"),if=virtio,format=qcow2,cache=writeback,discard=unmap"
+	-netdev "user,id=n0,hostfwd=tcp:127.0.0.1:$port-:22" -device virtio-net-pci,netdev=n0
+	-device virtio-rng-pci -display none
+	-serial "file:$(cygpath -w "$dir/serial.log")"
+	-pidfile "$(cygpath -w "$dir/qemu.pid")"
+	"${smbios[@]}"
+)
+printf '%s\n' "${args[@]}" > qemu.args
+start=$(date +%s.%N)
+powershell.exe -NoProfile -Command "\$a = Get-Content -LiteralPath '$(cygpath -w "$dir/qemu.args")' | ForEach-Object { if (\$_ -match '[\s;]') { '\"' + \$_ + '\"' } else { \$_ } }; \$p = Start-Process -WindowStyle Hidden -PassThru -FilePath '$(cygpath -w "$qemu/qemu-system-x86_64w.exe")' -ArgumentList \$a -RedirectStandardError '$(cygpath -w "$dir/qemu.err")'; \$p.Id" > winpid.txt
+
+ssh_guest() {
+	ssh -i client -p "$port" -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=yes \
+		-o ConnectTimeout=5 -o BatchMode=yes -o LogLevel=ERROR root@127.0.0.1 "$@"
+}
+deadline=$(( $(date +%s) + ${BOOT_TIMEOUT:-1500} ))
+answered=""
+while [ "$(date +%s)" -lt "$deadline" ]; do
+	if ssh_guest true 2> ssh-last.err; then
+		answered=$(date +%s.%N)
+		break
+	fi
+	if ! tasklist.exe //FI "PID eq $(tr -d '\r' < winpid.txt)" | grep -q qemu; then
+		echo "QEMU exited" > result.txt
+		cat qemu.err >> result.txt
+		exit 1
+	fi
+	sleep 3
+done
+if [ -z "$answered" ]; then
+	echo "no ssh answer within the timeout" > result.txt
+	cat ssh-last.err >> result.txt
+	exit 1
+fi
+seconds=$(awk -v a="$start" -v b="$answered" 'BEGIN { printf "%.0f", b - a }')
+{
+	echo "ssh answered after ${seconds}s (cpus=$cpus memory=$memory creds=$credmode)"
+	echo "host key pinned: yes (StrictHostKeyChecking=yes against the key passed in)"
+	ssh_guest 'systemd-analyze 2>&1 | head -2; systemctl is-system-running; findmnt -no SIZE /; lsblk -bno SIZE /dev/vda | head -1; systemd-creds --system list 2>&1 | head; cat /proc/cmdline; cmp /etc/ssh/ssh_host_ed25519_key.pub - < /dev/null 2>&1 | head -1; ls -la /etc/ssh/ssh_host_*_key.pub; grep -c . /root/.ssh/authorized_keys; passwd -S root builder; uname -r; dmesg | grep -i -m3 "hypervisor\|tcg\|whp"'
+} > result.txt 2>&1
+cat result.txt

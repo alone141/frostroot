@@ -1,0 +1,63 @@
+# Spike 11: the record of what ran in
+# 2026-11-16-frostroot-windows-builder.md, not code frostroot ships: it is
+# kept as .py.txt so that nothing runs it. Run on Windows with the
+# system Python, python -I tinyproxy.py 3128 proxy.log.
+"""Spike 11: a plain-HTTP forward proxy on the host's loopback, logging
+each request line, so the guest's use of 10.0.2.2 can be seen. GET and
+HEAD of absolute http:// URLs only; nothing else is forwarded.
+
+    python -I tinyproxy.py PORT LOGFILE
+"""
+import http.client
+import socketserver
+import sys
+import threading
+import urllib.parse
+from http.server import BaseHTTPRequestHandler
+
+LOG_LOCK = threading.Lock()
+
+
+class Proxy(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, format, *args):
+        with LOG_LOCK, open(sys.argv[2], "a", encoding="utf-8") as log:
+            log.write("%s %s\n" % (self.client_address[0], format % args))
+
+    def forward(self, with_body):
+        url = urllib.parse.urlsplit(self.path)
+        if url.scheme != "http" or not url.hostname:
+            self.send_error(400, "absolute http URLs only")
+            return
+        upstream = http.client.HTTPConnection(url.hostname, url.port or 80, timeout=60)
+        path = url.path + ("?" + url.query if url.query else "")
+        headers = {k: v for k, v in self.headers.items() if k.lower() not in ("proxy-connection", "connection")}
+        upstream.request(self.command, path, headers=headers)
+        response = upstream.getresponse()
+        body = response.read() if with_body else b""
+        self.send_response(response.status, response.reason)
+        for key, value in response.getheaders():
+            if key.lower() not in ("transfer-encoding", "connection", "content-length"):
+                self.send_header(key, value)
+        self.send_header("Content-Length", str(len(body)) if with_body else response.getheader("Content-Length", "0"))
+        self.end_headers()
+        if with_body:
+            self.wfile.write(body)
+        upstream.close()
+
+    def do_GET(self):
+        self.forward(True)
+
+    def do_HEAD(self):
+        self.forward(False)
+
+
+class Server(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+if __name__ == "__main__":
+    with Server(("127.0.0.1", int(sys.argv[1])), Proxy) as server:
+        server.serve_forever()

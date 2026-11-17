@@ -1,0 +1,66 @@
+#!/bin/bash
+#
+# Spikes 4, 5 and 11: the build steps, run as root inside the guest.
+# It is the record of what ran in
+# 2026-11-16-frostroot-windows-builder.md, not code frostroot ships: it is
+# kept as .sh.txt so that nothing runs it.
+#
+# Runs inside the guest as root, detached: one spike step, logged to
+# /var/tmp/spike/NAME.log, its exit status in NAME.status.
+#   in-guest.sh NAME
+# The recipe directories were copied to /var/tmp/spike beforehand.
+set -u
+name=$1
+out=/var/tmp/spike
+F=$out/bin/frostroot
+CA=$out/corp-ca.pem
+t() { # time a command and say so
+	local s
+	s=$(date +%s)
+	"$@"
+	local status=$?
+	echo "== $*: exit $status after $(( $(date +%s) - s ))s"
+	return $status
+}
+peak() { # peak memory the guest has used so far, from the kernel's counters
+	awk '/MemTotal/ {t=$2} /MemAvailable/ {a=$2} END {printf "== memory in use now: %d MiB of %d\n", (t-a)/1024, t/1024}' /proc/meminfo
+}
+offline_twice() { # DIR
+	cd "$1" || return 2
+	t "$F" build --plain --offline || return 1
+	sha256sum dist/* | tee "$out/$name.first.sha256"
+	rm -rf dist
+	t "$F" build --plain --offline || return 1
+	sha256sum dist/* | tee "$out/$name.second.sha256"
+	if cmp -s <(cut -d' ' -f1 "$out/$name.first.sha256") <(cut -d' ' -f1 "$out/$name.second.sha256"); then
+		echo "== the two offline builds are byte-identical"
+	else
+		echo "== the two offline builds DIFFER"
+	fi
+	sha256sum frostroot.lock
+}
+online_then_offline() { # DIR
+	cd "$1" || return 2
+	t "$F" build --plain --ca-bundle "$CA" || return 1
+	sha256sum dist/* frostroot.lock
+	peak
+	t "$F" vendor --ca-bundle "$CA" || return 1
+	du -sh vendor
+	rm -rf dist
+	offline_twice "$1"
+	peak
+}
+main() {
+	echo "== $name started $(date -u +%FT%TZ) on $(nproc) cpus, $(awk '/MemTotal/ {printf "%d MiB", $2/1024}' /proc/meminfo)"
+	export SOURCE_DATE_EPOCH # unset unless the caller set it
+	case $name in
+	s4) offline_twice $out/s4 ;;
+	fedora) online_then_offline $out/fedora ;;
+	disk) online_then_offline $out/disk ;;
+	s11-ca) cd $out/s11 && t "$F" build --plain --ca-bundle "$CA" && sha256sum dist/* ;;
+	s11-proxy) cd $out/s11 && http_proxy=http://10.0.2.2:3128 t "$F" build --plain && sha256sum dist/* ;;
+	*) echo "unknown step $name"; return 2 ;;
+	esac
+}
+main > "$out/$name.log" 2>&1
+echo $? > "$out/$name.status"
