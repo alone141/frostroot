@@ -387,6 +387,8 @@ func TestBuildSuccess(t *testing.T) {
 	}
 	for _, wantText := range []string{
 		"wsl --import cpp-lab <install-dir> dist/cpp-lab-ubuntu-22.04-amd64.tar.gz",
+		"or on a Windows without wsl --import (Windows 10 before version 1903, or a machine with only WSL 1):\n" +
+			"  frostroot-windows-amd64.exe import cpp-lab <install-dir> dist/cpp-lab-ubuntu-22.04-amd64.tar.gz\n",
 		"frostroot.lock (1 package), frozen at 2025-09-17 00:00:00 UTC\n",
 		"frostroot vendor",
 	} {
@@ -697,6 +699,9 @@ func TestBuildPrintsWindowsPathUnderWSL(t *testing.T) {
 	wantCommand := `wsl --import cpp-lab <install-dir> '\\wsl.localhost\Ubuntu\home\o''neil\lab\dist\cpp-lab-ubuntu-22.04-amd64.tar.gz'`
 	if !strings.Contains(stdout.String(), wantCommand) {
 		t.Errorf("stdout lacks %q:\n%s", wantCommand, stdout.String())
+	}
+	if wantImport := "\n  frostroot-windows-amd64.exe import cpp-lab <install-dir> dist/cpp-lab-ubuntu-22.04-amd64.tar.gz\n"; !strings.Contains(stdout.String(), wantImport) {
+		t.Errorf("stdout lacks %q:\n%s", wantImport, stdout.String())
 	}
 }
 

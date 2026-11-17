@@ -1,5 +1,5 @@
 // Package cli implements the frostroot command line: init, edit, capture,
-// validate, build, vendor and version.
+// validate, build, vendor, import and version.
 package cli
 
 import (
@@ -138,6 +138,16 @@ type App struct {
 	// means builder.DefaultWorkRoot. Tests keep it in their temporary
 	// directory, out of /var/tmp.
 	holdRoot string
+	// wsl is what import asks of Windows; nil means wslapi.dll. Tests fake
+	// it.
+	wsl wslAPI
+	// executable returns the path of the running program, which import
+	// copies into the install directory; nil means os.Executable.
+	executable func() (string, error)
+	// runInstalledCopy runs import's second stage from that copy and
+	// returns its exit code; nil means starting it as a process. Tests run
+	// the stage in this one.
+	runInstalledCopy func(ctx context.Context, executablePath string, args []string) (int, error)
 }
 
 // New returns an App wired to the real process.
@@ -185,6 +195,15 @@ func (a *App) withDefaults() *App {
 	if a.Builder == nil {
 		a.Builder = &builder.Builder{Bootstrapper: &builder.Mmdebstrap{}, Fedora: &builder.Mkosi{}, Tools: &builder.Bubblewrap{}}
 	}
+	if a.wsl == nil {
+		a.wsl = windowsWSL{}
+	}
+	if a.executable == nil {
+		a.executable = os.Executable
+	}
+	if a.runInstalledCopy == nil {
+		a.runInstalledCopy = a.startInstalledCopy
+	}
 	return a
 }
 
@@ -199,6 +218,8 @@ Commands:
              or a disk recipe's .img
   vendor     download what the lock names into vendor/debs, vendor/rpms and
              vendor/wheels, for build --offline
+  import     register a tarball as a WSL distribution, on a Windows without
+             wsl --import (the Windows binary)
   version    print the version
 
 init, edit, capture, build and vendor show a full-screen interface in a terminal
@@ -228,6 +249,8 @@ func (a *App) Run(args []string) int {
 		return a.runBuild(commandArgs)
 	case "vendor":
 		return a.runVendor(commandArgs)
+	case "import":
+		return a.runImport(commandArgs)
 	case "version", "--version", "-v":
 		return a.runVersion(commandArgs)
 	case "help", "-h", "--help":

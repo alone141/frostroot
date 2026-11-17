@@ -50,7 +50,7 @@ func TestRunHelp(t *testing.T) {
 		if exitCode := app.Run(args); exitCode != exitSuccess {
 			t.Errorf("Run(%q) = %d, want %d", args, exitCode, exitSuccess)
 		}
-		for _, command := range []string{"init", "edit", "capture", "validate", "build", "vendor", "version"} {
+		for _, command := range []string{"init", "edit", "capture", "validate", "build", "vendor", "import", "version"} {
 			if !strings.Contains(stdout.String(), command) {
 				t.Errorf("Run(%q): usage should list %s: %q", args, command, stdout.String())
 			}
@@ -75,5 +75,8 @@ func TestNewUsesRealMmdebstrap(t *testing.T) {
 	}
 	if app.Prompt == nil || app.WSLPath == nil || app.Getenv == nil || app.RecipeDir == "" || app.GOOS == "" {
 		t.Errorf("New left defaults unset: %+v", app)
+	}
+	if _, isWindowsWSL := app.wsl.(windowsWSL); !isWindowsWSL || app.executable == nil || app.runInstalledCopy == nil {
+		t.Errorf("New must import through wslapi.dll from a copy of the running program: %+v", app)
 	}
 }

@@ -414,6 +414,8 @@ func (a *App) reportBuildSuccess(imageRecipe recipe.Recipe, result builder.Resul
 			a.stdoutf("or from any directory in PowerShell:\n  wsl --import %s <install-dir> '%s'\n",
 				imageName, strings.ReplaceAll(windowsPath, "'", "''"))
 		}
+		a.stdoutf("or on a Windows without wsl --import (Windows 10 before version 1903, or a machine with only WSL 1):\n  %s import %s <install-dir> %s\n",
+			windowsBinaryName, imageName, relativeOutputPath)
 	}
 	if !result.Offline {
 		a.stdoutf("\nTo be able to rebuild this exact image later, offline:\n  frostroot vendor\n")

@@ -14,7 +14,8 @@ A Go command line that freezes an Ubuntu root filesystem for WSL. A recipe
 tarball is built by driving [mmdebstrap], and `wsl --import` takes it as it
 is. `vendor` downloads everything the lock names. `build --offline` rebuilds
 from those files byte for byte. Builds need Linux. The module must still
-compile for Windows.
+compile for Windows, where `import` registers a tarball on a Windows
+without `wsl --import`.
 
 The README's "Layout" section maps the packages.
 
@@ -120,13 +121,20 @@ Hand-typed alternatives break in ways that are easy to miss:
   `internal/builder/bootstrap.go`.
 - Only mmdebstrap or mkosi writes the tarball, and only the disk tools
   tree's programs write a file system or a partition table. Go code never
-  tars, walks or deletes a root filesystem, because ownership, hardlinks
-  and capabilities would come out wrong; for a disk it renders text (the
+  makes an archive from a tree or a tree from an archive, and never walks
+  or deletes a root filesystem, because ownership, hardlinks and
+  capabilities would come out wrong; for a disk it renders text (the
   sfdisk script, fstab, grub.cfg, the units) and runs tools
   (`diskAssembly` in `internal/builder/diskassemble.go`). `internal/export`
   only names and places the tarball or the image, mkosi removes the Fedora
   tools tree it made, and `rm` removes the disk tools tree, in the user
-  namespace that made it (`Bubblewrap.RemoveTree`).
+  namespace that made it (`Bubblewrap.RemoveTree`). `import` copies a
+  tarball block by block (`internal/paxstrip`), dropping only the pax
+  records named `SCHILY.xattr.system.posix_acl_*`, which WSL 1 refuses;
+  every other block passes through as it was read, which
+  `TestCopyDropsOnlyTheACLRecords` holds it to. Windows unpacks it, and
+  after a failed import `import` removes only names it knows with
+  `os.Remove`, never a rootfs.
 - Two offline builds of one lock are byte-identical. Online builds and
   offline builds are not promised to match. An offline build takes
   everything from the lock and never writes it: the frozen instant, the deb
@@ -220,9 +228,11 @@ Hand-typed alternatives break in ways that are easy to miss:
   `Packages.xz`, and Fedora's `primary.xml.zst`.
 - go-toml is imported only in `recipe`.
 - `builder` doesn't import `index`, and `pool` doesn't import `builder`.
-- `deb`, `pgp`, `pki`, `distro`, `export` and `textdiff` import no other
-  frostroot package. `deb`, `pgp` and `pki` know nothing of recipes and
-  hold no policy.
+- `deb`, `pgp`, `pki`, `distro`, `export`, `textdiff`, `paxstrip` and
+  `wslapi` import no other frostroot package. `deb`, `pgp`, `pki`,
+  `paxstrip` and `wslapi` know nothing of recipes and hold no policy.
+  `wslapi` is the only place `wslapi.dll` is named, and loads it by its
+  full path in the system directory.
 
 **Tests**
 

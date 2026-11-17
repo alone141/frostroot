@@ -190,6 +190,17 @@ go build -o frostroot ./cmd/frostroot
 
 On a Debian host, also `sudo apt install ubuntu-keyring`.
 
+A Windows without `wsl --import` (Windows 10 before version 1903, or a
+machine with only WSL 1) takes the tarball with `frostroot import`, a
+command of the Windows build of frostroot, `frostroot-windows-amd64.exe`,
+which releases carry from the next one on. It is the one command that runs
+on Windows, needs no WSL distribution and no administrator, and builds
+nothing. From source:
+
+```sh
+GOOS=windows GOARCH=amd64 go build -o frostroot-windows-amd64.exe ./cmd/frostroot
+```
+
 Building needs either **user namespaces** (normal on current distributions,
 and what you get when you run frostroot as yourself) or **root** (`sudo
 frostroot build`). It needs network access; consuming the tarball does not.
@@ -284,6 +295,8 @@ Import it on Windows:
   wsl --import cpp-lab <install-dir> dist/cpp-lab-ubuntu-22.04-amd64.tar.gz
 or from any directory in PowerShell:
   wsl --import cpp-lab <install-dir> '\\wsl.localhost\Ubuntu\home\you\cpp-lab\dist\cpp-lab-ubuntu-22.04-amd64.tar.gz'
+or on a Windows without wsl --import (Windows 10 before version 1903, or a machine with only WSL 1):
+  frostroot-windows-amd64.exe import cpp-lab <install-dir> dist/cpp-lab-ubuntu-22.04-amd64.tar.gz
 ```
 
 A build takes a few minutes and downloads a few hundred megabytes: about two
@@ -322,6 +335,19 @@ wsl -d cpp-lab
 You are logged in as `student`, with passwordless `sudo`, systemd running, and
 `apt install` working against the same three pockets the image was built from.
 
+On a Windows without `wsl --import`, copy the tarball over and register it
+with the Windows binary instead, as an ordinary user:
+
+```powershell
+.\frostroot-windows-amd64.exe import cpp-lab C:\wsl\cpp-lab cpp-lab-ubuntu-22.04-amd64.tar.gz
+wsl -d cpp-lab
+```
+
+`import` registers a copy of the tarball without the two ACLs
+systemd-tmpfiles puts on `/var/log/journal`, which WSL 1 refuses, and makes
+the user the image's `/etc/wsl.conf` names the default, which that Windows
+does not read from the file. WSL 1 starts no systemd.
+
 ## Commands
 
 | Command | What it does |
@@ -333,9 +359,10 @@ You are logged in as `student`, with passwordless `sudo`, systemd running, and
 | `frostroot build [--mirror URL] [--ca-bundle FILE] [--insecure] [--keep-work] [--plain]` | Recipe to `frostroot.lock` plus `dist/<name>-<distro>-<release>-amd64.tar.gz`, such as `dist/lab-ubuntu-24.04-amd64.tar.gz`. A recipe with `[python]` also gets a virtual environment at `/opt/frostroot/venv`. Never prompts. Overwrites the previous lock and tarball. A disk recipe gets `dist/<name>-<distro>-<release>-amd64.img` instead, a raw GPT image that boots with Secure Boot on (see [Disk images](#disk-images)). |
 | `frostroot vendor [--mirror URL] [--ca-bundle FILE] [--insecure] [--prune] [--plain]` | Downloads every package `frostroot.lock` names into `vendor/debs/`, a disk image's tools tree's included, or `vendor/rpms/` for Fedora, and every wheel it names into `vendor/wheels/`, checked against the lock's checksums. Keeps what is already there and correct, so rerunning resumes. `--prune` removes files the lock does not name, including the partial download an abandoned run leaves behind. |
 | `frostroot build --offline [--keep-work] [--plain]` | Rebuilds the image from `frostroot.lock` and `vendor/debs/` or `vendor/rpms/`, without the network. Fails unless the result has exactly the lock's packages. The lock is read, not written. A disk recipe's rebuild makes the same image, byte for byte. |
+| `frostroot import NAME INSTALL-DIR TARBALL` | On Windows, as `frostroot-windows-amd64.exe`: registers `TARBALL` as the WSL distribution `NAME` with its file system in `INSTALL-DIR`, as `wsl --import` does, for a Windows without it (Windows 10 before version 1903, or a machine with only WSL 1). `INSTALL-DIR` must be new or empty. Registers a copy, written beside `INSTALL-DIR` and removed afterwards, without the pax records `SCHILY.xattr.system.posix_acl_*`, which WSL 1 refuses; runs a copy of itself from `INSTALL-DIR` while it does, since Windows puts the file system beside the program that registers it; then makes the user `/etc/wsl.conf` names in the image the default (root when it names none). Never prompts. A failed or interrupted import leaves nothing registered, and removes `INSTALL-DIR` if it made it. Off Windows it exits 1. |
 | `frostroot version` | Prints the version and the commit it was built from. |
 
-All of them work on the recipe in the current directory. `--plain` asks for
+All of them but `import` work on the recipe in the current directory. `--plain` asks for
 the line interface even in a terminal. `--mirror` replaces
 `http://archive.ubuntu.com/ubuntu` in all three pockets, for a local or faster
 mirror; for `vendor` it replaces the mirror recorded in the lock. A Fedora
@@ -361,9 +388,9 @@ before anything is fetched.
 | Exit code | Meaning |
 |---|---|
 | 0 | success |
-| 1 | something you can fix: invalid or missing recipe, not Linux, mmdebstrap or ubuntu-keyring missing, a host without `mount` or one that cannot mount in the build, for Fedora mkosi or a program it runs missing, an mkosi frostroot does not know, or user namespaces restricted, or a package in its package cache twice with different contents (the work directory is kept), WSL 1, a kernel without user namespaces when building as yourself, for a disk image bubblewrap or uidmap missing or a `disk.size` too small for the image (the work directory is kept), unusable work directory, a `dist/` you cannot write to or a directory where the lock or the image goes, a source key or certificate file that cannot be read, an unusable `SOURCE_DATE_EPOCH`, another `build` or `vendor` of yours running in the same directory; for `vendor` and `--offline`, no lock, a lock that cannot be read or holds what no build writes, a lock without checksums, a recipe that changed since the lock, an incomplete `vendor/debs/` or `vendor/rpms/`, or a file in it that cannot be read; for `vendor`, a pool it cannot create, write or prune; for `init`, `edit` and `capture`, declining to write the recipe |
-| 2 | the build failed: mmdebstrap or mkosi failed (unknown package, mirror unreachable), provisioning failed, the tarball could not be placed, an offline build's packages differ from the lock; for `vendor`, a download failed or a file did not match its checksum |
-| 130 | interrupted with Ctrl-C, at any step up to placing the image, or Ctrl-C or Esc in the form; nothing is written and the work directory is kept; `vendor` keeps finished downloads; `capture --plain` interrupted while it fetches signing keys keeps the recipe it wrote and its report, and names the keys still missing. A build killed outright may leave a hidden `.tmp` file in the recipe directory or `dist/`; the next build there removes it |
+| 1 | something you can fix: invalid or missing recipe, not Linux, mmdebstrap or ubuntu-keyring missing, a host without `mount` or one that cannot mount in the build, for Fedora mkosi or a program it runs missing, an mkosi frostroot does not know, or user namespaces restricted, or a package in its package cache twice with different contents (the work directory is kept), WSL 1, a kernel without user namespaces when building as yourself, for a disk image bubblewrap or uidmap missing or a `disk.size` too small for the image (the work directory is kept), unusable work directory, a `dist/` you cannot write to or a directory where the lock or the image goes, a source key or certificate file that cannot be read, an unusable `SOURCE_DATE_EPOCH`, another `build` or `vendor` of yours running in the same directory; for `vendor` and `--offline`, no lock, a lock that cannot be read or holds what no build writes, a lock without checksums, a recipe that changed since the lock, an incomplete `vendor/debs/` or `vendor/rpms/`, or a file in it that cannot be read; for `vendor`, a pool it cannot create, write or prune; for `init`, `edit` and `capture`, declining to write the recipe; for `import`, not Windows, a Windows without WSL, a name WSL cannot have or one already registered, a tarball that is missing, not a `.tar.gz` or not a tar archive it can read, an `INSTALL-DIR` that is not empty or whose directory does not exist |
+| 2 | the build failed: mmdebstrap or mkosi failed (unknown package, mirror unreachable), provisioning failed, the tarball could not be placed, an offline build's packages differ from the lock; for `vendor`, a download failed or a file did not match its checksum; for `import`, Windows refused the tarball, or making the image's user the default failed, after which the distribution is unregistered again |
+| 130 | interrupted with Ctrl-C, at any step up to placing the image, or Ctrl-C or Esc in the form; nothing is written and the work directory is kept; `vendor` keeps finished downloads; `capture --plain` interrupted while it fetches signing keys keeps the recipe it wrote and its report, and names the keys still missing; `import` unregisters what it registered, once Windows has finished registering it. A build killed outright may leave a hidden `.tmp` file in the recipe directory or `dist/`; the next build there removes it |
 
 ## The recipe
 
@@ -1381,7 +1408,7 @@ What was run for real, release by release since v0.1.0, is recorded in
 
 ```
 cmd/frostroot/      main
-internal/cli/       init, edit, capture, validate, build, vendor, version; flags, exit codes, the plain line interface
+internal/cli/       init, edit, capture, validate, build, vendor, import, version; flags, exit codes, the plain line interface
 internal/capture/   reading an installed system: packages asked for, user, locale, and the report of the gaps
 internal/form/      the questions as data: fields and the families that ask them, each family's package catalog, timezones, locales, recipe mapping, what a package search needs of an index
 internal/index/     what the form searches: the archive's Packages files, a Fedora release's primary metadata and PyPI's simple index, fetched, checked, reduced, cached and searched, and PyPI summaries one at a time
@@ -1394,6 +1421,8 @@ internal/builder/   orchestration and what depends on the family; for Ubuntu, th
 internal/pool/      the vendored pools: manifests from the lock, verify, fetch (with Launchpad's and Koji's fallbacks), prune, stage as a flat repository or a directory of files
 internal/deb/       Debian formats: control stanzas, Packages indexes, .deb control files, flat repository index
 internal/export/    tarball naming and atomic placement
+internal/paxstrip/  import's copy of a tarball, block by block, without the pax records WSL 1 refuses
+internal/wslapi/    Windows' wslapi.dll: register, configure, run in and unregister a distribution
 testdata/           recipe fixtures
 scripts/            check.sh (every check before a push), integration.sh, mutate.sh, and wsl.sh/wsl.ps1 to run any of them in WSL from Windows
 scripts/e2e/        real-build scenarios that check themselves: byte identity, what reaches the image, trust, the form in a terminal
