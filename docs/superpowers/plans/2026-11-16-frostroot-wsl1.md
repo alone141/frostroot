@@ -214,7 +214,12 @@ results" has them. For this plan:
     `wsl-boot`'s checks except systemd, and says in its verdict that it
     skipped it; unregisters with `wslconfig.exe /u`. It sets `umask 022`
     first: `wsl -e` on build 17763 starts processes with 000. shellcheck
-    clean; `scripts/e2e/README.md` says so.
+    clean; `scripts/e2e/README.md` says so. As built, 2026-11-17: the
+    scenario is `import-boot`, and it runs in Git Bash, not in WSL,
+    because Windows 10 1809 starts no distribution from inside another;
+    its first version, run in WSL, is what found that, and the fault in
+    `import` that went with it (the spec's "What the implementation
+    found").
 15. **The wrappers' umask.** `scripts/wsl-exec.sh` sets `umask 022`
     when it finds 000, so that nothing run through `scripts/wsl.sh` on
     such a Windows writes world-writable files into a checkout or a

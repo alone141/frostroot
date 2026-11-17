@@ -1183,3 +1183,34 @@ The plan in
 [`../plans/2026-11-16-frostroot-wsl1.md`](../plans/2026-11-16-frostroot-wsl1.md),
 which the experiments' results and these answers have revised. The
 owner asked for it to be carried through.
+
+## What the implementation found (2026-11-17)
+
+The plan's pull requests 2 to 6 were written and run the same day:
+#174 (the refusal), #175 (`import`), #176 (the release workflow), and the
+scenario and documentation after them. On Windows 10 1809 the real
+binary agreed with the experiments, and added three things this
+document did not have:
+
+- **Windows 10 1809 starts no distribution from inside another.** From
+  a shell in one distribution, `wsl.exe -d OTHER` answers "Operation not
+  supported", and a command `WslLaunch` starts in a distribution
+  registered from there exits 4294967295. So `import` started from a
+  WSL shell registered the image and could not read its `wsl.conf`; the
+  first version took that for a missing file and left root the default.
+  It now fails and unregisters, and says to start it from PowerShell or
+  cmd. Verified. The same holds for the scenario: `import-boot` runs in
+  Git Bash, not in WSL, which the plan's task 14 did not foresee.
+- **The timezone holds.** Experiment C could not tell, the recipe's
+  zone and the Windows zone being the same. An image built for UTC shows
+  UTC on this Windows at +03. Verified, for 24.04 and 26.04.
+- **`SHA256SUMS` with two files breaks `sha256sum -c`** for someone who
+  downloaded one of them, so the README's check now passes
+  `--ignore-missing`. Verified in the test VM.
+
+The copy `import` registers was compared with both real images, block
+by block: it differs by the one pax header that held the two ACL
+records, 1024 bytes, and by nothing else. A failed import was seen to
+unregister and remove its directory. What was not run is in
+`docs/VERIFICATION.md`, in the pull request that brings the
+documentation.
