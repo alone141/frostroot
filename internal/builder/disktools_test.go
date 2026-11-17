@@ -263,6 +263,28 @@ func TestBubblewrapPreflightChecksTheUserNamespaces(t *testing.T) {
 	}
 }
 
+// TestBubblewrapPreflightRefusesWSL1: unprivileged, WSL 1 makes no user
+// namespace for bwrap; as root, bwrap failed all the same, after the image
+// was built. Missing programs are not named, since installing them would
+// not help.
+func TestBubblewrapPreflightRefusesWSL1(t *testing.T) {
+	for _, uid := range []int{0, 1000} {
+		host := newFakeDiskHost()
+		host.kernel = map[string]string{kernelReleasePath: "4.4.0-17763-Microsoft"}
+		err := host.bubblewrap(uid).Preflight(context.Background())
+		if !errors.Is(err, ErrWSL1) || !strings.Contains(err.Error(), "build on Linux or in a WSL 2 distribution") {
+			t.Errorf("uid %d: Preflight on WSL 1 = %v, want ErrWSL1 with where to build", uid, err)
+		}
+		host.installed = map[string]bool{}
+		if err := host.bubblewrap(uid).Preflight(context.Background()); !errors.Is(err, ErrWSL1) {
+			t.Errorf("uid %d: Preflight on WSL 1 without bwrap = %v, want ErrWSL1", uid, err)
+		}
+		if len(host.ran) != 0 {
+			t.Errorf("uid %d ran %q, want nothing run on WSL 1", uid, host.ran)
+		}
+	}
+}
+
 // TestBubblewrapRemovesTheTreeInTheNamespaceThatMadeIt: unprivileged, the
 // tree's files belong to the subordinate ids mmdebstrap mapped, and rm
 // runs in a namespace that maps them again; root's rm needs none.

@@ -89,17 +89,24 @@ type Bubblewrap struct {
 	RunCommand CommandRunner                // defaults to runInterruptibly
 	CurrentUID func() int                   // defaults to os.Getuid
 	LookPath   func(string) (string, error) // defaults to exec.LookPath
-	ReadFile   func(string) ([]byte, error) // defaults to os.ReadFile; reads the kernel's restriction
+	ReadFile   func(string) ([]byte, error) // defaults to os.ReadFile; reads the kernel's release and restriction
 }
 
-// Preflight checks that every program a disk build runs on the host is
-// installed, naming all the missing ones at once with the line that
-// installs them. Unprivileged, it also checks that they can make the user
-// namespaces they run in: bwrap for every tool, and unshare to remove the
-// tree mmdebstrap made in one. Otherwise the first bwrap fails after the
-// image was built, and the tree, owned by subordinate ids, stays behind
-// where its owner cannot remove it.
+// Preflight refuses WSL 1, then checks that every program a disk build
+// runs on the host is installed, naming all the missing ones at once with
+// the line that installs them. Unprivileged, it also checks that they can
+// make the user namespaces they run in: bwrap for every tool, and unshare
+// to remove the tree mmdebstrap made in one. Otherwise the first bwrap
+// fails after the image was built, and the tree, owned by subordinate ids,
+// stays behind where its owner cannot remove it.
 func (b *Bubblewrap) Preflight(ctx context.Context) error {
+	readFile := b.ReadFile
+	if readFile == nil {
+		readFile = os.ReadFile
+	}
+	if err := checkNotWSL1(readFile); err != nil {
+		return err
+	}
 	lookPath := b.LookPath
 	if lookPath == nil {
 		lookPath = exec.LookPath
@@ -122,10 +129,6 @@ func (b *Bubblewrap) Preflight(ctx context.Context) error {
 	}
 	if b.privileged() {
 		return nil
-	}
-	readFile := b.ReadFile
-	if readFile == nil {
-		readFile = os.ReadFile
 	}
 	if err := checkUserNamespaces(readFile); err != nil {
 		return err

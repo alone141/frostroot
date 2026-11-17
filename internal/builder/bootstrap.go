@@ -25,7 +25,7 @@ type Mmdebstrap struct {
 	Mode       string                       // "unshare", "root", or "" to choose from the current uid
 	CurrentUID func() int                   // defaults to os.Getuid
 	LookPath   func(string) (string, error) // defaults to exec.LookPath
-	ReadFile   func(string) ([]byte, error) // defaults to os.ReadFile; reads whether the kernel makes user namespaces
+	ReadFile   func(string) ([]byte, error) // defaults to os.ReadFile; reads the kernel's release and whether it makes user namespaces
 }
 
 // errorTailBytes is how much of mmdebstrap's output is repeated in a build
@@ -39,6 +39,13 @@ const LogFileName = "mmdebstrap.log"
 // Preflight checks the host before any work is done. spec.WorkDir is the work
 // root the build directory will be created in; it need not exist yet.
 func (m *Mmdebstrap) Preflight(spec BootstrapSpec) error {
+	readFile := m.ReadFile
+	if readFile == nil {
+		readFile = os.ReadFile
+	}
+	if err := checkNotWSL1(readFile); err != nil {
+		return err
+	}
 	lookPath := m.LookPath
 	if lookPath == nil {
 		lookPath = exec.LookPath
@@ -60,10 +67,6 @@ func (m *Mmdebstrap) Preflight(spec BootstrapSpec) error {
 	}
 	if m.bootstrapMode() != "unshare" {
 		return nil
-	}
-	readFile := m.ReadFile
-	if readFile == nil {
-		readFile = os.ReadFile
 	}
 	if err := checkUserNamespaces(readFile); err != nil {
 		return err

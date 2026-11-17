@@ -74,17 +74,25 @@ func (h *fakeHost) mkosi(uid int) *Mkosi {
 	return &Mkosi{RunCommand: h.run, LookPath: h.lookPath, ReadFile: h.readFile, CurrentUID: func() int { return uid }}
 }
 
-// TestMkosiPreflightRefusesAKernelWithoutUserNamespaces: on WSL 1 mkosi
-// failed at its first step, with its own words and exit 2.
-func TestMkosiPreflightRefusesAKernelWithoutUserNamespaces(t *testing.T) {
-	host := newFakeHost()
-	host.kernel = map[string]string{kernelReleasePath: "4.4.0-17763-Microsoft"}
-	err := host.mkosi(1000).Preflight(context.Background(), FedoraSpec{})
-	if !errors.Is(err, ErrNoUserNamespaces) || !strings.Contains(err.Error(), "wsl --set-version") {
-		t.Errorf("Preflight on WSL 1 = %v, want ErrNoUserNamespaces with the way to WSL 2", err)
-	}
-	if err := host.mkosi(0).Preflight(context.Background(), FedoraSpec{}); err != nil {
-		t.Errorf("Preflight as root on WSL 1 = %v, want nil: root makes no user namespace", err)
+// TestMkosiPreflightRefusesWSL1: on WSL 1 mkosi failed at its first step,
+// with its own words and exit 2, and as root bubblewrap failed later. A
+// host that also lacks every Fedora tool hears of WSL 1 first, since
+// installing them would not help, and nothing runs.
+func TestMkosiPreflightRefusesWSL1(t *testing.T) {
+	for _, uid := range []int{0, 1000} {
+		host := newFakeHost()
+		host.kernel = map[string]string{kernelReleasePath: "4.4.0-17763-Microsoft"}
+		err := host.mkosi(uid).Preflight(context.Background(), FedoraSpec{})
+		if !errors.Is(err, ErrWSL1) || !strings.Contains(err.Error(), "build on Linux or in a WSL 2 distribution") {
+			t.Errorf("uid %d: Preflight on WSL 1 = %v, want ErrWSL1 with where to build", uid, err)
+		}
+		host.installed = map[string]bool{}
+		if err := host.mkosi(uid).Preflight(context.Background(), FedoraSpec{}); !errors.Is(err, ErrWSL1) {
+			t.Errorf("uid %d: Preflight on WSL 1 without mkosi = %v, want ErrWSL1", uid, err)
+		}
+		if len(host.ran) != 0 {
+			t.Errorf("uid %d ran %q, want nothing run on WSL 1", uid, host.ran)
+		}
 	}
 }
 
