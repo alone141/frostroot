@@ -23,19 +23,37 @@ const launchPollInterval = 100 * time.Millisecond
 // worse than holding it until the process ends.
 var library = sync.OnceValues(loadLibrary)
 
+// loadLibrarySearchSystem32 is LoadLibraryExW's LOAD_LIBRARY_SEARCH_SYSTEM32:
+// the libraries the loaded one needs come from the system directory alone.
+const loadLibrarySearchSystem32 = 0x00000800
+
 // loadLibrary loads wslapi.dll by its full path in the system directory,
-// never by bare name, so that a wslapi.dll beside a downloaded executable
-// is not what runs.
+// never by bare name, and the libraries it needs from the system directory
+// too, never from the application's: import runs frostroot from a user's
+// install directory, and a library planted beside it must not be what runs.
 func loadLibrary() (*syscall.DLL, error) {
 	systemDir, err := systemDirectory()
 	if err != nil {
 		return nil, err
 	}
-	dll, err := syscall.LoadDLL(filepath.Join(systemDir, "wslapi.dll"))
+	path := filepath.Join(systemDir, "wslapi.dll")
+	kernel32, err := syscall.LoadDLL("kernel32.dll")
 	if err != nil {
-		return nil, fmt.Errorf("%w: loading %s: %w", ErrNoWSL, filepath.Join(systemDir, "wslapi.dll"), err)
+		return nil, fmt.Errorf("loading kernel32.dll: %w", err)
 	}
-	return dll, nil
+	loadLibraryEx, err := kernel32.FindProc("LoadLibraryExW")
+	if err != nil {
+		return nil, fmt.Errorf("finding LoadLibraryExW: %w", err)
+	}
+	pathPointer, err := utf16("library path", path)
+	if err != nil {
+		return nil, err
+	}
+	handle, _, callErr := loadLibraryEx.Call(uintptr(unsafe.Pointer(pathPointer)), 0, loadLibrarySearchSystem32)
+	if handle == 0 {
+		return nil, fmt.Errorf("%w: loading %s: %w", ErrNoWSL, path, callErr)
+	}
+	return &syscall.DLL{Name: path, Handle: syscall.Handle(handle)}, nil
 }
 
 // systemDirectory returns Windows' system directory, C:\Windows\System32
@@ -176,9 +194,23 @@ func Launch(ctx context.Context, name, command string) (output []byte, exitCode 
 	if err != nil {
 		return nil, 0, err
 	}
-	var readEnd, writeEnd syscall.Handle
 	inheritable := syscall.SecurityAttributes{InheritHandle: 1}
 	inheritable.Length = uint32(unsafe.Sizeof(inheritable))
+	// Standard input is this process's own, as in the experiments that
+	// found this call working; the commands Launch runs read none. A
+	// process with none, started detached or by a service, gives the
+	// command NUL instead.
+	standardInput, err := syscall.GetStdHandle(syscall.STD_INPUT_HANDLE)
+	if err != nil || standardInput == syscall.InvalidHandle || standardInput == 0 {
+		nul, err := openNUL(&inheritable)
+		if err != nil {
+			return nil, 0, err
+		}
+		// The command has its own copy once WslLaunch returns.
+		defer func() { _ = syscall.CloseHandle(nul) }() // read-only: closing it loses nothing
+		standardInput = nul
+	}
+	var readEnd, writeEnd syscall.Handle
 	if err := syscall.CreatePipe(&readEnd, &writeEnd, &inheritable, 0); err != nil {
 		return nil, 0, fmt.Errorf("CreatePipe: %w", err)
 	}
@@ -189,12 +221,6 @@ func Launch(ctx context.Context, name, command string) (output []byte, exitCode 
 		return nil, 0, fmt.Errorf("SetHandleInformation: %w", err)
 	}
 	reader := os.NewFile(uintptr(readEnd), "WslLaunch output")
-	// Standard input is this process's own, as in the experiments that
-	// found this call working; the commands Launch runs read none.
-	standardInput, err := syscall.GetStdHandle(syscall.STD_INPUT_HANDLE)
-	if err != nil {
-		standardInput = 0
-	}
 	var process syscall.Handle
 	result, _, _ := launch.Call(
 		uintptr(unsafe.Pointer(namePointer)), uintptr(unsafe.Pointer(commandPointer)),
@@ -241,6 +267,20 @@ func Launch(ctx context.Context, name, command string) (output []byte, exitCode 
 	case <-ctx.Done():
 		return nil, exitCode, ctx.Err()
 	}
+}
+
+// openNUL opens the NUL device for reading, as a handle a started process
+// inherits when attributes say so.
+func openNUL(attributes *syscall.SecurityAttributes) (syscall.Handle, error) {
+	name, err := utf16("device", "NUL")
+	if err != nil {
+		return 0, err
+	}
+	handle, err := syscall.CreateFile(name, syscall.GENERIC_READ, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, attributes, syscall.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		return 0, fmt.Errorf("opening NUL for the command's standard input: %w", err)
+	}
+	return handle, nil
 }
 
 // waitForProcess waits for process to exit, looking at ctx every
