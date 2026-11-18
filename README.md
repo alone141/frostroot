@@ -2,7 +2,7 @@
 
 **Freeze an Ubuntu or Fedora root filesystem into a recipe, a lockfile, and a golden image you can hand to anyone.**
 
-> **Status: v0.15.1.** `init`, `edit`, `capture`, `validate`, `build`,
+> **Status: v0.16.0.** `init`, `edit`, `capture`, `validate`, `build`,
 > `vendor` and `build --offline` work for Ubuntu 20.04, 22.04, 24.04 and
 > 26.04, and all but `capture` for Fedora 44, built with mkosi (see
 > [Fedora](#fedora)). An Ubuntu recipe can add third-party apt
@@ -1325,7 +1325,8 @@ certificate authority nobody has, with the lock recording what it could not
 verify (v0.13), Ubuntu 26.04, which new recipes now start on (v0.14), and
 Fedora 44, built with mkosi, rebuilt offline byte for byte, and offered by
 the form beside Ubuntu (v0.15), and a raw disk image of Ubuntu 24.04 or
-26.04 that boots a PC or a VM (v0.15.1).
+26.04 that boots a PC or a VM (v0.15.1), and `frostroot import`, which
+registers an image on a Windows without `wsl --import` (v0.16).
 
 **Deliberately not yet:** families other than Ubuntu and Fedora · flat or
 unsigned apt repositories · npm and cargo lockfiles · Python source
