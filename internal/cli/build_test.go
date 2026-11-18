@@ -572,6 +572,7 @@ func TestReportBuildFailureExitCodes(t *testing.T) {
 		"a host that cannot mount":          {fmt.Errorf("%w: mount: permission denied", builder.ErrCannotMount), exitUserError, true, "mount"},
 		"a package cached twice":            {fmt.Errorf("%w: git.rpm from updates is in it twice; remove /c and build again", builder.ErrPackageCacheConflict), exitUserError, true, "remove /c"},
 		"a lock that does not parse":        {fmt.Errorf("%w: toml: strict mode: fields in the document are missing in the target struct", pool.ErrBadLock), exitUserError, false, "unusable"},
+		"WSL 1":                             {fmt.Errorf("%w; build on Linux or in a WSL 2 distribution", builder.ErrWSL1), exitUserError, false, "frostroot: WSL 1 cannot build an image; build on Linux"},
 		"a pool file that cannot be read":   {fmt.Errorf("checking vendor/debs: %w: open vendor/debs/curl_1_amd64.deb: permission denied", pool.ErrPoolRead), exitUserError, false, "cannot read the pool"},
 	}
 	for name, test := range tests {
@@ -800,7 +801,8 @@ func TestBuildPreflightFailuresAreUserErrors(t *testing.T) {
 		fmt.Errorf("%w: mkosi, createrepo_c; install with: sudo apt install mkosi createrepo-c", builder.ErrNoFedoraTool),
 		fmt.Errorf("%w: this host has mkosi %q, and frostroot builds Fedora with 20.2", builder.ErrMkosiVersion, "25.3"),
 		fmt.Errorf("%w: bwrap; install with: sudo apt install bubblewrap", builder.ErrNoDiskTool),
-		fmt.Errorf("%w: this is WSL 1, which has none", builder.ErrNoUserNamespaces),
+		fmt.Errorf("%w: user.max_user_namespaces is 0", builder.ErrNoUserNamespaces),
+		fmt.Errorf("%w; build on Linux or in a WSL 2 distribution", builder.ErrWSL1),
 	}
 	for _, preflightErr := range preflightErrors {
 		t.Run(preflightErr.Error(), func(t *testing.T) {
@@ -814,6 +816,29 @@ func TestBuildPreflightFailuresAreUserErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBuildOnWSL1SaysSoFirst: on WSL 1 the build exits 1 at once, and after
+// its heading the first and only thing it says is that WSL 1 cannot build.
+func TestBuildOnWSL1SaysSoFirst(t *testing.T) {
+	recipeDir := newRecipeDir(t, "valid.toml")
+	var stdout, stderr bytes.Buffer
+	refusal := fmt.Errorf("%w; build on Linux or in a WSL 2 distribution and bring the image here", builder.ErrWSL1)
+	bootstrapper := &fakeBootstrapper{preflightErr: refusal}
+	if exitCode := newBuildApp(t, recipeDir, bootstrapper, &stdout, &stderr).Run([]string{"build"}); exitCode != exitUserError {
+		t.Fatalf("exit code = %d, want %d; stderr %s", exitCode, exitUserError, stderr.String())
+	}
+	heading, said, _ := strings.Cut(stderr.String(), "\n")
+	if !strings.HasPrefix(heading, "frostroot: building ") {
+		t.Errorf("first line on stderr = %q, want the build's heading", heading)
+	}
+	if want := "frostroot: " + refusal.Error() + "\n"; said != want {
+		t.Errorf("stderr after the heading = %q, want only %q", said, want)
+	}
+	if bootstrapper.bootstrapRan() {
+		t.Error("the build bootstrapped on WSL 1")
+	}
+	assertNoLock(t, recipeDir)
 }
 
 func TestBuildWorkRootUnderMntIsUserError(t *testing.T) {

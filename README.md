@@ -193,10 +193,11 @@ On a Debian host, also `sudo apt install ubuntu-keyring`.
 Building needs either **user namespaces** (normal on current distributions,
 and what you get when you run frostroot as yourself) or **root** (`sudo
 frostroot build`). It needs network access; consuming the tarball does not.
-WSL 1 has no user namespaces, so under WSL build in a WSL 2 distribution
-(`wsl --set-version DISTRIBUTION 2`, from Windows 10 version 1903 on);
-frostroot refuses WSL 1, and a kernel that switched them off, with exit 1
-before anything starts.
+WSL 1 cannot build an image, as yourself or as root: build on Linux or in
+a WSL 2 distribution and bring the image here. Where Windows is new
+enough (Windows 10 version 1903 on), `wsl --set-version DISTRIBUTION 2`
+converts the distribution. frostroot refuses WSL 1, and a kernel that
+switched user namespaces off, with exit 1 before anything starts.
 
 Either way, mmdebstrap mounts `/proc`, `/sys` and `/dev` in the image while
 it installs. That takes `mount`, which a standard Ubuntu installation has,
@@ -360,7 +361,7 @@ before anything is fetched.
 | Exit code | Meaning |
 |---|---|
 | 0 | success |
-| 1 | something you can fix: invalid or missing recipe, not Linux, mmdebstrap or ubuntu-keyring missing, a host without `mount` or one that cannot mount in the build, for Fedora mkosi or a program it runs missing, an mkosi frostroot does not know, or user namespaces restricted, or a package in its package cache twice with different contents (the work directory is kept), a kernel without user namespaces (WSL 1) when building as yourself, for a disk image bubblewrap or uidmap missing or a `disk.size` too small for the image (the work directory is kept), unusable work directory, a `dist/` you cannot write to or a directory where the lock or the image goes, a source key or certificate file that cannot be read, an unusable `SOURCE_DATE_EPOCH`, another `build` or `vendor` of yours running in the same directory; for `vendor` and `--offline`, no lock, a lock that cannot be read or holds what no build writes, a lock without checksums, a recipe that changed since the lock, an incomplete `vendor/debs/` or `vendor/rpms/`, or a file in it that cannot be read; for `vendor`, a pool it cannot create, write or prune; for `init`, `edit` and `capture`, declining to write the recipe |
+| 1 | something you can fix: invalid or missing recipe, not Linux, mmdebstrap or ubuntu-keyring missing, a host without `mount` or one that cannot mount in the build, for Fedora mkosi or a program it runs missing, an mkosi frostroot does not know, or user namespaces restricted, or a package in its package cache twice with different contents (the work directory is kept), WSL 1, a kernel without user namespaces when building as yourself, for a disk image bubblewrap or uidmap missing or a `disk.size` too small for the image (the work directory is kept), unusable work directory, a `dist/` you cannot write to or a directory where the lock or the image goes, a source key or certificate file that cannot be read, an unusable `SOURCE_DATE_EPOCH`, another `build` or `vendor` of yours running in the same directory; for `vendor` and `--offline`, no lock, a lock that cannot be read or holds what no build writes, a lock without checksums, a recipe that changed since the lock, an incomplete `vendor/debs/` or `vendor/rpms/`, or a file in it that cannot be read; for `vendor`, a pool it cannot create, write or prune; for `init`, `edit` and `capture`, declining to write the recipe |
 | 2 | the build failed: mmdebstrap or mkosi failed (unknown package, mirror unreachable), provisioning failed, the tarball could not be placed, an offline build's packages differ from the lock; for `vendor`, a download failed or a file did not match its checksum |
 | 130 | interrupted with Ctrl-C, at any step up to placing the image, or Ctrl-C or Esc in the form; nothing is written and the work directory is kept; `vendor` keeps finished downloads; `capture --plain` interrupted while it fetches signing keys keeps the recipe it wrote and its report, and names the keys still missing. A build killed outright may leave a hidden `.tmp` file in the recipe directory or `dist/`; the next build there removes it |
 

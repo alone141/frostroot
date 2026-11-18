@@ -565,8 +565,8 @@ func TestMmdebstrapPreflight(t *testing.T) {
 			lookPath:    mmdebstrapFound,
 			kernel:      map[string]string{kernelReleasePath: "4.4.0-17763-Microsoft"},
 			spec:        BootstrapSpec{KeyringPath: createKeyringFile(t), WorkDir: reachableWorkRoot},
-			wantError:   ErrNoUserNamespaces,
-			wantInError: "wsl --set-version DISTRIBUTION 2",
+			wantError:   ErrWSL1,
+			wantInError: "build on Linux or in a WSL 2 distribution",
 		},
 		{
 			name:     "WSL 2",
@@ -575,11 +575,23 @@ func TestMmdebstrapPreflight(t *testing.T) {
 			spec:     BootstrapSpec{KeyringPath: createKeyringFile(t), WorkDir: reachableWorkRoot},
 		},
 		{
-			name:     "WSL 1 as root",
-			mode:     "root",
-			lookPath: mmdebstrapFound,
-			kernel:   map[string]string{kernelReleasePath: "4.4.0-17763-Microsoft"},
-			spec:     BootstrapSpec{KeyringPath: createKeyringFile(t), WorkDir: reachableWorkRoot},
+			// Root passed, and the build failed minutes later in systemd's
+			// maintainer script: Failed to take /etc/passwd lock.
+			name:        "WSL 1 as root",
+			mode:        "root",
+			lookPath:    mmdebstrapFound,
+			kernel:      map[string]string{kernelReleasePath: "4.4.0-17763-Microsoft"},
+			spec:        BootstrapSpec{KeyringPath: createKeyringFile(t), WorkDir: reachableWorkRoot},
+			wantError:   ErrWSL1,
+			wantInError: "wsl --set-version DISTRIBUTION 2",
+		},
+		{
+			// Installing mmdebstrap would not help: WSL 1 is refused first.
+			name:      "WSL 1 without mmdebstrap",
+			lookPath:  mmdebstrapMissing,
+			kernel:    map[string]string{kernelReleasePath: "4.4.0-17763-Microsoft"},
+			spec:      BootstrapSpec{KeyringPath: createKeyringFile(t), WorkDir: reachableWorkRoot},
+			wantError: ErrWSL1,
 		},
 		{
 			name:        "user namespaces switched off",

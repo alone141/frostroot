@@ -117,12 +117,19 @@ type FedoraSpec struct {
 	LocalRepositories []string
 }
 
-// Preflight checks the host before any work is done: every program a
-// Fedora build runs, named all at once with the line that installs them,
-// the mkosi version, a dnf that runs, and, unprivileged, a kernel that lets
-// mkosi use its user namespace and a work root that namespace can enter.
-// spec.WorkDir need not exist yet.
+// Preflight checks the host before any work is done: that it is not WSL 1,
+// every program a Fedora build runs, named all at once with the line that
+// installs them, the mkosi version, a dnf that runs, and, unprivileged, a
+// kernel that lets mkosi use its user namespace and a work root that
+// namespace can enter. spec.WorkDir need not exist yet.
 func (m *Mkosi) Preflight(ctx context.Context, spec FedoraSpec) error {
+	readFile := m.ReadFile
+	if readFile == nil {
+		readFile = os.ReadFile
+	}
+	if err := checkNotWSL1(readFile); err != nil {
+		return err
+	}
 	lookPath := m.LookPath
 	if lookPath == nil {
 		lookPath = exec.LookPath
@@ -157,10 +164,6 @@ func (m *Mkosi) Preflight(ctx context.Context, spec FedoraSpec) error {
 	}
 	if m.privileged() {
 		return nil
-	}
-	readFile := m.ReadFile
-	if readFile == nil {
-		readFile = os.ReadFile
 	}
 	if err := checkUserNamespaces(readFile); err != nil {
 		return err
