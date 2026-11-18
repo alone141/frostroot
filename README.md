@@ -143,19 +143,24 @@ machine with the same mmdebstrap, produce the same bytes. See
 
 frostroot is a **Linux** program. On Windows, run it inside WSL. The images it
 builds are imported into WSL too, but they do not have to be built there.
+One command, `import`, runs on Windows itself: see
+[On a Windows without `wsl --import`](#on-a-windows-without-wsl---import)
+below.
 
 From a [release](https://github.com/alone141/frostroot/releases): download
 `frostroot-linux-amd64` and `SHA256SUMS`, then
 
 ```sh
-sha256sum -c SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
 install -m 0755 frostroot-linux-amd64 ~/.local/bin/frostroot
 frostroot version
 sudo apt install mmdebstrap        # also pulls uidmap
 ```
 
-`sha256sum -c` says the binary is the file `SHA256SUMS` names. The release
-workflow also attests the build provenance of both files: a signed
+`sha256sum -c` says the binary is the file `SHA256SUMS` names;
+`--ignore-missing` because the file also names the Windows binary, which
+you did not download. The release workflow also attests the build
+provenance of the files: a signed
 statement that this repository's release workflow built them from the
 tagged commit. With the [GitHub CLI](https://cli.github.com/):
 
@@ -190,17 +195,6 @@ go build -o frostroot ./cmd/frostroot
 
 On a Debian host, also `sudo apt install ubuntu-keyring`.
 
-A Windows without `wsl --import` (Windows 10 before version 1903, or a
-machine with only WSL 1) takes the tarball with `frostroot import`, a
-command of the Windows build of frostroot, `frostroot-windows-amd64.exe`,
-which releases carry from the next one on. It is the one command that runs
-on Windows, needs no WSL distribution and no administrator, and builds
-nothing. From source:
-
-```sh
-GOOS=windows GOARCH=amd64 go build -o frostroot-windows-amd64.exe ./cmd/frostroot
-```
-
 Building needs either **user namespaces** (normal on current distributions,
 and what you get when you run frostroot as yourself) or **root** (`sudo
 frostroot build`). It needs network access; consuming the tarball does not.
@@ -218,6 +212,31 @@ them mmdebstrap would install anyway and systemd's setup would quietly come
 out incomplete, so frostroot refuses such a host with exit 1: before
 anything starts when `mount` is missing, and within a second of starting
 otherwise.
+
+### On a Windows without `wsl --import`
+
+A Windows 10 before version 1903, or a machine with only WSL 1, takes the
+tarball with `frostroot import`, a command of the Windows build of
+frostroot. It is the one command that runs on Windows, needs no
+administrator, and builds nothing. Releases after v0.15.1 carry
+`frostroot-windows-amd64.exe` beside the Linux binary, named in the same
+`SHA256SUMS` and attested with it. In PowerShell, in the directory the two
+files were downloaded to:
+
+```powershell
+(Get-FileHash .\frostroot-windows-amd64.exe -Algorithm SHA256).Hash.ToLower()
+Select-String frostroot-windows-amd64.exe .\SHA256SUMS
+```
+
+The two lines must show the same checksum. With the GitHub CLI,
+`gh attestation verify frostroot-windows-amd64.exe --repo alone141/frostroot`
+checks the provenance, as for the Linux binary. The binary is not signed,
+so Windows may ask before it runs it. Or from source, on any machine with
+Go:
+
+```sh
+GOOS=windows GOARCH=amd64 go build -o frostroot-windows-amd64.exe ./cmd/frostroot
+```
 
 ## Quick start
 

@@ -1,8 +1,10 @@
 name: Release
 
 # Pushing a tag such as v0.4.0 publishes a GitHub Release with a static
-# linux/amd64 binary and its checksum. The tag must equal the version the
-# binary reports, so a release never claims a version other than its tag.
+# linux/amd64 binary, the windows/amd64 binary whose import command
+# registers a tarball on a Windows without wsl --import, and their
+# checksums. The tag must equal the version the binary reports, so a release
+# never claims a version other than its tag.
 on:
   push:
     tags: ["v*"]
@@ -42,10 +44,17 @@ jobs:
           govulncheck ./...
       - name: Build a static binary
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o frostroot-linux-amd64 ./cmd/frostroot
-      - name: Check the binary
+      - name: Build the Windows binary
+        # The same flags as the Linux one. It is not signed: Windows may
+        # ask before it runs a download nobody signed.
+        run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o frostroot-windows-amd64.exe ./cmd/frostroot
+      - name: Check the binaries
+        # The Windows one cannot run here; that it was built is all this
+        # step knows of it.
         run: |
           ./frostroot-linux-amd64 version
-          sha256sum frostroot-linux-amd64 > SHA256SUMS
+          test -s frostroot-windows-amd64.exe
+          sha256sum frostroot-linux-amd64 frostroot-windows-amd64.exe > SHA256SUMS
           cat SHA256SUMS
       # A signed statement that this workflow, at this commit, built these
       # files, which `gh attestation verify FILE --repo alone141/frostroot`
@@ -56,8 +65,9 @@ jobs:
         with:
           subject-path: |
             frostroot-linux-amd64
+            frostroot-windows-amd64.exe
             SHA256SUMS
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --title "frostroot ${GITHUB_REF_NAME#v}" --generate-notes frostroot-linux-amd64 SHA256SUMS
+        run: gh release create "$GITHUB_REF_NAME" --title "frostroot ${GITHUB_REF_NAME#v}" --generate-notes frostroot-linux-amd64 frostroot-windows-amd64.exe SHA256SUMS
