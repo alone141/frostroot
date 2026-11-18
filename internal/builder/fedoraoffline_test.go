@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"testing"
 
 	"frostroot/internal/pool"
@@ -383,8 +382,7 @@ func TestBuildFedoraOfflineFailsWhenTheRebuildDiffers(t *testing.T) {
 func TestStagedRepositoriesAreReadableWhateverTheUmask(t *testing.T) {
 	options, bootstrapper, _ := newFedoraOfflineFixture(t)
 	options.KeepWork = true
-	previous := syscall.Umask(0o077)
-	t.Cleanup(func() { syscall.Umask(previous) })
+	setUmask(t, 0o077)
 	if _, err := (&Builder{Fedora: bootstrapper}).Build(context.Background(), sampleFedoraRecipe(), options); err != nil {
 		t.Fatal(err)
 	}

@@ -352,6 +352,26 @@ func TestDefaultUserFallsBackToUserName(t *testing.T) {
 	}
 }
 
+// TestCheckAccountName: the shape of a recipe's user, which import holds a
+// name read out of an image to before it reaches a command line. root and
+// the base system's accounts have that shape; anything a shell would read
+// as more than a word does not.
+func TestCheckAccountName(t *testing.T) {
+	for _, name := range []string{"student", "root", "www-data", "_apt", "a", strings.Repeat("a", 32)} {
+		if err := CheckAccountName(name); err != nil {
+			t.Errorf("CheckAccountName(%q) = %v, want nil", name, err)
+		}
+	}
+	for _, name := range []string{"", "Student", "o'neil", "two words", "student\nroot", "$(reboot)", "-u", "1student", strings.Repeat("a", 33)} {
+		if err := CheckAccountName(name); err == nil {
+			t.Errorf("CheckAccountName(%q) = nil, want an error", name)
+		}
+	}
+	if CheckUserName("root") == nil || CheckUserName("www-data") == nil {
+		t.Error("CheckUserName must still refuse root and the base system's accounts")
+	}
+}
+
 func TestSaveLoadRoundTrip(t *testing.T) {
 	original := loadValidRecipe(t)
 	path := filepath.Join(t.TempDir(), "frostroot.toml")

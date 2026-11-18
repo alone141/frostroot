@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -196,8 +195,7 @@ func TestWriteAptCaInfoIsWorldReadableWhateverTheUmask(t *testing.T) {
 	// apt inside mmdebstrap unshare is "other" to this file. WriteFile's
 	// mode is masked by the umask; chmod after write is what writeStageFile
 	// already does for the provision scripts.
-	previous := syscall.Umask(0o077)
-	t.Cleanup(func() { syscall.Umask(previous) })
+	setUmask(t, 0o077)
 
 	path, err := writeAptCaInfo(t.TempDir(), certificatePEM(t, "Corp Root CA"))
 	if err != nil {

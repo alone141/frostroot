@@ -20,8 +20,9 @@ That runs, in order:
 - `gofmt -l` over the files git would commit
 - `go vet ./...`, with and without the `integration` tag
 - `go test -race ./...`
-- `GOOS=windows go build ./...`, because the module must still compile off
-  Linux
+- `GOOS=windows go build ./...` and `GOOS=windows go vet ./...`, because
+  the module must still compile off Linux, and `import`'s Windows code is
+  compiled nowhere else
 - `shellcheck` over every script under `scripts/`; the step fails when
   shellcheck is not installed (`sudo apt-get install shellcheck`), and the
   builder's unit tests run it over the hooks and scripts it renders whenever

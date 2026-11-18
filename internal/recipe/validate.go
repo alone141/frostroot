@@ -586,11 +586,23 @@ var reservedAccountNames = []string{
 
 // CheckUserName reports why name cannot be the image's user, or nil.
 func CheckUserName(name string) error {
-	if name == "root" || !userNamePattern.MatchString(name) || len(name) > maxUserNameLength {
+	if name == "root" || CheckAccountName(name) != nil {
 		return fmt.Errorf("invalid user name %q (lowercase letters, digits, - and _; 1-%d chars; not root)", name, maxUserNameLength)
 	}
 	if slices.Contains(reservedAccountNames, name) {
 		return fmt.Errorf("invalid user name %q: the base system already has a user or group of that name, and the build could not create it", name)
+	}
+	return nil
+}
+
+// CheckAccountName reports why name is not an account name of the shape a
+// recipe's user has, or nil: the pattern and the length CheckUserName holds
+// a user to, without its refusal of root and of the base system's names.
+// import holds the default user an image's wsl.conf names to it, because
+// that name, read out of the image, goes into a command line.
+func CheckAccountName(name string) error {
+	if !userNamePattern.MatchString(name) || len(name) > maxUserNameLength {
+		return fmt.Errorf("invalid user name %q (lowercase letters, digits, - and _; 1-%d chars)", name, maxUserNameLength)
 	}
 	return nil
 }
