@@ -10,10 +10,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"frostroot/internal/builder"
 	"frostroot/internal/paxstrip"
 	"frostroot/internal/recipe"
 	"frostroot/internal/wslapi"
@@ -277,18 +279,49 @@ func (a *App) importFromInstalledCopy(ctx context.Context, job *importJob) int {
 		return exitBuildFailed
 	}
 	installedCopyPath := filepath.Join(job.installDir, installedCopyName)
-	if err := copyExecutable(executablePath, installedCopyPath, func() { job.installedCopyPath = installedCopyPath }); err != nil {
+	err = copyExecutable(ctx, executablePath, installedCopyPath, func() { job.installedCopyPath = installedCopyPath })
+	// The second stage starts a signal handling of its own, which a Ctrl-C
+	// before it does not reach.
+	if ctx.Err() != nil {
+		return a.reportImportInterrupted()
+	}
+	if err != nil {
 		a.stderrf("frostroot import: copying %s into %s: %v\n", executablePath, job.installDir, err)
 		return exitBuildFailed
 	}
 	// The second stage sees Ctrl-C itself, on the same console, and must
 	// finish undoing a registration, so it is waited for, not stopped.
-	exitCode, err := a.runInstalledCopy(ctx, installedCopyPath, []string{"import", importSecondStageFlag, job.name, job.installDir, job.strippedPath})
+	childExitCode, err := a.runInstalledCopy(ctx, installedCopyPath, []string{"import", importSecondStageFlag, job.name, job.installDir, job.strippedPath})
 	if err != nil {
 		a.stderrf("frostroot import: running %s: %v\n", installedCopyPath, err)
 		return exitBuildFailed
 	}
-	return exitCode
+	if !slices.Contains(frostrootExitCodes, childExitCode) {
+		a.stderrf("frostroot import: %s exited %d, which is no exit code of frostroot's: Windows ended it\n", installedCopyPath, childExitCode)
+	}
+	return installedCopyExitCode(ctx.Err(), childExitCode)
+}
+
+// frostrootExitCodes are the exit codes frostroot exits with.
+var frostrootExitCodes = []int{exitSuccess, exitUserError, exitBuildFailed, exitInterrupted}
+
+// installedCopyExitCode is import's exit code once the second stage exited
+// with childExitCode. Windows ends a process with codes of its own,
+// 0xC000013A when Ctrl-C or a closed console ends it, and import exits with
+// none of those: once Ctrl-C ended ctxErr's context, 130, unless the second
+// stage finished the import; otherwise the second stage's code when it is
+// frostroot's, and 2 for any other.
+func installedCopyExitCode(ctxErr error, childExitCode int) int {
+	switch {
+	case childExitCode == exitSuccess:
+		return exitSuccess
+	case ctxErr != nil:
+		return exitInterrupted
+	case slices.Contains(frostrootExitCodes, childExitCode):
+		return childExitCode
+	default:
+		return exitBuildFailed
+	}
 }
 
 // writeStrippedCopy writes the copy of the tarball import registers, beside
@@ -331,7 +364,7 @@ func (a *App) writeStrippedCopy(ctx context.Context, job *importJob) int {
 }
 
 // contextReader stops reading once ctx ends, so that Ctrl-C stops the copy
-// of a tarball of hundreds of megabytes.
+// of a tarball of hundreds of megabytes, or of frostroot itself.
 type contextReader struct {
 	ctx    context.Context
 	reader io.Reader
@@ -346,8 +379,8 @@ func (r contextReader) Read(buffer []byte) (int, error) {
 
 // copyExecutable copies the running program to destination, a new file,
 // and calls created once the file exists, so that a copy that fails half
-// way is removed too.
-func copyExecutable(sourcePath, destination string, created func()) error {
+// way is removed too. It stops once ctx ends.
+func copyExecutable(ctx context.Context, sourcePath, destination string, created func()) error {
 	source, err := os.Open(sourcePath)
 	if err != nil {
 		return err
@@ -358,7 +391,7 @@ func copyExecutable(sourcePath, destination string, created func()) error {
 		return err
 	}
 	created()
-	if _, err := io.Copy(target, source); err != nil {
+	if _, err := io.Copy(target, contextReader{ctx: ctx, reader: source}); err != nil {
 		_ = target.Close() // the copy failed already; that error is the one to report
 		return err
 	}
@@ -504,13 +537,13 @@ func (a *App) configureDefaultUser(ctx context.Context, name string) (string, er
 	if defaultUser == rootUserName {
 		return rootUserName, nil
 	}
-	// The name came out of the image and goes into a command line. It is
-	// not quoted: how WslLaunch splits that line is Windows' affair, and
-	// the rule leaves nothing in it that a shell would read.
+	// The name came out of the image and goes into a command line, which
+	// WslLaunch may hand to a shell, so it is held to the user-name rule and
+	// quoted, as every value that reaches a shell is.
 	if err := recipe.CheckAccountName(defaultUser); err != nil {
 		return "", fmt.Errorf("/etc/wsl.conf names a default user frostroot does not pass to a command: %w", err)
 	}
-	output, status, err = a.launchInDistribution(ctx, name, "id -u "+defaultUser)
+	output, status, err = a.launchInDistribution(ctx, name, uidCommand(defaultUser))
 	if err != nil {
 		return "", fmt.Errorf("asking the distribution for the uid of %s: %w", defaultUser, err)
 	}
@@ -525,6 +558,12 @@ func (a *App) configureDefaultUser(ctx context.Context, name string) (string, er
 		return "", fmt.Errorf("making %s the default user: %w", defaultUser, err)
 	}
 	return defaultUser, nil
+}
+
+// uidCommand is how import asks the distribution for the uid of userName,
+// which has passed the user-name rule.
+func uidCommand(userName string) string {
+	return "id -u " + builder.ShellQuote(userName)
 }
 
 // launchInDistribution runs command in the distribution, for at most

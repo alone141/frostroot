@@ -492,6 +492,13 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
+// ShellQuote single-quotes value for a POSIX shell, as the builder quotes
+// every value it hands one, for the packages outside it that hand a shell a
+// value too.
+func ShellQuote(value string) string {
+	return shellQuote(value)
+}
+
 // CustomizeHooks returns the mmdebstrap --customize-hook arguments for stage,
 // in order. Every hook fails the build on error. mmdebstrap splits the
 // arguments of upload, download and copy-out with shellwords, so quoting host

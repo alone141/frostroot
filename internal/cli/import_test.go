@@ -121,6 +121,10 @@ func (f *fakeWSL) launched() []string {
 // frostrootWSLConf is the wsl.conf frostroot writes into an image.
 const frostrootWSLConf = "[boot]\nsystemd=true\n\n[user]\ndefault=student\n\n[time]\nuseWindowsTimezone=false\n"
 
+// studentUIDCommand is the command that asks for the uid of student, the
+// default user of frostrootWSLConf, its name quoted for a shell.
+const studentUIDCommand = "id -u 'student'"
+
 // importFixture is an import about to run: a tarball with both ACL records
 // and a capability, an install directory that does not exist yet, the
 // running program's file, and a fake WSL whose distribution names student
@@ -136,6 +140,8 @@ type importFixture struct {
 	executablePath string
 	// interrupt is a Ctrl-C, which both stages see.
 	interrupt context.CancelFunc
+	// installedCopyRuns counts the runs of the second stage.
+	installedCopyRuns int
 }
 
 func newImportFixture(t *testing.T) *importFixture {
@@ -151,8 +157,8 @@ func newImportFixture(t *testing.T) *importFixture {
 		executablePath: filepath.Join(baseDir, "bin", "frostroot-windows-amd64.exe"),
 	}
 	fixture.wsl = &fakeWSL{t: t, installDir: fixture.installDir, registered: map[string]bool{"Ubuntu": true}, launches: map[string]fakeLaunch{
-		wslConfCommand:  {output: frostrootWSLConf},
-		"id -u student": {output: "1000\n"},
+		wslConfCommand:    {output: frostrootWSLConf},
+		studentUIDCommand: {output: "1000\n"},
 	}}
 	if err := os.WriteFile(fixture.tarballPath, importTarball(t, true), 0o644); err != nil {
 		t.Fatal(err)
@@ -176,6 +182,7 @@ func newImportFixture(t *testing.T) *importFixture {
 	// The second stage runs here, as the copy in the install directory
 	// would run it.
 	fixture.app.runInstalledCopy = func(_ context.Context, executablePath string, args []string) (int, error) {
+		fixture.installedCopyRuns++
 		installedCopy := &App{
 			Stdout: fixture.stdout, Stderr: fixture.stderr, RecipeDir: baseDir, GOOS: "windows",
 			wsl:              fixture.wsl,
@@ -261,7 +268,7 @@ func TestImport(t *testing.T) {
 		"IsRegistered lab",
 		"Register lab",
 		"Launch lab: cat /etc/wsl.conf",
-		"Launch lab: id -u student",
+		"Launch lab: " + studentUIDCommand,
 		"Configure lab 1000 7",
 	}
 	if !slices.Equal(fixture.wsl.calls, wantCalls) {
@@ -483,11 +490,11 @@ func TestImportUnregistersAfterAFailure(t *testing.T) {
 			f.launches[wslConfCommand] = fakeLaunch{exitCode: 1<<32 - 1}
 		}, "ran no command (cat /etc/wsl.conf exited 4294967295)"},
 		{"id -u failing", func(f *fakeWSL) {
-			f.launches["id -u student"] = fakeLaunch{output: "id: 'student': no such user\n", exitCode: 1}
+			f.launches[studentUIDCommand] = fakeLaunch{output: "id: 'student': no such user\n", exitCode: 1}
 		}, "has no user student"},
-		{"id -u printing no number", func(f *fakeWSL) { f.launches["id -u student"] = fakeLaunch{output: "1000; reboot\n"} }, "not a number"},
-		{"id -u printing (uid_t)-1", func(f *fakeWSL) { f.launches["id -u student"] = fakeLaunch{output: "4294967295\n"} }, "which is no uid"},
-		{"id -u failing to start", func(f *fakeWSL) { f.launches["id -u student"] = fakeLaunch{err: context.DeadlineExceeded} }, "asking the distribution for the uid"},
+		{"id -u printing no number", func(f *fakeWSL) { f.launches[studentUIDCommand] = fakeLaunch{output: "1000; reboot\n"} }, "not a number"},
+		{"id -u printing (uid_t)-1", func(f *fakeWSL) { f.launches[studentUIDCommand] = fakeLaunch{output: "4294967295\n"} }, "which is no uid"},
+		{"id -u failing to start", func(f *fakeWSL) { f.launches[studentUIDCommand] = fakeLaunch{err: context.DeadlineExceeded} }, "asking the distribution for the uid"},
 		{"Configure failing", func(f *fakeWSL) {
 			f.configureErr = &wslapi.HRESULTError{Function: "WslConfigureDistribution", Code: 0x80070005}
 		}, "making student the default user"},
@@ -635,6 +642,92 @@ func TestImportInterrupted(t *testing.T) {
 		fixture.assertNoCopiesLeft(t)
 		fixture.assertNoInstallDir(t)
 	})
+	// The second stage starts a signal handling of its own, so a Ctrl-C
+	// once the tarball is copied, and before the second stage starts, is
+	// the first stage's to see.
+	t.Run("while copying frostroot", func(t *testing.T) {
+		fixture := newImportFixture(t)
+		fixture.app.executable = func() (string, error) {
+			fixture.interrupt()
+			return fixture.executablePath, nil
+		}
+		if exitCode := fixture.runDefault(); exitCode != exitInterrupted {
+			t.Fatalf("exit code = %d, want %d; stderr:\n%s", exitCode, exitInterrupted, fixture.stderr)
+		}
+		if !strings.Contains(fixture.stderr.String(), "nothing was registered") {
+			t.Errorf("stderr should say nothing was registered:\n%s", fixture.stderr)
+		}
+		if fixture.installedCopyRuns != 0 {
+			t.Errorf("the second stage ran %d times, want none", fixture.installedCopyRuns)
+		}
+		if slices.Contains(fixture.wsl.calls, "Register lab") || len(fixture.wsl.registered) != 1 {
+			t.Errorf("an import interrupted before its second stage registered something: calls %q", fixture.wsl.calls)
+		}
+		fixture.assertNoCopiesLeft(t)
+		fixture.assertNoInstallDir(t)
+	})
+}
+
+// windowsEndedExitCode is 0xC000013A, STATUS_CONTROL_C_EXIT: how a process
+// exits when Ctrl-C or a closed console ends it.
+const windowsEndedExitCode = 3221225786
+
+// TestImportMapsTheSecondStagesExitCode: the second stage is a process,
+// which Windows can end with a code of its own, and import exits with
+// frostroot's codes only.
+func TestImportMapsTheSecondStagesExitCode(t *testing.T) {
+	for _, testCase := range []struct {
+		name         string
+		interrupted  bool
+		wantExitCode int
+	}{
+		{"ended by Windows", false, exitBuildFailed},
+		{"ended by Ctrl-C", true, exitInterrupted},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newImportFixture(t)
+			fixture.app.runInstalledCopy = func(context.Context, string, []string) (int, error) {
+				if testCase.interrupted {
+					fixture.interrupt()
+				}
+				return windowsEndedExitCode, nil
+			}
+			if exitCode := fixture.runDefault(); exitCode != testCase.wantExitCode {
+				t.Fatalf("exit code = %d, want %d; stderr:\n%s", exitCode, testCase.wantExitCode, fixture.stderr)
+			}
+			if !strings.Contains(fixture.stderr.String(), "exited 3221225786") {
+				t.Errorf("stderr should name the code the second stage exited with:\n%s", fixture.stderr)
+			}
+			fixture.assertNoCopiesLeft(t)
+			fixture.assertNoInstallDir(t)
+		})
+	}
+}
+
+func TestInstalledCopyExitCode(t *testing.T) {
+	for _, testCase := range []struct {
+		ctxErr        error
+		childExitCode int
+		want          int
+	}{
+		{nil, exitSuccess, exitSuccess},
+		{nil, exitUserError, exitUserError},
+		{nil, exitBuildFailed, exitBuildFailed},
+		{nil, exitInterrupted, exitInterrupted},
+		{nil, windowsEndedExitCode, exitBuildFailed},
+		{nil, 3, exitBuildFailed},
+		{nil, -1, exitBuildFailed},
+		{context.Canceled, windowsEndedExitCode, exitInterrupted},
+		{context.Canceled, exitBuildFailed, exitInterrupted},
+		{context.Canceled, exitInterrupted, exitInterrupted},
+		// A second stage that finished registered the distribution and
+		// said so; the Ctrl-C came too late to stop it.
+		{context.Canceled, exitSuccess, exitSuccess},
+	} {
+		if got := installedCopyExitCode(testCase.ctxErr, testCase.childExitCode); got != testCase.want {
+			t.Errorf("installedCopyExitCode(%v, %d) = %d, want %d", testCase.ctxErr, testCase.childExitCode, got, testCase.want)
+		}
+	}
 }
 
 func TestImportRefusesOffWindows(t *testing.T) {
