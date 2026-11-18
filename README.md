@@ -1369,6 +1369,8 @@ What was run for real, release by release since v0.1.0, is recorded in
 | [Ubuntu 26.04 plan](docs/superpowers/plans/2026-09-28-frostroot-resolute.md) | The seven tasks v0.14 was built from. |
 | [Fedora spec](docs/superpowers/specs/2026-09-28-frostroot-fedora.md) | v0.15: Fedora 44 through mkosi with a Fedora tools tree; the spike, what it found about byte identity and unprivileged builds, the seam, the form, and the owner's decisions. |
 | [Fedora plan](docs/superpowers/plans/2026-09-28-frostroot-fedora.md) | The eighteen tasks v0.15 was built from, in three pull requests: the seam, building Fedora, the form. |
+| [WSL 1 spec](docs/superpowers/specs/2026-11-16-frostroot-wsl1.md) | Importing on a Windows without `wsl --import`: the probes of Windows 10 1809, the spike that ended building inside WSL 1, the import experiments, the owner's decisions, and what the implementation found. |
+| [WSL 1 plan](docs/superpowers/plans/2026-11-16-frostroot-wsl1.md) | The twenty tasks `frostroot import` was built from, in five pull requests after the spec's own. |
 | [TUI plan, second round](docs/superpowers/plans/2026-09-18-frostroot-tui-2.md) | What a walk through the interface found, the six tasks v0.9 was built from, and the tasks of v0.10's package picker. |
 | [Implementation plan](docs/superpowers/plans/2026-09-15-frostroot-v1.md) | The 13 tasks v1 was built from, with the spike's amendments. |
 | [TUI plan](docs/superpowers/plans/2026-09-17-frostroot-tui.md) | The seven tasks v0.2 was built from. |
