@@ -446,6 +446,50 @@ func TestCopyFollowsThePAXSizeRecord(t *testing.T) {
 	}
 }
 
+// TestCopyFollowsOnlyTheLastPAXHeader: archive/tar replaces the records of
+// one pax header with the next one's, so a "size" record that a later
+// header, extended or global, does not repeat no longer counts, and the
+// entry's own size field does. An ACL record after the entry shows whether
+// the walk stepped over what archive/tar steps over.
+func TestCopyFollowsOnlyTheLastPAXHeader(t *testing.T) {
+	sizeRecord := paxRecordText("size", "600")
+	comment := paxRecordText("comment", "second")
+	acl := paxRecordText(aclAccessKey, aclValue)
+	for _, secondType := range []byte{'x', 'g'} {
+		t.Run(string(secondType), func(t *testing.T) {
+			var archive []byte
+			archive = append(archive, rawHeader("PaxHeaders/small", 'x', int64(len(sizeRecord)))...)
+			archive = append(archive, padded(sizeRecord)...)
+			archive = append(archive, rawHeader("PaxHeaders/second", secondType, int64(len(comment)))...)
+			archive = append(archive, padded(comment)...)
+			archive = append(archive, rawHeader("small", '0', 3)...)
+			archive = append(archive, padded("abc")...)
+			archive = append(archive, rawHeader("PaxHeaders/after", 'x', int64(len(acl)))...)
+			archive = append(archive, padded(acl)...)
+			archive = append(archive, rawHeader("after", '0', 0)...)
+			archive = append(archive, make([]byte, 1024)...)
+			output, dropped := copyArchive(t, archive)
+			if dropped != 1 {
+				t.Errorf("dropped = %d, want 1, the ACL record after the entry", dropped)
+			}
+			inputEntries := readWithArchiveTar(t, archive)
+			outputEntries := readWithArchiveTar(t, output)
+			if len(outputEntries) != len(inputEntries) {
+				t.Fatalf("the copy has %d entries, want %d", len(outputEntries), len(inputEntries))
+			}
+			for index, want := range inputEntries {
+				got := outputEntries[index]
+				if gotFields, wantFields := headerFields(got.header), headerFields(want.header); gotFields != wantFields || got.content != want.content {
+					t.Errorf("entry %d changed:\n got %s, content %q\nwant %s, content %q", index, gotFields, got.content, wantFields, want.content)
+				}
+				if _, kept := got.header.PAXRecords[aclAccessKey]; kept {
+					t.Errorf("%s: the ACL record is still there", want.header.Name)
+				}
+			}
+		})
+	}
+}
+
 func TestCopyRefuses(t *testing.T) {
 	archive := writeArchive(t, fixtureEntries())
 	entries, _ := splitArchive(t, archive)

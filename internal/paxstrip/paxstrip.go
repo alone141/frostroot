@@ -135,8 +135,8 @@ type archiveWalk struct {
 	// offset is where the next block starts in the decompressed archive,
 	// for messages.
 	offset int64
-	// pendingSize is the size a pax extended header's "size" record gives
-	// the next entry, or -1 for none.
+	// pendingSize is the size the "size" record of the last pax extended
+	// header gives the next entry, or -1 for none.
 	pendingSize int64
 }
 
@@ -239,6 +239,11 @@ func (w *archiveWalk) copyPAXHeader(header []byte, size int64, global bool, head
 	if size > MaxPAXHeaderSize {
 		return fmt.Errorf("%w: the pax header at byte %d holds %d bytes, more than the %d frostroot reads", ErrNotTarball, headerOffset, size, MaxPAXHeaderSize)
 	}
+	// archive/tar's reader replaces the records it holds for the next entry
+	// with each pax header's, a global one's included, which it returns as an
+	// entry of its own: only the last extended header before an entry gives
+	// it a size, and the walk must step over what that reader steps over.
+	w.pendingSize = -1
 	data := make([]byte, paddedSize(size))
 	if err := w.read(data, "a pax header"); err != nil {
 		return w.truncated(err, "a pax header")
