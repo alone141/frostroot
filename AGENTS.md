@@ -51,6 +51,23 @@ work with the `wsl.exe` of Windows 10 1809 too, which has no `--cd`; on a
 machine whose default distribution does not start, `FROSTROOT_WSL_DISTRO`
 names another.
 
+`import` is the one command that runs on Windows itself, and its Windows
+code runs in no check: `scripts/check.sh` only builds and vets it. To run
+it, cross-compile where Go is, carry the files over, and run them on
+Windows, from PowerShell, `cmd` or Git Bash:
+
+```sh
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o frostroot-windows-amd64.exe ./cmd/frostroot
+GOOS=windows GOARCH=amd64 go test -c -o wslapi.test.exe ./internal/wslapi/
+GOOS=windows GOARCH=amd64 go test -c -o cli.test.exe ./internal/cli/
+```
+
+then `wslapi.test.exe`, `cli.test.exe -test.run 'Import|WSLConf'` and the
+`import-boot` scenario. Only those tests: some forty elsewhere fail on
+Windows for reasons of the platform. Windows 10 before version 1903 starts
+no distribution from inside another, so there neither `import` nor
+`import-boot` works from a WSL shell.
+
 Hand-typed alternatives break in ways that are easy to miss:
 
 - `wsl -- bash -lc '...'` goes through WSL's default shell, which expands
@@ -90,6 +107,10 @@ Hand-typed alternatives break in ways that are easy to miss:
   - capture: `capture-roundtrip`
   - what the imported distribution does at first login: `wsl-boot`, which
     also stands in for the README's manual release check
+  - `import`, `internal/wslapi`, `internal/paxstrip`, or anything of what a
+    tarball's pax records hold: `import-boot`, in Git Bash on a Windows
+    without `wsl --import`, with a tarball built elsewhere and the Windows
+    binary cross-compiled from the change, for 24.04 and for 26.04
   - a new Ubuntu release: every one of them with `E2E_RELEASE` naming it,
     after a spike like the one in
     `docs/superpowers/specs/2026-09-28-frostroot-resolute.md`

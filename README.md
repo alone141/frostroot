@@ -1262,6 +1262,31 @@ has no console to attach them to. On 22.04 and 20.04 it is `ua-auto-attach`
 a 20.04 image `user@1000.service` can also fail once. None of them affects
 login, sudo, networking or apt.
 
+**On a Windows without `wsl --import`.** Windows 10 before version 1903,
+or any machine with only WSL 1, cannot build an image and has no
+`wsl --import`. Build elsewhere, on Linux or in a WSL 2 distribution, carry
+the tarball over, and register it with the Windows binary: `frostroot
+import`, from PowerShell or `cmd`. Tried on Windows 10 1809 with 24.04 and
+26.04 images; not with 22.04, 20.04 or Fedora. What such a distribution is
+like:
+
+- **No systemd.** WSL 1 starts none, whatever the recipe says:
+  `systemctl is-system-running` says `offline`, and services start by hand.
+- **Do not let apt upgrade systemd.** Its post-installation script cannot
+  take the lock on `/etc/passwd` on the WSL 1 kernel and fails, and from
+  then on every apt run ends with an error for the half-configured package,
+  though it still installs what was asked. Before the first upgrade:
+  `sudo apt-mark hold systemd`. `import` does not do this for you.
+- **The umask is 000** in every shell on Windows 10 before build 18945, so
+  new files are writable by everyone. Set one in the shell's profile:
+  `umask 022`.
+- **The journal's two ACLs are gone.** `import` leaves them out because
+  WSL 1 refuses a tarball that has them; they gave the `adm` group read
+  access to a journal that WSL 1 never writes.
+- Everything else arrives as it was built: owners, modes, hard links, the
+  capability on `ping`, the user, passwordless sudo, the locale and the
+  timezone.
+
 **Networks that inspect TLS.** An image trusts the public certificate
 authorities from `ca-certificates` plus whatever `[certificates]` names; see
 [Networks that inspect TLS](#networks-that-inspect-tls). The Ubuntu archive
@@ -1304,8 +1329,9 @@ the form beside Ubuntu (v0.15), and a raw disk image of Ubuntu 24.04 or
 
 **Deliberately not yet:** families other than Ubuntu and Fedora · flat or
 unsigned apt repositories · npm and cargo lockfiles · Python source
-distributions · an ISO image, or a disk image of Fedora · a native Windows binary ·
-architectures other than amd64.
+distributions · an ISO image, or a disk image of Fedora · building on
+Windows without WSL (the Windows binary only imports) · building inside
+WSL 1 · architectures other than amd64.
 
 Each exclusion has a door left open in the design. Fedora went in behind a
 seam in the builder that another family can use too.
@@ -1389,6 +1415,13 @@ hand: `whoami` is your user, `sudo -n id` needs no password,
 `systemctl is-system-running` is `running` or `degraded`,
 `getent hosts archive.ubuntu.com` resolves, `locale` has no warnings, and
 `date` shows the recipe's timezone.
+
+**Nor can the check on a Windows without `wsl --import`**, where the image
+arrives through `frostroot import`. There, in Git Bash,
+`scripts/e2e/run.sh import-boot` imports a tarball built elsewhere with the
+Windows binary, makes the same checks but for systemd, tries what `import`
+refuses, and removes the distribution again;
+[scripts/e2e/README.md](scripts/e2e/README.md) has the command.
 
 What was run for real, release by release since v0.1.0, is recorded in
 [docs/VERIFICATION.md](docs/VERIFICATION.md).

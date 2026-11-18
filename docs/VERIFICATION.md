@@ -501,3 +501,39 @@ govulncheck, built `frostroot-linux-amd64` (sha256
 attested both files and published them, in 2 minutes. It is the first
 release published since v0.13.2: the v0.15.0 run failed at govulncheck.
 `disk-boot` and the first logins listed above are still to check.
+
+`frostroot import`, for a Windows without `wsl --import`, was written
+after v0.15.1, with `builder.Version` still 0.15.1 and no tag: merging
+and releasing it are the owner's decisions. It was checked on 17
+November 2026 on the
+machine it is for, Windows 10 Enterprise LTSC 2019 (version 1809, build
+17763), which has WSL 1 and nothing newer, as an ordinary user, with
+`frostroot-windows-amd64.exe` cross-compiled in the Ubuntu 24.04 VM, since
+that Windows has no Go, and not signed. The images were built in the VM
+by `capture-roundtrip`, for 24.04 and for 26.04. The `import-boot`
+scenario, run in Git Bash, passed its 20 checks for each, in 38 and 43
+seconds: the import registers in under half a minute, the distribution
+starts as `student` with passwordless sudo, DNS and the locale, shows
+the recipe's UTC on a Windows at +03, `ping` still has `cap_net_raw`, a
+name already registered and a file that is not a tarball exit 1 and
+leave nothing, and nothing of the import stays beside or inside the
+install directory but `rootfs` and `temp`. By hand: an image whose
+`wsl.conf` names a user it lacks was registered, unregistered again and
+its directory removed, exit 2; the Windows-only test of `internal/wslapi`
+and the `import` tests of `internal/cli`, cross-compiled, pass there; and
+the copy `import` registers differs from each image, decompressed, by
+the one pax header that held the journal's two ACLs. The first version
+of the scenario ran in WSL and failed, which is how it was found that
+Windows 10 1809 starts no distribution from inside another: `import`
+started from a WSL shell had registered the image with root as its
+default user and called it a success, and now fails and unregisters. In
+the VM, `scripts/check.sh` passed every step on each of the five pull
+requests, `go test -race` with `-timeout 60m`, and golangci-lint without
+its caps found nothing. The release workflow's new steps cannot run
+before a tag: its two build commands and its checksum step were run by
+hand in the VM, and the README's PowerShell check on Windows. Still to
+check: Ctrl-C during an import on Windows, a tarball Windows refuses at
+registration, a Windows other than 10 1809, 22.04, 20.04 and Fedora
+images through `import`, what the security software of another machine
+makes of an unsigned binary, and the first real run of `release.yml`
+with two binaries.
