@@ -537,3 +537,27 @@ registration, a Windows other than 10 1809, 22.04, 20.04 and Fedora
 images through `import`, what the security software of another machine
 makes of an unsigned binary, and the first real run of `release.yml`
 with two binaries.
+
+v0.16.0 was published on 18 November 2026, from master at 29dde76, by
+`release.yml` run #9: the first real run with two binaries. It holds
+`frostroot import` and the refusal to build on WSL 1 (#172, #174 to
+#178) and the version bump (#180); the number is the coordinating
+session's default, recorded in the WSL 1 spec as such, and the owner
+asked for the release. Before the tag, master at 22f3be7 passed the
+whole `scripts/check.sh` in the VM, `go test -race` with `-timeout 60m`
+and golangci-lint without its caps, and #180 passed fmt, vet, the
+Windows build, lint and the tests of `internal/builder` and
+`internal/cli` there, its binary reporting `frostroot 0.16.0`. Ctrl-C
+during an import was checked on Windows 10 1809 after the paragraph
+above was written, in the review fixes of #175: three seconds in, it
+exits 130 with nothing registered and no directory; during
+registration, it waits for Windows, unregisters and exits 130. The
+first push of the tag found Actions switched off and started nothing;
+the owner switched it on, and the same tag at the same commit was
+pushed again. The run took 2 minutes 42 seconds and published
+`frostroot-linux-amd64` (12.6 MB, sha256 `d66dd5fe…cd64d7c34`),
+`frostroot-windows-amd64.exe` (13 MB, sha256 `4f36b902…aca6997ecb`)
+and `SHA256SUMS`, with an attestation. The published binaries were not
+downloaded and run; the README's checksum and attestation commands are
+still to be tried against them, and the other items still to check
+above stand.
