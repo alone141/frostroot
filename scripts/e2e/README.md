@@ -33,9 +33,26 @@ On a Windows checkout, run these through `scripts/wsl.sh` or
 | `tui` | The full-screen form draws in a pseudo-terminal, searches the real archive and PyPI, and writes what was picked; for Fedora, moves the distribution to Fedora with the arrow key, searches Fedora's repositories, and writes a Fedora recipe. | ~3 min |
 | `disk-boot` | A disk image boots in QEMU with OVMF and Microsoft's keys, Secure Boot on: the password set from a hashed credential, a login on the serial line, systemd running with nothing failed, the root grown to fill the disk, DHCP and DNS, the host name, a machine id of its own, the SSH host keys made at the first boot; and with OVMF's snakeoil variables the firmware refuses it. Needs `qemu-system-x86_64`, `qemu-img`, `ovmf` and `python3`; `E2E_OVMF_DIR` names where the firmware files are. A real PC with Secure Boot on is the owner's check. | ~15 min without KVM |
 | `wsl-boot` | An image imports into WSL and boots: the user, sudo, systemd, DNS, locale, timezone, the Python environment, the recipe's certificate authority, and apt still verifying TLS; a Fedora image, its machine id, rpm and dnf5 instead of the last three. Needs `wsl.exe`, so it skips anywhere but WSL. `E2E_FROSTROOT=/path/to/binary` puts a release's binary through it. | ~15 min |
+| `import-boot` | `frostroot import` registers a tarball built elsewhere on a Windows without `wsl --import`, and the distribution starts: the user, sudo, DNS, locale, timezone, the capability on `ping`; a name already taken and a file that is not a tarball are refused and leave nothing. Takes `E2E_TARBALL`, the tarball of a recipe as the scenarios write it, and `E2E_FROSTROOT_WINDOWS`, the Windows binary, and skips without them; `E2E_IMPORT_NAME` names the distribution. On such a Windows it runs in Git Bash, not in WSL, with `FROSTROOT_E2E_ROOT` naming the lab's directory: see below. systemd is not checked: WSL 1 starts none. | ~2 min |
 | `harness` | The harness reports a failure when it should, and never removes anything outside its root. | seconds |
 
 AGENTS.md has a list of which change calls for which scenario.
+
+`import-boot` is the one scenario that does not run in WSL on the machines
+it is for. Windows 10 before version 1903 starts no distribution from
+inside another, so neither `frostroot import` nor the scenario's checks
+can run from a WSL shell there. Run it in Git Bash on that machine, which
+has no `/var/tmp`, so name the root:
+
+```sh
+export FROSTROOT_E2E_ROOT=/tmp/frostroot-e2e
+export E2E_TARBALL=/c/path/to/e2e-capture-ubuntu-24.04-amd64.tar.gz
+export E2E_FROSTROOT_WINDOWS=/c/path/to/frostroot-windows-amd64.exe
+scripts/e2e/run.sh import-boot
+```
+
+The tarball is built elsewhere, on Linux or WSL 2: any scenario that builds
+leaves one in its lab, `capture-roundtrip` the quickest.
 
 Every scenario that writes a recipe builds Ubuntu 24.04 unless
 `E2E_RELEASE` names another release:

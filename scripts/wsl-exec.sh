@@ -12,6 +12,13 @@
 # shell, and this file does the rest with its arguments intact.
 set -euo pipefail
 
+# "wsl.exe -e" on Windows 10 before build 18945 starts its process with
+# umask 000, so everything a check or a scenario wrote, in the checkout
+# and under /var/tmp, was writable by every user of the distribution.
+if [ "$(umask)" = 0000 ]; then
+	umask 022
+fi
+
 # Ubuntu's Go is a snap, and a snap refuses to start when XDG_RUNTIME_DIR
 # cannot be used: "cannot create XDG_RUNTIME_DIR folder /run/user/1000:
 # permission denied", seen once when a WSL login session was starting
